@@ -1,0 +1,39 @@
+name: SonarQube Analysis
+
+on:
+  pull_request:
+    branches:
+      - develop
+      - test
+      - main
+
+jobs:
+  sonar:
+    name: Run SonarQube Analysis
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run tests with coverage
+        run: npm run test:cov
+
+      - name: SonarCloud Scan
+        uses: SonarSource/sonarcloud-github-action@v2
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.projectKey=Xellenet_JIN_VA-BACKEND
+            -Dsonar.organization=xellent
+            -Dsonar.host.url=https://sonarcloud.io
+
