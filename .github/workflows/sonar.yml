@@ -27,11 +27,13 @@ jobs:
       - name: Run tests with coverage
         run: npm run test:cov
 
-      - name: Upload coverage to SonarCloud
+      - name: SonarCloud Scan
         uses: SonarSource/sonarcloud-github-action@v2
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         with:
           args: >
             -Dsonar.projectKey=Xellenet_JIN_VA-BACKEND
             -Dsonar.organization=Xelle-Net
             -Dsonar.host.url=https://sonarcloud.io
-            -Dsonar.token=${{ secrets.SONAR_TOKEN }}
+
