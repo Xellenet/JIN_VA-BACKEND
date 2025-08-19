@@ -34,6 +34,6 @@ jobs:
         with:
           args: >
             -Dsonar.projectKey=Xellenet_JIN_VA-BACKEND
-            -Dsonar.organization=xellent
+            -Dsonar.organization=xellenet
             -Dsonar.host.url=https://sonarcloud.io
 

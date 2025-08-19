@@ -1,98 +1,166 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+JinVa Backend
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+Table of Contents
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+Description
+Features
+Technologies Used
+Installation
+Configuration
+Running the Server
+API Endpoints
+Database Schema
+Authentication
+Payments Integration
+Chat Functionality
+Testing
+Contributing
+License
 
-## Description
+Description
+The JinVa Backend is the server-side component of the JinVa application, designed to connect users with local barbers, salons, and nail technicians. It provides APIs for user management, location-based searches, secure payments, and real-time chat between users and professionals. The backend is built to be scalable, secure, and efficient, handling data persistence, business logic, and integrations with third-party services.
+This repository focuses exclusively on the backend. The frontend (client-side) is assumed to be in a separate repository and consumes these APIs.
+Features
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+User Authentication: Secure registration, login, and profile management for both users and professionals.
+Location-Based Search: Search for professionals by proximity using geospatial queries.
+Professional Management: CRUD operations for professional profiles, including services offered, availability, and reviews.
+Payments: Integrated payment processing for booking services.
+Real-Time Chat: In-app messaging between users and professionals.
+Error Handling and Logging: Robust logging and error responses for debugging and security.
+Rate Limiting and Security: Protection against common web vulnerabilities (e.g., CORS, helmet for headers).
 
-## Project setup
+Technologies Used
 
-```bash
-$ npm install
-```
+Runtime: Node.js (v20.x)
+Framework: Express.js
+Database: MongoDB (with Mongoose ODM for schema management)
+Authentication: JSON Web Tokens (JWT)
+Payments: Stripe API
+Real-Time Chat: Socket.io
+Geolocation: MongoDB Geospatial Indexing (or integrate with Google Maps API for advanced features)
+Environment Management: dotenv
+Testing: Jest and Supertest
+Other Libraries: bcryptjs (password hashing), multer (file uploads for profiles), winston (logging)
 
-## Compile and run the project
+Installation
 
-```bash
-# development
-$ npm run start
+Clone the repository:
+git clone https://github.com/yourusername/jinva-backend.git
+cd jinva-backend
 
-# watch mode
-$ npm run start:dev
 
-# production mode
-$ npm run start:prod
-```
+Install dependencies:
+npm install
 
-## Run tests
 
-```bash
-# unit tests
-$ npm run test
 
-# e2e tests
-$ npm run test:e2e
+Configuration
+Create a .env file in the root directory with the following variables:
+PORT=5000
+MONGO_URI=mongodb://localhost:27017/jinva
+JWT_SECRET=your_jwt_secret_key
+STRIPE_SECRET_KEY=your_stripe_secret_key
+GOOGLE_MAPS_API_KEY=your_google_maps_api_key
 
-# test coverage
-$ npm run test:cov
-```
 
-## Deployment
+MONGO_URI: Your MongoDB connection string.
+JWT_SECRET: A strong secret for signing JWTs.
+STRIPE_SECRET_KEY: Obtained from your Stripe dashboard.
+GOOGLE_MAPS_API_KEY: Optional for enhanced geolocation.
+Ensure sensitive keys are not committed to version control.
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+Running the Server
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+Development mode (with auto-reload using nodemon):
+npm run dev
 
-```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
-```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+Production mode:
+npm start
 
-## Resources
 
-Check out a few resources that may come in handy when working with NestJS:
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+The server will run on http://localhost:5000 (or the port specified in .env).
+API Endpoints
+The API follows RESTful principles. Base URL: /api.
+Users
 
-## Support
+POST /api/users/register: Register a new user or professional (body: { email, password, name, role: 'user' | 'professional', location: { lat, lng } }).
+POST /api/users/login: Login and receive JWT (body: { email, password }).
+GET /api/users/profile: Get authenticated user's profile (requires JWT).
+PUT /api/users/profile: Update profile (requires JWT).
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+Professionals
 
-## Stay in touch
+GET /api/professionals: Search professionals (query params: ?location=lat,lng&radius=10&service=barber).
+POST /api/professionals: Create professional profile (requires JWT, professional role).
+GET /api/professionals/:id: Get details of a specific professional.
+PUT /api/professionals/:id: Update professional profile (requires JWT).
+DELETE /api/professionals/:id: Delete profile (requires JWT).
 
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+Bookings
 
-## License
+POST /api/bookings: Create a booking (body: { professionalId, service, date, time }).
+GET /api/bookings: Get user's bookings (requires JWT).
+PUT /api/bookings/:id: Update booking status (e.g., confirm/cancel).
 
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+Payments
+
+POST /api/payments/create-session: Create a Stripe checkout session (body: { bookingId, amount }).
+POST /api/payments/webhook: Stripe webhook for payment confirmation (unprotected, verify signature).
+
+Chat
+
+Real-time via Socket.io (connect to /chat namespace).
+Events: joinRoom, sendMessage, receiveMessage.
+
+For full API documentation, refer to Postman collection (not included) or use tools like Swagger (to be integrated).
+Database Schema
+Using Mongoose schemas:
+
+User: { email, password (hashed), name, role, location: { type: 'Point', coordinates: [lng, lat] }, profilePic }
+Professional: Extends User with { services: [], availability: [], reviews: [{ rating, comment }] }
+Booking: { userId, professionalId, service, date, time, status: 'pending' | 'confirmed' | 'completed' }
+Message: { senderId, receiverId, content, timestamp }
+
+Geospatial index on location for efficient searches.
+Authentication
+
+JWT-based: Tokens are issued on login and must be sent in Authorization: Bearer <token> header.
+Role-based access: Middleware checks for 'user' or 'professional' roles.
+
+Payments Integration
+
+Uses Stripe for secure payments.
+Create sessions for bookings and handle webhooks for fulfillment.
+Test with Stripe's test keys in development.
+
+Chat Functionality
+
+Socket.io for real-time bidirectional communication.
+Rooms based on user-professional pairs (e.g., room ID: ${userId}_${professionalId}).
+Messages stored in DB for persistence.
+
+Testing
+
+Run unit and integration tests:
+npm test
+
+
+Coverage: Aim for >80% with Jest.
+
+Example tests: Authentication flows, search queries, payment mocks.
+
+
+Contributing
+
+Fork the repository.
+Create a feature branch (git checkout -b feature/YourFeature).
+Commit changes (git commit -m 'Add YourFeature').
+Push to the branch (git push origin feature/YourFeature).
+Open a Pull Request.
+
+Please follow code style (ESLint configured) and add tests for new features.
+License
+This project is licensed under the MIT License - see the LICENSE file for details.
