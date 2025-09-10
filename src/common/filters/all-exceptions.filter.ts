@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { Logger } from 'winston';
+import { ErrorResponse } from '../types/api-response.type';
 
 @Catch()
 export class AllExceptionsFilter implements ExceptionFilter {
@@ -41,7 +42,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       context: exception instanceof Error ? exception.name : 'UnknownError',
     });
 
-    response.status(status).json({
+    const errorResponse: ErrorResponse = {
       status: 'error',
       message,
       meta: {
@@ -50,6 +51,8 @@ export class AllExceptionsFilter implements ExceptionFilter {
         statusCode: status,
         error: exception instanceof Error ? exception.name : 'Error',
       },
-    });
+    };
+
+    response.status(status).json(errorResponse);
   }
 }
