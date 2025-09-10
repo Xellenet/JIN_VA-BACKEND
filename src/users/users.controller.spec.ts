@@ -1,75 +1,85 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { UsersController } from './users.controller';
 import { UsersService } from './users.service';
+import { CreateUserDto } from './dto/create-user.dto';
+import { UpdateUserDto } from './dto/update-user.dto';
 
 describe('UsersController', () => {
   let controller: UsersController;
+  let usersService: UsersService;
+
+  const mockUsersService = {
+    create: jest.fn(),
+    findAll: jest.fn(),
+    findOne: jest.fn(),
+    update: jest.fn(),
+    remove: jest.fn(),
+  };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [UsersController],
-      providers: [UsersService],
+      providers: [
+        { provide: UsersService, useValue: mockUsersService },
+      ],
     }).compile();
 
     controller = module.get<UsersController>(UsersController);
+    usersService = module.get<UsersService>(UsersService);
+
+    jest.clearAllMocks();
   });
 
   it('should be defined', () => {
     expect(controller).toBeDefined();
   });
-});
-let usersService: UsersService;
 
-beforeEach(async () => {
-  usersService = {
-    create: jest.fn().mockReturnValue('created'),
-    findAll: jest.fn().mockReturnValue('all users'),
-    findOne: jest.fn().mockReturnValue('one user'),
-    update: jest.fn().mockReturnValue('updated'),
-    remove: jest.fn().mockReturnValue('removed'),
-  } as any;
+  describe('create', () => {
+    it('should call usersService.create with dto and return result', async () => {
+      const dto: CreateUserDto = { name: 'Test' } as CreateUserDto;
+      const expected = { id: 1, ...dto };
+      mockUsersService.create.mockResolvedValue(expected);
 
-  const module: TestingModule = await Test.createTestingModule({
-    controllers: [UsersController],
-    providers: [{ provide: UsersService, useValue: usersService }],
-  }).compile();
-
-  controller = module.get<UsersController>(UsersController);
-});
-
-describe('create', () => {
-  it('should call usersService.create with dto and return result', () => {
-    const dto = { name: 'test' } as any;
-    expect(controller.create(dto)).toBe('created');
-    expect(usersService.create).toHaveBeenCalledWith(dto);
+      const result = await controller.create(dto);
+      expect(usersService.create).toHaveBeenCalledWith(dto);
+      expect(result).toEqual(expected);
+    });
   });
-});
 
-describe('findAll', () => {
-  it('should call usersService.findAll and return result', () => {
-    expect(controller.findAll()).toBe('all users');
-    expect(usersService.findAll).toHaveBeenCalled();
+  describe('findAll', () => {
+    it('should call usersService.findAll and return result', () => {
+      mockUsersService.findAll.mockReturnValue('all users');
+      const result = controller.findAll();
+      expect(usersService.findAll).toHaveBeenCalled();
+      expect(result).toBe('all users');
+    });
   });
-});
 
-describe('findOne', () => {
-  it('should call usersService.findOne with id as number and return result', () => {
-    expect(controller.findOne('7')).toBe('one user');
-    expect(usersService.findOne).toHaveBeenCalledWith(7);
+  describe('findOne', () => {
+    it('should call usersService.findOne with id and return result', () => {
+      mockUsersService.findOne.mockReturnValue('user');
+      const result = controller.findOne('5');
+      expect(usersService.findOne).toHaveBeenCalledWith(5);
+      expect(result).toBe('user');
+    });
   });
-});
 
-describe('update', () => {
-  it('should call usersService.update with id as number and dto and return result', () => {
-    const dto = { name: 'updated' } as any;
-    expect(controller.update('3', dto)).toBe('updated');
-    expect(usersService.update).toHaveBeenCalledWith(3, dto);
+  describe('update', () => {
+    it('should call usersService.update with id and dto and return result', () => {
+      const dto: UpdateUserDto = { name: 'Updated' } as UpdateUserDto;
+      mockUsersService.update.mockReturnValue('updated');
+      const result = controller.update('3', dto);
+      expect(usersService.update).toHaveBeenCalledWith(3, dto);
+      expect(result).toBe('updated');
+    });
   });
-});
 
-describe('remove', () => {
-  it('should call usersService.remove with id as number and return result', () => {
-    expect(controller.remove('2')).toBe('removed');
-    expect(usersService.remove).toHaveBeenCalledWith(2);
+  describe('remove', () => {
+    it('should call usersService.remove with id and return result', () => {
+      mockUsersService.remove.mockReturnValue('removed');
+      const result = controller.remove('2');
+      expect(usersService.remove).toHaveBeenCalledWith(2);
+      expect(result).toBe('removed');
+    });
   });
 });
