@@ -20,9 +20,11 @@ export class UsersService {
     return this.usersRepository.save(user);
   }
 
-  findAll() {
+  async findAll() {
     this.logger.log(`Retrieving all users`);
-    return `This action returns all users`;
+    const users = await this.usersRepository.find();
+
+    return users;
   }
 
   findOne(id: number) {

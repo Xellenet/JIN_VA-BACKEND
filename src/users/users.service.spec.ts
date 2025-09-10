@@ -8,12 +8,14 @@ import { UpdateUserDto } from './dto/update-user.dto';
 
 describe('UsersService', () => {
   let service: UsersService;
-  let usersRepository: Repository<User>;
+  let usersRepository: jest.Mocked<Repository<User>>;
 
   const mockUser = { id: 1, name: 'Test User' } as User;
+
   const mockUsersRepository = {
-    create: jest.fn().mockImplementation(dto => ({ ...dto, id: 1 })),
-    save: jest.fn().mockResolvedValue(mockUser),
+    create: jest.fn(),
+    save: jest.fn(),
+    find: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -28,30 +30,37 @@ describe('UsersService', () => {
     }).compile();
 
     service = module.get<UsersService>(UsersService);
-    usersRepository = module.get<Repository<User>>(getRepositoryToken(User));
+    usersRepository = module.get(getRepositoryToken(User));
     jest.clearAllMocks();
   });
 
-  it('should be defined', () => {
-    expect(service).toBeDefined();
-  });
-
   describe('create', () => {
-    it('should create and save a user', async () => {
+    it('should create and save a user, and log the action', async () => {
       const dto: CreateUserDto = { name: 'Test User' } as CreateUserDto;
+      mockUsersRepository.create.mockReturnValueOnce({ ...dto, id: 1 });
+      mockUsersRepository.save.mockResolvedValueOnce(mockUser);
+      const loggerSpy = jest.spyOn<any, any>(service['logger'], 'log');
+
       const result = await service.create(dto);
+
       expect(usersRepository.create).toHaveBeenCalledWith(dto);
+      expect(loggerSpy).toHaveBeenCalledWith('Created user with id: 1');
       expect(usersRepository.save).toHaveBeenCalledWith({ ...dto, id: 1 });
       expect(result).toEqual(mockUser);
     });
   });
 
   describe('findAll', () => {
-    it('should log and return all users string', () => {
-      const logSpy = jest.spyOn<any, any>(service['logger'], 'log');
-      const result = service.findAll();
-      expect(logSpy).toHaveBeenCalledWith('Retrieving all users');
-      expect(result).toBe('This action returns all users');
+    it('should log and return all users', async () => {
+      const users = [mockUser];
+      mockUsersRepository.find.mockResolvedValueOnce(users);
+      const loggerSpy = jest.spyOn<any, any>(service['logger'], 'log');
+
+      const result = await service.findAll();
+
+      expect(loggerSpy).toHaveBeenCalledWith('Retrieving all users');
+      expect(usersRepository.find).toHaveBeenCalled();
+      expect(result).toEqual(users);
     });
   });
 
