@@ -1,5 +1,5 @@
 {
-  "name": "JIN_VA-BACKEND",
+  "name": "jinva-backend",
   "version": "0.0.1",
   "description": "",
   "author": "",
@@ -21,15 +21,23 @@
     "test:prepush": "jest --coverage --ci",
     "prepare": "husky",
     "commit": "cz",
-    "sonar": "sonar-scanner"
+    "sonar": "sonar-scanner",
+    "typeorm": "typeorm-ts-node-commonjs -d typeorm.config.ts",
+    "migration:generate": "npm run build && npm run typeorm migration:generate ./src/migrations/AutoMigration",
+    "migration:run": "npm run build && npm run typeorm migration:run",
+    "migration:revert": "npm run build && npm run typeorm migration:revert"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",
+    "@nestjs/config": "^4.0.2",
     "@nestjs/core": "^11.0.1",
     "@nestjs/mapped-types": "*",
     "@nestjs/platform-express": "^11.0.1",
+    "@nestjs/typeorm": "^11.0.0",
+    "pg": "^8.16.3",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.1"
+    "rxjs": "^7.8.1",
+    "typeorm": "^0.3.26"
   },
   "devDependencies": {
     "@commitlint/cli": "^19.8.1",
@@ -74,33 +82,33 @@
       "^.+\\.(t|j)s$": "ts-jest"
     },
     "collectCoverageFrom": [
-    "**/*.controller.ts",
-    "**/*.service.ts",
-    "!main.ts",
-    "!**/*.module.ts"
-  ],
+      "**/*.controller.ts",
+      "**/*.service.ts",
+      "!main.ts",
+      "!**/*.module.ts"
+    ],
     "coverageDirectory": "../coverage",
     "testEnvironment": "node",
     "coverageThreshold": {
-  "global": {
-    "branches": 50,
-    "functions": 50,
-    "lines": 50,
-    "statements": 50
-  },
-  "**/*.service.ts": {
-    "branches": 60,
-    "functions": 60,
-    "lines": 60,
-    "statements": 60
-  },
-  "**/*.controller.ts": {
-    "branches": 50,
-    "functions": 50,
-    "lines": 50,
-    "statements": 50
-  }
-}
+      "global": {
+        "branches": 50,
+        "functions": 50,
+        "lines": 50,
+        "statements": 50
+      },
+      "**/*.service.ts": {
+        "branches": 60,
+        "functions": 60,
+        "lines": 60,
+        "statements": 60
+      },
+      "**/*.controller.ts": {
+        "branches": 50,
+        "functions": 50,
+        "lines": 50,
+        "statements": 50
+      }
+    }
   },
   "config": {
     "commitizen": {
