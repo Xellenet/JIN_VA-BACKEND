@@ -26,9 +26,7 @@ export class AuthService {
             throw new UserAlreadyExists(ERROR_MESSAGES.USER.EMAIL_ALREADY_EXISTS(email))
         }
         user = await this.userService.createUser(createUserDto);
-        if(!user) {
-            throw
-        }
+        
         return user;
     }
 }
