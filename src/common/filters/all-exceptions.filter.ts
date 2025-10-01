@@ -23,33 +23,55 @@ export class AllExceptionsFilter implements ExceptionFilter {
         ? exception.getStatus()
         : HttpStatus.INTERNAL_SERVER_ERROR;
 
+    const isProduction = process.env.NODE_ENV === 'production';
+
     let message: string | string[];
+    let errorName: string;
+
     if (exception instanceof HttpException) {
       const errorResponse = exception.getResponse();
       message =
         (errorResponse as any).message ||
         exception.message ||
         'An error occurred';
+      errorName = exception.name;
     } else if (exception instanceof Error) {
       message = exception.message;
+      errorName = exception.name;
     } else {
       message = 'Internal server error';
+      errorName = 'Error';
     }
-
-    this.logger.error(`${request.method} ${request.url} -> ${message}`, {
+    
+    this.logger.error(`${request.method} ${request.url}`, {
       status,
+      message,
       stack: exception instanceof Error ? exception.stack : '',
-      context: exception instanceof Error ? exception.name : 'UnknownError',
+      context: errorName,
+      environment: process.env.NODE_ENV,
     });
+
+    let safeMessage: string | string[];
+    let safeError: string | undefined;
+
+    if (status >= 400 && status < 500) {
+      safeMessage = message;
+      safeError = errorName;
+    } else {
+      safeMessage = isProduction
+        ? 'Something went wrong. Please try again later.'
+        : message;
+      safeError = isProduction ? undefined : errorName;
+    }
 
     const errorResponse: ErrorResponse = {
       status: 'error',
-      message,
+      message: safeMessage,
       meta: {
         timestamp: new Date().toISOString(),
         path: request.url,
         statusCode: status,
-        error: exception instanceof Error ? exception.name : 'Error',
+        error: safeError,
       },
     };
 

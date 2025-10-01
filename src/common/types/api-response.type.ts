@@ -2,13 +2,13 @@ export interface MetaData {
   timestamp: string;
   path: string;
   statusCode: number;
-  error?: string;
   pagination?: {
     page: number;
     limit: number;
     totalItems: number;
     totalPages: number;
   };
+  error?: string;
 }
 
 export interface SuccessResponse<T> {

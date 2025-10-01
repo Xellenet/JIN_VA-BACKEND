@@ -5,6 +5,8 @@ import { UsersModule } from './users/users.module';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { WinstonModule } from 'nest-winston';
+import { AuthModule } from './auth/auth.module';
+import { AuthService } from './auth/auth.service';
 import * as winston from 'winston';
 
 @Module({
@@ -22,7 +24,7 @@ import * as winston from 'winston';
         password: config.get('DB_PASS'),
         database: config.get('DB_NAME'),
         autoLoadEntities: true,
-        synchronize: false,
+        synchronize: true,
         // logging: true,
         migrations: [__dirname + '/migrations/*{.js}'],
         migrationsRun: true,
@@ -50,8 +52,9 @@ import * as winston from 'winston';
             }),
       ],
     }),
+    AuthModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [AppService, AuthService],
 })
 export class AppModule {}

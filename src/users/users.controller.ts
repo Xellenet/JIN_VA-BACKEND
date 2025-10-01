@@ -13,8 +13,8 @@ export class UsersController {
   @Post()
   @ApiCreatedResponse({ description: 'User created successfully', type: User })
   @ApiResponse({ status: 400, description: 'Bad Request', type: Error } )
-  create(@Body() createUserDto: CreateUserDto) {
-    return this.usersService.create(createUserDto);
+  createUser(@Body() createUserDto: CreateUserDto) {
+    return this.usersService.createUser(createUserDto);
   }
 
   @Get()

@@ -2,6 +2,7 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { WINSTON_MODULE_NEST_PROVIDER } from 'nest-winston';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
+import { TypeOrmFilter } from './common/filters/typeorm-exception.filter';
 import { ResponseInterceptor } from './common/interceptors/response.interceptor';
 import { setupSwagger } from './config/swagger.config';
 import { ValidationPipe } from '@nestjs/common';
@@ -11,7 +12,7 @@ async function bootstrap() {
   const logger = app.get(WINSTON_MODULE_NEST_PROVIDER);
 
   app.useLogger(logger);
-  app.useGlobalFilters(new AllExceptionsFilter(logger));
+  app.useGlobalFilters( new AllExceptionsFilter(logger));
 
   app.useGlobalInterceptors(new ResponseInterceptor());
   app.useGlobalPipes(
