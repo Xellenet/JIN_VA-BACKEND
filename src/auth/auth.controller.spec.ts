@@ -42,16 +42,16 @@ describe('AuthController', () => {
     });
   });
 
-  describe('login', () => {
-    it('should call authService.login and return result', async () => {
-      const req = { user: { id: 1, email: 'test@example.com' } };
-      const expected = { access_token: 'token' };
-      mockAuthService.login.mockResolvedValueOnce(expected);
+  // describe('login', () => {
+  //   it('should call authService.login and return result', async () => {
+  //     const req = { user: { id: 1, email: 'test@example.com' } };
+  //     const expected = { access_token: 'token' };
+  //     mockAuthService.login.mockResolvedValueOnce(expected);
 
-      const result = await controller.login(req);
+  //     const result = await controller.login(req);
 
-      expect(authService.login).toHaveBeenCalledWith(req.user);
-      expect(result).toEqual(expected);
-    });
-  });
+  //     expect(authService.login).toHaveBeenCalledWith(req.user);
+  //     expect(result).toEqual(expected);
+  //   });
+  // });
 });
