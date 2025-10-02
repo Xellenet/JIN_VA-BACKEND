@@ -90,6 +90,7 @@
       "json",
       "ts"
     ],
+    
     "rootDir": "src",
     "testRegex": ".*\\.spec\\.ts$",
     "transform": {
@@ -101,6 +102,7 @@
       "!main.ts",
       "!**/*.module.ts"
     ],
+    
     "coverageDirectory": "../coverage",
     "testEnvironment": "node",
     "coverageThreshold": {
@@ -122,7 +124,12 @@
         "lines": 50,
         "statements": 50
       }
-    }
+    },
+    "moduleNameMapper": {
+    "^@common/(.*)$": "<rootDir>/common/$1",
+    "^@users/(.*)$": "<rootDir>/users/$1",
+    "^@auth/(.*)$": "<rootDir>/auth/$1"
+  }
   },
   "config": {
     "commitizen": {
