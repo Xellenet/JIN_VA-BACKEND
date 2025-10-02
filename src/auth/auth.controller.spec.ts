@@ -35,7 +35,7 @@ describe('AuthController', () => {
       const expected = { id: 1, email: dto.email };
       mockAuthService.registerUser.mockResolvedValueOnce(expected);
 
-      const result = await controller.register(dto);
+      const result = await controller.registerUser(dto);
 
       expect(authService.registerUser).toHaveBeenCalledWith(dto);
       expect(result).toEqual(expected);
