@@ -1,11 +1,11 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { AuthService } from './auth.service';
-import { UsersService } from 'src/users/users.service';
 import { JwtService } from '@nestjs/jwt';
 import { BadRequestException } from '@nestjs/common';
-import { UserAlreadyExists } from 'src/common/exceptions/user-already-exists.exception';
-import { ERROR_MESSAGES } from 'src/common/constants/error-messages.constants';
-import { CreateUserDto } from 'src/users/dto/create-user.dto';
+import { UserAlreadyExists } from '@common/exceptions/user-already-exists.exception';
+import { CreateUserDto } from '@users/dto/create-user.dto';
+import { UsersService } from '@users/users.service';
+
 
 describe('AuthService', () => {
   let service: AuthService;

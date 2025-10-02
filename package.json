@@ -22,7 +22,7 @@
     "prepare": "husky",
     "commit": "cz",
     "sonar": "sonar-scanner",
-    "typeorm": "typeorm-ts-node-commonjs -d typeorm.config.ts",
+    "typeorm": "ts-node -r tsconfig-paths/register ./node_modules/typeorm/cli.js -d typeorm.config.ts",
     "migration:generate": "npm run build && npm run typeorm migration:generate ./src/migrations/AutoMigration",
     "migration:run": "npm run build && npm run typeorm migration:run",
     "migration:revert": "npm run build && npm run typeorm migration:revert"

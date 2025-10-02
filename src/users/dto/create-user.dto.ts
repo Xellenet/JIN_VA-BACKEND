@@ -1,5 +1,8 @@
+import { Gender, Role } from '@common/types/enums';
 import { ApiProperty } from '@nestjs/swagger';
-import { IsEmail, IsNotEmpty, MinLength, IsString, IsInt, Min, MaxLength, Matches } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsEmail, IsNotEmpty, MinLength, IsString, MaxLength, Matches, IsEnum, ArrayMinSize, IsArray, IsOptional, ValidateNested, IsDateString } from 'class-validator';
+import { CreateAddressDto } from './create-address.dto';
 
 export class CreateUserDto {
   @ApiProperty({ example: 'john@example.com', description: 'Unique email of the user' })
@@ -21,11 +24,16 @@ export class CreateUserDto {
   @ApiProperty({ example: 'johndoe', description: 'Full name of the user' })
   @IsString()
   @IsNotEmpty({ message: 'username is required' })
-  username: string;
+  username?: string;
 
-  @ApiProperty({ example: 25, description: 'Age of the user (must be >= 18)' })
-  @IsInt()
-  age: number;
+  @ApiProperty({
+    example: '2025-10-25',
+    description: 'Date of Birth of the User',
+    required: false, // optional in Swagger
+  })
+  @IsOptional()
+  @IsDateString({}, { message: 'dateOfBirth must be a valid ISO date string' })
+  dateOfBirth?: string;
 
   @ApiProperty({ example: "John", description: "The first name of the user.",  })
   @IsString()
@@ -36,4 +44,32 @@ export class CreateUserDto {
   @IsString()
   @MaxLength(15, { message: 'Last name cannot be more than 15 characters.'})
   lastname: string
+
+  @ApiProperty({example: '123-456-7890', description: 'Phone number of the user'})
+  @IsString()
+  @IsOptional()
+  @MaxLength(12, { message: 'Phone number cannot be more than 12 characters.'})
+  @Matches(/^\d{3}-\d{3}-\d{4}$/, { message: 'Phone number must be in the format XXX-XXX-XXXX' })
+  phoneNumber?: string;
+
+  @ApiProperty({ example: "male", description: "The gender of the user." })
+  @IsEnum(Gender, { message: 'Gender must be either male, female, or other.' })
+  gender: Gender;
+
+  @ApiProperty({ example: "customer", description: "The role of the user." })
+  @IsEnum(Role, { message: 'Role must be either customer, stylist, or admin.' })
+  role: Role;
+
+    @ApiProperty({
+    type: [CreateAddressDto],
+    description: 'List of addresses for the user',
+    required: false,
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(0)
+  @ValidateNested({ each: true })
+  @Type(() => CreateAddressDto)
+  addresses?: CreateAddressDto[];
+
 }

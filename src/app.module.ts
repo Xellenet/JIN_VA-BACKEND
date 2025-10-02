@@ -10,7 +10,7 @@ import { AuthService } from './auth/auth.service';
 import * as winston from 'winston';
 
 @Module({
-  imports: [UsersModule,
+  imports: [
     ConfigModule.forRoot({
       isGlobal: true,
     }),
@@ -52,6 +52,7 @@ import * as winston from 'winston';
             }),
       ],
     }),
+    UsersModule,
     AuthModule,
   ],
   controllers: [AppController],

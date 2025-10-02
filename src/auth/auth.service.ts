@@ -1,32 +1,36 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable , Logger} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { create } from 'domain';
-import { ERROR_MESSAGES } from 'src/common/constants/error-messages.constants';
-import { UserAlreadyExists } from 'src/common/exceptions/user-already-exists.exception';
-import { CreateUserDto } from 'src/users/dto/create-user.dto';
-import { User } from 'src/users/entities/user.entity';
-import { UsersService } from 'src/users/users.service';
+import { ERROR_MESSAGES } from '@common/constants/error-messages.constants';
+import { UserAlreadyExists } from '@common/exceptions/user-already-exists.exception';
+import { CreateUserDto } from '@users/dto/create-user.dto';
+import { UsersService } from '@users/users.service';
+import { plainToInstance } from 'class-transformer';
+import { UserResponseDto } from '@users/dto/user-response.dto';
 
 @Injectable()
 export class AuthService {
+    private readonly logger = new Logger(AuthService.name);
     constructor(
-        private userService: UsersService,
-        private jwtService: JwtService,
+        private readonly userService: UsersService,
+        private readonly jwtService: JwtService,
     ){}
 
-    async registerUser(createUserDto: CreateUserDto): Promise<User>{
+    async registerUser(createUserDto: CreateUserDto): Promise<UserResponseDto>{
         let user;
         const email = createUserDto.email;
         if(!email){
             throw new BadRequestException("Provide user email!");
         }
+        this.logger.log(`Registering User with email ${email}`);
 
         user = await this.userService.findUserByEmail(email);
         if(user){
             throw new UserAlreadyExists(ERROR_MESSAGES.USER.EMAIL_ALREADY_EXISTS(email))
         }
         user = await this.userService.createUser(createUserDto);
-        
-        return user;
+        this.logger.log(`User registered with email ${user.email}`);
+    
+        return plainToInstance(UserResponseDto, user);
+
     }
 }

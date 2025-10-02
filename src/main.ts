@@ -2,10 +2,10 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { WINSTON_MODULE_NEST_PROVIDER } from 'nest-winston';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
-import { TypeOrmFilter } from './common/filters/typeorm-exception.filter';
 import { ResponseInterceptor } from './common/interceptors/response.interceptor';
 import { setupSwagger } from './config/swagger.config';
 import { ValidationPipe } from '@nestjs/common';
+import { TransformInterceptor } from '@common/interceptors/tranform.interceptor';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bufferLogs: true });
@@ -14,7 +14,7 @@ async function bootstrap() {
   app.useLogger(logger);
   app.useGlobalFilters( new AllExceptionsFilter(logger));
 
-  app.useGlobalInterceptors(new ResponseInterceptor());
+  app.useGlobalInterceptors(new ResponseInterceptor(), new TransformInterceptor());
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,  
@@ -22,6 +22,7 @@ async function bootstrap() {
       transform: true,
     }),
   );
+  
 
   app.setGlobalPrefix('api/v1');
   setupSwagger(app);

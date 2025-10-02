@@ -4,10 +4,9 @@ import { UpdateUserDto } from './dto/update-user.dto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { User } from './entities/user.entity';
 import { Repository } from 'typeorm';
-import { UserNotFoundException } from 'src/common/exceptions/user-not-found.exception';
-import { UserAlreadyExists } from 'src/common/exceptions/user-already-exists.exception';
-import { ERROR_MESSAGES } from 'src/common/constants/error-messages.constants';
-
+import { UserAlreadyExists } from '@common/exceptions/user-already-exists.exception';
+import { ERROR_MESSAGES } from '@common/constants/error-messages.constants';
+import * as bcrypt from 'bcrypt';
 
 @Injectable()
 export class UsersService {
@@ -27,7 +26,13 @@ export class UsersService {
     if(user){
       throw new UserAlreadyExists(ERROR_MESSAGES.USER.EMAIL_ALREADY_EXISTS(email))
     }
-    user = this.usersRepository.create(createUserDto);
+    const hashedPassword = await bcrypt.hash(createUserDto.password, 12);
+    user = this.usersRepository.create(
+      {
+        ...createUserDto,
+        password: hashedPassword,
+      }
+    );
 
     this.logger.log(`Created user with id: ${user.id}`);
     return this.usersRepository.save(user);
@@ -40,7 +45,7 @@ export class UsersService {
     return users;
   }
 
-  async findUserByEmail(email: string): Promise<User>{
+  async findUserByEmail(email: string): Promise<User | null>{
     if(!email){
       throw new NotFoundException("Email required")
     }
@@ -49,9 +54,9 @@ export class UsersService {
     const user = await this.usersRepository.findOne({
       where: {email},
     })
-    if(!user) {
-      throw new UserNotFoundException(`User with email ${email} not found`)
-    }
+    // if(!user) {
+    //   throw new UserNotFoundException(`User with email ${email} not found`)
+    // }
     return user;
   }
   findOne(id: number) {
