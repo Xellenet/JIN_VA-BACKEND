@@ -1,5 +1,5 @@
 {
-  "name": "JIN_VA-BACKEND",
+  "name": "jinva-backend",
   "version": "0.0.1",
   "description": "",
   "author": "",
@@ -21,15 +21,34 @@
     "test:prepush": "jest --coverage --ci",
     "prepare": "husky",
     "commit": "cz",
-    "sonar": "sonar-scanner"
+    "sonar": "sonar-scanner",
+    "typeorm": "ts-node -r tsconfig-paths/register ./node_modules/typeorm/cli.js -d typeorm.config.ts",
+    "migration:generate": "npm run build && npm run typeorm migration:generate ./src/migrations/AutoMigration",
+    "migration:run": "npm run build && npm run typeorm migration:run",
+    "migration:revert": "npm run build && npm run typeorm migration:revert"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",
+    "@nestjs/config": "^4.0.2",
     "@nestjs/core": "^11.0.1",
+    "@nestjs/jwt": "^11.0.0",
     "@nestjs/mapped-types": "*",
+    "@nestjs/passport": "^11.0.5",
     "@nestjs/platform-express": "^11.0.1",
+    "@nestjs/swagger": "^11.2.0",
+    "@nestjs/typeorm": "^11.0.0",
+    "bcrypt": "^6.0.0",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.14.2",
+    "nest-winston": "^1.10.2",
+    "passport": "^0.7.0",
+    "passport-jwt": "^4.0.1",
+    "passport-local": "^1.0.0",
+    "pg": "^8.16.3",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.1"
+    "rxjs": "^7.8.1",
+    "typeorm": "^0.3.26",
+    "winston": "^3.17.0"
   },
   "devDependencies": {
     "@commitlint/cli": "^19.8.1",
@@ -39,9 +58,12 @@
     "@nestjs/cli": "^11.0.0",
     "@nestjs/schematics": "^11.0.0",
     "@nestjs/testing": "^11.0.1",
+    "@types/bcrypt": "^6.0.0",
     "@types/express": "^5.0.0",
     "@types/jest": "^30.0.0",
     "@types/node": "^22.10.7",
+    "@types/passport-jwt": "^4.0.1",
+    "@types/passport-local": "^1.0.38",
     "@types/supertest": "^6.0.2",
     "commitizen": "^4.3.1",
     "cz-conventional-changelog": "^3.3.0",
@@ -68,39 +90,46 @@
       "json",
       "ts"
     ],
+    
     "rootDir": "src",
     "testRegex": ".*\\.spec\\.ts$",
     "transform": {
       "^.+\\.(t|j)s$": "ts-jest"
     },
     "collectCoverageFrom": [
-    "**/*.controller.ts",
-    "**/*.service.ts",
-    "!main.ts",
-    "!**/*.module.ts"
-  ],
+      "**/*.controller.ts",
+      "**/*.service.ts",
+      "!main.ts",
+      "!**/*.module.ts"
+    ],
+    
     "coverageDirectory": "../coverage",
     "testEnvironment": "node",
     "coverageThreshold": {
-  "global": {
-    "branches": 50,
-    "functions": 50,
-    "lines": 50,
-    "statements": 50
-  },
-  "**/*.service.ts": {
-    "branches": 60,
-    "functions": 60,
-    "lines": 60,
-    "statements": 60
-  },
-  "**/*.controller.ts": {
-    "branches": 50,
-    "functions": 50,
-    "lines": 50,
-    "statements": 50
+      "global": {
+        "branches": 50,
+        "functions": 50,
+        "lines": 50,
+        "statements": 50
+      },
+      "**/*.service.ts": {
+        "branches": 60,
+        "functions": 60,
+        "lines": 60,
+        "statements": 60
+      },
+      "**/*.controller.ts": {
+        "branches": 50,
+        "functions": 50,
+        "lines": 50,
+        "statements": 50
+      }
+    },
+    "moduleNameMapper": {
+    "^@common/(.*)$": "<rootDir>/common/$1",
+    "^@users/(.*)$": "<rootDir>/users/$1",
+    "^@auth/(.*)$": "<rootDir>/auth/$1"
   }
-}
   },
   "config": {
     "commitizen": {
