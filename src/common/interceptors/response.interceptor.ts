@@ -22,7 +22,7 @@ export class ResponseInterceptor<T>
     const request = ctx.getRequest();
 
     if (request.url.startsWith('/api/v1/auth')) {
-      return next.handle(); // return raw response
+      return next.handle();
     }
     return next.handle().pipe(
       map((data: any) => {

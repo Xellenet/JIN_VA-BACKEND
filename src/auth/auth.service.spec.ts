@@ -1,12 +1,14 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { AuthService } from './auth.service';
 import { JwtService } from '@nestjs/jwt';
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { UserAlreadyExists } from '@common/exceptions/user-already-exists.exception';
+import { InvalidCredentialsException } from '@common/exceptions/invalid-credentials.exception';
 import { CreateUserDto } from '@users/dto/create-user.dto';
+import { LoginDto } from '@auth/dto/login.dto';
 import { UsersService } from '@users/users.service';
-import { ERROR_MESSAGES } from '@common/constants/error-messages.constants';
 import { UserResponseDto } from '@users/dto/user-response.dto';
+import { ERROR_MESSAGES } from '@common/constants/error-messages.constants';
 
 
 describe('AuthService', () => {
@@ -17,6 +19,10 @@ describe('AuthService', () => {
   const mockUsersService = {
     findUserByEmail: jest.fn(),
     createUser: jest.fn(),
+    validatePassword: jest.fn(),
+  };
+  const mockJwtService = {
+    sign: jest.fn().mockReturnValue('token'),
   };
 
   beforeEach(async () => {
@@ -24,7 +30,7 @@ describe('AuthService', () => {
       providers: [
         AuthService,
         { provide: UsersService, useValue: mockUsersService },
-        { provide: JwtService, useValue: {} },
+        { provide: JwtService, useValue: mockJwtService },
       ],
     }).compile();
 
@@ -37,40 +43,77 @@ describe('AuthService', () => {
     expect(service).toBeDefined();
   });
 
-  it('should throw BadRequestException if email is missing', async () => {
-    await expect(service.registerUser({ password: 'pass' } as CreateUserDto)).rejects.toThrow(BadRequestException);
+  describe('registerUser', () => {
+    it('should throw BadRequestException if email is missing', async () => {
+      await expect(service.registerUser({ password: 'pass' } as CreateUserDto)).rejects.toThrow(BadRequestException);
+    });
+
+    it('should log registering user with email', async () => {
+      const dto: CreateUserDto = { email: 'test@example.com', password: 'pass' } as CreateUserDto;
+      const loggerSpy = jest.spyOn(service['logger'], 'log');
+      mockUsersService.findUserByEmail.mockResolvedValueOnce(undefined);
+      mockUsersService.createUser.mockResolvedValueOnce(mockUser);
+
+      await service.registerUser(dto);
+
+      expect(loggerSpy).toHaveBeenCalledWith(`Registering User with email ${dto.email}`);
+      expect(loggerSpy).toHaveBeenCalledWith(`User registered with email ${mockUser.email}`);
+    });
+
+    it('should throw UserAlreadyExists if user already exists', async () => {
+      const dto: CreateUserDto = { email: 'test@example.com', password: 'pass' } as CreateUserDto;
+      mockUsersService.findUserByEmail.mockResolvedValueOnce(mockUser);
+
+      await expect(service.registerUser(dto)).rejects.toThrow(UserAlreadyExists);
+      expect(mockUsersService.findUserByEmail).toHaveBeenCalledWith(dto.email);
+    });
+
+    it('should create and return user if not exists', async () => {
+      const dto: CreateUserDto = { email: 'new@example.com', password: 'pass' } as CreateUserDto;
+      mockUsersService.findUserByEmail.mockResolvedValueOnce(undefined);
+      mockUsersService.createUser.mockResolvedValueOnce(mockUser);
+
+      const result = await service.registerUser(dto);
+
+      expect(mockUsersService.findUserByEmail).toHaveBeenCalledWith(dto.email);
+      expect(mockUsersService.createUser).toHaveBeenCalledWith(dto);
+      expect(result).toBeInstanceOf(UserResponseDto);
+      expect(result.email).toEqual(mockUser.email);
+    });
   });
 
-  it('should log registering user with email', async () => {
-    const dto: CreateUserDto = { email: 'test@example.com', password: 'pass' } as CreateUserDto;
-    const loggerSpy = jest.spyOn(service['logger'], 'log');
-    mockUsersService.findUserByEmail.mockResolvedValueOnce(undefined);
-    mockUsersService.createUser.mockResolvedValueOnce(mockUser);
+  describe('loginUser', () => {
+    it('should throw BadRequestException if email or password is missing', async () => {
+      await expect(service.loginUser({ email: '', password: '' } as LoginDto)).rejects.toThrow(BadRequestException);
+      await expect(service.loginUser({ email: 'test@example.com' } as LoginDto)).rejects.toThrow(BadRequestException);
+      await expect(service.loginUser({ password: 'pass' } as LoginDto)).rejects.toThrow(BadRequestException);
+    });
 
-    await service.registerUser(dto);
+    it('should throw InvalidCredentialsException if user not found', async () => {
+      const dto: LoginDto = { email: 'notfound@example.com', password: 'pass' };
+      mockUsersService.findUserByEmail.mockResolvedValueOnce(null);
 
-    expect(loggerSpy).toHaveBeenCalledWith(`Registering User with email ${dto.email}`);
-    expect(loggerSpy).toHaveBeenCalledWith(`User registered with email ${mockUser.email}`);
-  });
+      await expect(service.loginUser(dto)).rejects.toThrow(InvalidCredentialsException);
+    });
 
-  it('should throw UserAlreadyExists if user already exists', async () => {
-    const dto: CreateUserDto = { email: 'test@example.com', password: 'pass' } as CreateUserDto;
-    mockUsersService.findUserByEmail.mockResolvedValueOnce(mockUser);
+    it('should throw InvalidCredentialsException if password is invalid', async () => {
+      const dto: LoginDto = { email: 'test@example.com', password: 'wrong' };
+      mockUsersService.findUserByEmail.mockResolvedValueOnce(mockUser);
+      mockUsersService.validatePassword.mockResolvedValueOnce(false);
 
-    await expect(service.registerUser(dto)).rejects.toThrow(UserAlreadyExists);
-    expect(mockUsersService.findUserByEmail).toHaveBeenCalledWith(dto.email);
-  });
+      await expect(service.loginUser(dto)).rejects.toThrow(InvalidCredentialsException);
+    });
 
-  it('should create and return user if not exists', async () => {
-    const dto: CreateUserDto = { email: 'new@example.com', password: 'pass' } as CreateUserDto;
-    mockUsersService.findUserByEmail.mockResolvedValueOnce(undefined);
-    mockUsersService.createUser.mockResolvedValueOnce(mockUser);
+    it('should log and return tokens if credentials are valid', async () => {
+      const dto: LoginDto = { email: 'test@example.com', password: 'pass' };
+      mockUsersService.findUserByEmail.mockResolvedValueOnce(mockUser);
+      mockUsersService.validatePassword.mockResolvedValueOnce(true);
+      const loggerSpy = jest.spyOn(service['logger'], 'log');
 
-    const result = await service.registerUser(dto);
+      await service.loginUser(dto);
 
-    expect(mockUsersService.findUserByEmail).toHaveBeenCalledWith(dto.email);
-    expect(mockUsersService.createUser).toHaveBeenCalledWith(dto);
-    expect(result).toBeInstanceOf(UserResponseDto);
-    expect(result.email).toEqual(mockUser.email);
+      expect(loggerSpy).toHaveBeenCalledWith(`Logging in User with email ${dto.email}`);
+      expect(loggerSpy).toHaveBeenCalledWith(`Generating tokens for user with email ${dto.email}`);
+    });
   });
 });
