@@ -60,4 +60,6 @@ export class User {
   @DeleteDateColumn({type: 'timestamp', nullable: true})
   @Exclude()
   deletedAt?: Date;
+
+
 }

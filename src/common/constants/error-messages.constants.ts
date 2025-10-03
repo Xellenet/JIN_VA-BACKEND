@@ -6,7 +6,7 @@ export const ERROR_MESSAGES = {
     EMAIL_ALREADY_EXISTS: (email:string) => `User with email ${email} exists already`
   },
   AUTH: {
-    INVALID_CREDENTIALS: 'Invalid credentials provided',
+    INVALID_CREDENTIALS: 'Invalid email or password',
     UNAUTHORIZED: 'Unauthorized access',
   },
   // Add more categories as needed

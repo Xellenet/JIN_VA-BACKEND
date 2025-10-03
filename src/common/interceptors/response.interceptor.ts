@@ -21,6 +21,9 @@ export class ResponseInterceptor<T>
     const response = ctx.getResponse();
     const request = ctx.getRequest();
 
+    if (request.url.startsWith('/api/v1/auth')) {
+      return next.handle();
+    }
     return next.handle().pipe(
       map((data: any) => {
         const pagination = data?.pagination;

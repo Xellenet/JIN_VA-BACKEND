@@ -7,6 +7,7 @@ import { Repository } from 'typeorm';
 import { UserAlreadyExists } from '@common/exceptions/user-already-exists.exception';
 import { ERROR_MESSAGES } from '@common/constants/error-messages.constants';
 import * as bcrypt from 'bcrypt';
+import { VARIABLES } from '@common/constants/variables.constants';
 
 @Injectable()
 export class UsersService {
@@ -26,7 +27,7 @@ export class UsersService {
     if(user){
       throw new UserAlreadyExists(ERROR_MESSAGES.USER.EMAIL_ALREADY_EXISTS(email))
     }
-    const hashedPassword = await bcrypt.hash(createUserDto.password, 12);
+    const hashedPassword = await bcrypt.hash(createUserDto.password, VARIABLES.SALT_OR_ROUNDS);
     user = this.usersRepository.create(
       {
         ...createUserDto,
@@ -54,10 +55,19 @@ export class UsersService {
     const user = await this.usersRepository.findOne({
       where: {email},
     })
-    // if(!user) {
-    //   throw new UserNotFoundException(`User with email ${email} not found`)
-    // }
     return user;
+  }
+
+  async  validatePassword(password: string, userId: number): Promise<boolean> {
+    const user = await this.usersRepository.findOne({
+      where: {id: userId},
+      select: ['password'],
+    });
+    if (!user) {
+      throw new NotFoundException(`User with ID ${userId} not found `);
+    }
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    return  isPasswordValid;
   }
   findOne(id: number) {
     return `This action returns a #${id} user`;

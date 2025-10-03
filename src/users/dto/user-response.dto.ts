@@ -1,8 +1,7 @@
-// src/users/dto/user-response.dto.ts
 import { ApiProperty } from '@nestjs/swagger';
 import { Expose, Type } from 'class-transformer';
 import { Gender, Role } from '@common/types/enums';
-import { AddressResponseDto } from '@users/dto/address-response.dto'; // Create this if needed
+import { AddressResponseDto } from './address-response.dto';
 
 export class UserResponseDto {
   @ApiProperty({ example: 1, description: 'Unique identifier of the user' })

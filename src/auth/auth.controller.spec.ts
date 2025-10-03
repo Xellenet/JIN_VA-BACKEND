@@ -9,7 +9,7 @@ describe('AuthController', () => {
 
   const mockAuthService = {
     registerUser: jest.fn(),
-    login: jest.fn(),
+    loginUser: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -29,7 +29,7 @@ describe('AuthController', () => {
     expect(controller).toBeDefined();
   });
 
-  describe('register', () => {
+  describe('registerUser', () => {
     it('should call authService.registerUser and return result', async () => {
       const dto: CreateUserDto = { email: 'test@example.com', password: 'pass' } as CreateUserDto;
       const expected = { id: 1, email: dto.email };
@@ -42,16 +42,16 @@ describe('AuthController', () => {
     });
   });
 
-  // describe('login', () => {
-  //   it('should call authService.login and return result', async () => {
-  //     const req = { user: { id: 1, email: 'test@example.com' } };
-  //     const expected = { access_token: 'token' };
-  //     mockAuthService.login.mockResolvedValueOnce(expected);
+  describe('loginUser', () => {
+    it('should call authService.loginUser and return result', async () => {
+      const loginDto = { email: 'test@example.com', password: 'pass' };
+      const expected = { access_token: 'token' };
+      mockAuthService.loginUser.mockResolvedValueOnce(expected);
 
-  //     const result = await controller.login(req);
+      const result = await controller.loginUser(loginDto);
 
-  //     expect(authService.login).toHaveBeenCalledWith(req.user);
-  //     expect(result).toEqual(expected);
-  //   });
-  // });
+      expect(authService.loginUser).toHaveBeenCalledWith(loginDto);
+      expect(result).toEqual(expected);
+    });
+  });
 });
