@@ -10,6 +10,8 @@ export const VALIDATION_MESSAGES = {
     PHONE_NUMBER_MAX_LENGTH: 'Phone number cannot be more than 12 characters.',
     GENDER_INVALID: 'Gender must be either MALE, FEMALE, or OTHER.',
     ROLE_INVALID: 'Role must be either CUSTOMER, STYLIST, or ADMIN.',
+    PASSWORD_REQUIRED: 'Password is required',
+    EMAIL_REQUIRED: 'Email is required',
 
     /** ADDRESS VALIDATION MESSAGES */
     ADDRESS_LINE1_REQUIRED: 'Address line 1 is required',
