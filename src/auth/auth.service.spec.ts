@@ -1,14 +1,13 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { AuthService } from './auth.service';
 import { JwtService } from '@nestjs/jwt';
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException } from '@nestjs/common';
 import { UserAlreadyExists } from '@common/exceptions/user-already-exists.exception';
-import { InvalidCredentialsException } from '@common/exceptions/invalid-credentials.exception';
+import { InvalidCredentialsException } from '@common/exceptions/invalid-credentials.exceptions';
 import { CreateUserDto } from '@users/dto/create-user.dto';
-import { LoginDto } from '@auth/dto/login.dto';
+import { LoginDto } from './dto/login.dto';
 import { UsersService } from '@users/users.service';
 import { UserResponseDto } from '@users/dto/user-response.dto';
-import { ERROR_MESSAGES } from '@common/constants/error-messages.constants';
 
 
 describe('AuthService', () => {
