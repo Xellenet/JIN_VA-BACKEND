@@ -7,10 +7,12 @@ import { UsersModule } from '@users/users.module';
 import { JwtStrategy } from 'strategies/jwt.strategy';
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import { MailModule } from 'mail/mail.module';
 
 @Module({
     imports:[
         UsersModule,
+        MailModule,
         PassportModule,
         JwtModule.register({
         privateKey: readFileSync(join(__dirname, '../../../keys/private.key')),

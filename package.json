@@ -31,6 +31,7 @@
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^4.0.2",
     "@nestjs/core": "^11.0.1",
+    "@nestjs/event-emitter": "^3.0.1",
     "@nestjs/jwt": "^11.0.0",
     "@nestjs/mapped-types": "*",
     "@nestjs/passport": "^11.0.5",
@@ -40,7 +41,9 @@
     "bcrypt": "^6.0.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.2",
+    "handlebars": "^4.7.8",
     "nest-winston": "^1.10.2",
+    "nodemailer": "^7.0.7",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "passport-local": "^1.0.0",
@@ -62,6 +65,7 @@
     "@types/express": "^5.0.0",
     "@types/jest": "^30.0.0",
     "@types/node": "^22.10.7",
+    "@types/nodemailer": "^7.0.2",
     "@types/passport-jwt": "^4.0.1",
     "@types/passport-local": "^1.0.38",
     "@types/supertest": "^6.0.2",
@@ -90,7 +94,6 @@
       "json",
       "ts"
     ],
-    
     "rootDir": "src",
     "testRegex": ".*\\.spec\\.ts$",
     "transform": {
@@ -102,7 +105,6 @@
       "!main.ts",
       "!**/*.module.ts"
     ],
-    
     "coverageDirectory": "../coverage",
     "testEnvironment": "node",
     "coverageThreshold": {
@@ -126,10 +128,10 @@
       }
     },
     "moduleNameMapper": {
-    "^@common/(.*)$": "<rootDir>/common/$1",
-    "^@users/(.*)$": "<rootDir>/users/$1",
-    "^@auth/(.*)$": "<rootDir>/auth/$1"
-  }
+      "^@common/(.*)$": "<rootDir>/common/$1",
+      "^@users/(.*)$": "<rootDir>/users/$1",
+      "^@auth/(.*)$": "<rootDir>/auth/$1"
+    }
   },
   "config": {
     "commitizen": {

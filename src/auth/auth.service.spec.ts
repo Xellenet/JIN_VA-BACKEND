@@ -8,13 +8,13 @@ import { CreateUserDto } from '@users/dto/create-user.dto';
 import { LoginDto } from './dto/login.dto';
 import { UsersService } from '@users/users.service';
 import { UserResponseDto } from '@users/dto/user-response.dto';
-
+import { EventEmitter2 } from '@nestjs/event-emitter';
 
 describe('AuthService', () => {
   let service: AuthService;
   let usersService: UsersService;
 
-  const mockUser = { id: 1, email: 'test@example.com', password: 'hashed' };
+  const mockUser = { id: 1, email: 'test@example.com', password: 'hashed', firstname: 'Test', verificationToken: 'token' };
   const mockUsersService = {
     findUserByEmail: jest.fn(),
     createUser: jest.fn(),
@@ -23,6 +23,9 @@ describe('AuthService', () => {
   const mockJwtService = {
     sign: jest.fn().mockReturnValue('token'),
   };
+  const mockEmitter = {
+    emit: jest.fn(),
+  };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -30,6 +33,7 @@ describe('AuthService', () => {
         AuthService,
         { provide: UsersService, useValue: mockUsersService },
         { provide: JwtService, useValue: mockJwtService },
+        { provide: EventEmitter2, useValue: mockEmitter },
       ],
     }).compile();
 
@@ -67,7 +71,7 @@ describe('AuthService', () => {
       expect(mockUsersService.findUserByEmail).toHaveBeenCalledWith(dto.email);
     });
 
-    it('should create and return user if not exists', async () => {
+    it('should create, emit event, and return user if not exists', async () => {
       const dto: CreateUserDto = { email: 'new@example.com', password: 'pass' } as CreateUserDto;
       mockUsersService.findUserByEmail.mockResolvedValueOnce(undefined);
       mockUsersService.createUser.mockResolvedValueOnce(mockUser);
@@ -76,6 +80,14 @@ describe('AuthService', () => {
 
       expect(mockUsersService.findUserByEmail).toHaveBeenCalledWith(dto.email);
       expect(mockUsersService.createUser).toHaveBeenCalledWith(dto);
+      expect(mockEmitter.emit).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          email: mockUser.email,
+          firstname: mockUser.firstname,
+          verificationToken: mockUser.verificationToken,
+        })
+      );
       expect(result).toBeInstanceOf(UserResponseDto);
       expect(result.email).toEqual(mockUser.email);
     });
@@ -109,10 +121,11 @@ describe('AuthService', () => {
       mockUsersService.validatePassword.mockResolvedValueOnce(true);
       const loggerSpy = jest.spyOn(service['logger'], 'log');
 
-      await service.loginUser(dto);
+      const result = await service.loginUser(dto);
 
       expect(loggerSpy).toHaveBeenCalledWith(`Logging in User with email ${dto.email}`);
       expect(loggerSpy).toHaveBeenCalledWith(`Generating tokens for user with email ${dto.email}`);
+      expect(result).toHaveProperty('access_token', 'token');
     });
   });
 });
