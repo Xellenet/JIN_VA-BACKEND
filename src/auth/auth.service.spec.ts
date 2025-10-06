@@ -9,7 +9,6 @@ import { LoginDto } from './dto/login.dto';
 import { UsersService } from '@users/users.service';
 import { UserResponseDto } from '@users/dto/user-response.dto';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { MailEvent } from '../mail/events/mail.events';
 
 describe('AuthService', () => {
   let service: AuthService;
