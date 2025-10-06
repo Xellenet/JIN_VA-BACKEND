@@ -5,7 +5,6 @@ import { CreateUserDto } from '@users/dto/create-user.dto';
 import { UserResponseDto } from '@users/dto/user-response.dto';
 import { LoginDto } from './dto/login.dto';
 import { LoginResponseDto } from './dto/login-response.dto';
-import { MailEvent } from '../mail/events/mail.events';
 
 describe('AuthController', () => {
   let controller: AuthController;
