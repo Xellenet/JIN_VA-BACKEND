@@ -27,6 +27,6 @@
     "strictBindCallApply": false,
     "noFallthroughCasesInSwitch": false
   },
-  "include": ["src/**/*", "typeorm.config.ts"],
+  "include": ["src/**/*", "typeorm.config.ts", "src/**/*.hbs"],
   "exclude": ["node_modules", "dist"]
 }

@@ -8,6 +8,8 @@ import { WinstonModule } from 'nest-winston';
 import { AuthModule } from './auth/auth.module';
 import { AuthService } from './auth/auth.service';
 import * as winston from 'winston';
+import { EventEmitterModule } from '@nestjs/event-emitter';
+import { MailModule } from 'mail/mail.module';
 
 @Module({
   imports: [
@@ -52,6 +54,8 @@ import * as winston from 'winston';
             }),
       ],
     }),
+    EventEmitterModule.forRoot(),
+    MailModule,
     UsersModule,
     AuthModule,
   ],
