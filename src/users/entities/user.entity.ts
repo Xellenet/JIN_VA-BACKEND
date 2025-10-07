@@ -3,6 +3,7 @@ import { Entity, PrimaryGeneratedColumn, Column, Index, CreateDateColumn, Update
 import { Address } from "./address.entity";
 import { Gender, Role } from "@common/types/enums";
 import { Exclude } from "class-transformer";
+import { UserToken } from "./user-token.entity";
 
 @Entity("users")
 export class User {
@@ -32,6 +33,12 @@ export class User {
   @Column({unique: true, nullable: true})
   phoneNumber: string;
 
+  @Column({nullable: true})
+  verifiedAt: Date;
+
+  @Column({nullable: true})
+  accountVerified: boolean;
+
   @Column({
     type: 'enum',
     enum: Gender
@@ -49,6 +56,9 @@ export class User {
   @OneToMany(() => Address, (address) => address.user, { cascade: true })
   addresses: Address[];
 
+  @OneToMany(() => UserToken, (token) => token.user, { cascade: true })
+  tokens: UserToken[];
+
   @CreateDateColumn({type: 'timestamp'})
   @Exclude()
   createdAt: Date;
@@ -56,6 +66,7 @@ export class User {
   @UpdateDateColumn({type: 'timestamp'})
   @Exclude()
   updatedAt: Date;
+
 
   @DeleteDateColumn({type: 'timestamp', nullable: true})
   @Exclude()

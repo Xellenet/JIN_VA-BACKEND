@@ -41,6 +41,12 @@ export class MailTemplateService {
         return 'Welcome to JinVa!';
       case 'order.placed':
         return 'Your Order Confirmation';
+      case 'user.welcome':
+        return 'Your account has been verified!';
+      case 'user.password-reset':
+        return 'Password Reset Instructions';
+      case 'user.password-reset-success':
+        return 'Your Password Has Been Reset';
       default:
         return 'Notification from JinVa';
     }

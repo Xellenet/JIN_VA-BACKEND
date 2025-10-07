@@ -9,6 +9,7 @@ import { ERROR_MESSAGES } from '@common/constants/error-messages.constants';
 import * as bcrypt from 'bcrypt';
 import { VARIABLES } from '@common/constants/variables.constants';
 
+
 @Injectable()
 export class UsersService {
   private readonly logger = new Logger(UsersService.name);
@@ -69,15 +70,25 @@ export class UsersService {
     const isPasswordValid = await bcrypt.compare(password, user.password);
     return  isPasswordValid;
   }
+
   findOne(id: number) {
     return `This action returns a #${id} user`;
   }
 
-  update(id: number, updateUserDto: UpdateUserDto) {
-    return `This action updates a #${id} user`;
+  async updateUser(id: number, updateUserDto: UpdateUserDto) {
+    await this.usersRepository.update(id, updateUserDto);
+    this.logger.log(`Updated user with id: ${id}`);
+    return this.findOne(id);
   }
 
-  remove(id: number) {
-    return `This action removes a #${id} user`;
+
+  async updateUserData(id: number, user: Partial<User>) {
+    await this.usersRepository.update(id, user);
+    this.logger.log(`Updated user data for user with id: ${id}`);
+  }
+
+  async remove(id: number) {
+    await this.usersRepository.delete(id);
+    this.logger.log(`Removed user with id: ${id}`);
   }
 }
