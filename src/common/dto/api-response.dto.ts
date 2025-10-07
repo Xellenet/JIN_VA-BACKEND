@@ -1,5 +1,5 @@
 import { applyDecorators, Type } from '@nestjs/common';
-import { ApiOkResponse, ApiCreatedResponse, ApiBadRequestResponse, ApiNotFoundResponse, ApiInternalServerErrorResponse, getSchemaPath } from '@nestjs/swagger';
+import { ApiOkResponse, ApiBadRequestResponse, ApiNotFoundResponse, ApiInternalServerErrorResponse, getSchemaPath } from '@nestjs/swagger';
 
 interface ApiResponseOptions {
   message?: string;
