@@ -12,7 +12,6 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 
 describe('AuthService', () => {
   let service: AuthService;
-  let usersService: UsersService;
 
   const mockUser = { id: 1, email: 'test@example.com', password: 'hashed', firstname: 'Test', verificationToken: 'token' };
   const mockUsersService = {

@@ -5,7 +5,6 @@ import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { ResponseInterceptor } from './common/interceptors/response.interceptor';
 import { setupSwagger } from './config/swagger.config';
 import { ValidationPipe } from '@nestjs/common';
-import { TransformInterceptor } from '@common/interceptors/tranform.interceptor';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bufferLogs: true });
@@ -14,7 +13,7 @@ async function bootstrap() {
   app.useLogger(logger);
   app.useGlobalFilters( new AllExceptionsFilter(logger));
 
-  app.useGlobalInterceptors(new ResponseInterceptor(), new TransformInterceptor());
+  app.useGlobalInterceptors(new ResponseInterceptor());
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,  

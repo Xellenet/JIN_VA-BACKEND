@@ -26,7 +26,7 @@ import { MailModule } from 'mail/mail.module';
         password: config.get('DB_PASS'),
         database: config.get('DB_NAME'),
         autoLoadEntities: true,
-        synchronize: true,
+        synchronize: false,
         // logging: true,
         migrations: [__dirname + '/migrations/*{.js}'],
         migrationsRun: true,

@@ -9,3 +9,10 @@ export enum Gender{
     FEMALE = 'FEMALE',
     OTHER = 'OTHER'
 }
+
+export enum Token {
+    VERIFICATION = 'VERIFICATION',
+    EMAIL_VERIFICATION = 'EMAIL_VERIFICATION',
+    PASSWORD_RESET = 'PASSWORD_RESET',
+    REFRESH = 'REFRESH'
+}
