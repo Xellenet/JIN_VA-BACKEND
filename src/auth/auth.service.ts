@@ -16,6 +16,8 @@ import { UserTokenService } from '@users/token.service';
 import { Token } from '@common/types/enums';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import * as bcrypt from 'bcrypt';
+import { ChangePasswordDto } from './dto/change-password.dto';
+import { access } from 'fs';
 
 
 @Injectable()
@@ -26,8 +28,14 @@ export class AuthService {
         private readonly jwtService: JwtService,
         private readonly emmitter: EventEmitter2,
         private readonly userTokenService: UserTokenService,
+        
     ){}
 
+    /**
+     * Register a new user
+     * @param createUserDto - Data Transfer Object for creating a user
+     * @returns UserResponseDto - Registered user details
+     */
     async registerUser(createUserDto: CreateUserDto): Promise<UserResponseDto>{
         let user;
         const email = createUserDto.email;
@@ -60,6 +68,11 @@ export class AuthService {
 
     }
 
+    /**
+     * Login a user
+     * @param loginDto - Data Transfer Object for user login
+     * @returns LoginResponseDto - Logged in user details
+     */
     async loginUser(loginDto: LoginDto): Promise<LoginResponseDto> {
         let user;
         const { email, password } = loginDto;
@@ -76,9 +89,10 @@ export class AuthService {
         }
 
         this.logger.log(`Generating tokens for user with email ${email}`);
-        const { access_token, refresh_token } = this.createTokens(user.id, user.email, user.role);
+        const { access_token, refresh_token } = await this.userTokenService.createJWTTokens(user);
+        this.logger.log(`Tokens generated for user with email ${email}`);
 
-
+        
         this.logger.log(`User logged in with email ${email}`);
         return plainToInstance(LoginResponseDto, {
             access_token,
@@ -89,6 +103,11 @@ export class AuthService {
 
     }
 
+    /**
+     * Verify user email
+     * @param token - Email verification token
+     * @returns { message: string } - Verification result message
+     */
     async verifyEmail(token: string): Promise<void> {
         this.logger.log(`Verifying email with token ${token}`);
         const userToken = await this.userTokenService.validateToken(token, Token.EMAIL_VERIFICATION);
@@ -110,6 +129,11 @@ export class AuthService {
         });
     }
 
+    /**
+     * Request a password reset link
+     * @param email - User's email address
+     * @returns { message: string } - Success message
+     */
     async forgotPassword(email: string): Promise<void> {
         this.logger.log(`Processing forgot password for email ${email}`);
         const user = await this.userService.findUserByEmail(email);
@@ -145,6 +169,19 @@ export class AuthService {
         this.logger.log(`Emitted event for sending password reset email to ${user.email}`);
     }
 
+    /**
+     * Resets the password for a user using a valid password reset token.
+     *
+     * This method verifies that the provided new password and confirmation match,
+     * validates the reset token, hashes the new password, updates the user's record,
+     * and revokes the used token. After a successful password reset, it emits an event
+     * to notify the user via email.
+     *
+     * @param token - The password reset token used to verify the user's request.
+     * @param resetPasswordDto - The DTO containing the new and confirmed passwords.
+     * @throws {BadRequestException} If the passwords do not match or the token is invalid or expired.
+     * @returns {Promise<void>} Resolves when the password reset process is complete.
+     */
     async resetPassword(token: string, resetPasswordDto: ResetPasswordDto): Promise<void> {
         const { newPassword, confirmNewPassword } = resetPasswordDto;
         if (newPassword !== confirmNewPassword) {
@@ -171,12 +208,76 @@ export class AuthService {
     }
 
 
-    createTokens(userId: number, email: string, role: string) {
-        const payload = { sub: userId, email, role };
-        const access_token = this.jwtService.sign(payload, { expiresIn: process.env.JWT_ACCESS_EXPIRES_IN });
-        const refresh_token = this.jwtService.sign(payload, { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN });
 
-        return { access_token, refresh_token };
+    /**
+     * Refreshes the user's authentication tokens using a valid refresh token.
+     *
+     * This method validates the provided refresh token, generates new access and
+     * refresh tokens for the user, and returns them along with user details in
+     * a structured response object.
+     *
+     * @param refreshToken - The refresh token used to authenticate and generate new tokens.
+     * @throws {BadRequestException} If the provided refresh token is invalid or expired.
+     * @returns {Promise<LoginResponseDto>} An object containing the new access and refresh tokens,
+     * a success message, and the user's information.
+     */
+
+    async refreshTokens(refreshToken: string): Promise<LoginResponseDto> {
+        this.logger.log('Refreshing tokens using refresh token ');
+        const user = await this.userTokenService.validateToken(refreshToken, Token.REFRESH);
+        if (!user) {
+            throw new BadRequestException("Invalid or expired refresh token");
+        }
+
+        this.logger.log(`Generating new tokens for user with id: ${user.id}`);
+        const { access_token, refresh_token } = await this.userTokenService.createJWTTokens(user);
+        this.logger.log(`New tokens generated for user with id: ${user.id}`);
+
+        return plainToInstance(LoginResponseDto, {
+            access_token,
+            refresh_token,
+            message: VARIABLES.TOKENS_REFRESHED,
+            data: plainToInstance(UserResponseDto, user)
+        });
     }
 
+    async logout(token: string): Promise<void> {
+        this.logger.log('Logging out user and revoking token');
+        await this.userTokenService.revokeToken(token);
+        this.logger.log('Token revoked successfully');
+    }
+
+    async changePassword(changePasswordDto: ChangePasswordDto, userId: number): Promise<LoginResponseDto>{
+        const user = await this.userService.findUserById(userId);
+        if (!user) {
+            throw new BadRequestException("User not found");
+        }
+
+        const isMatch = await bcrypt.compare(changePasswordDto.currentPassword, user.password);
+        if (!isMatch) {
+            throw new BadRequestException("Current password is incorrect");
+        }
+
+        user.password = await bcrypt.hash(changePasswordDto.newPassword, VARIABLES.SALT_OR_ROUNDS);
+        await this.userService.updateUserData(user.id, user);
+        this.logger.log(`Password changed successfully for user with id: ${user.id}`);
+        
+        this.userTokenService.revokeRefreshTokenForUser(user.id);
+        this.logger.log(`Revoked existing refresh tokens for user with id: ${user.id} after password change`);
+        const {access_token, refresh_token} = await this.userTokenService.createJWTTokens(user);
+        this.logger.log(`New tokens generated for user with id: ${user.id} after password change`);
+
+        this.emmitter.emit(MailEvent.PASSWORD_CHANGED, {
+            email: user.email,
+            firstname: user.firstname,
+        });
+        this.logger.log(`Emitted event for sending password change notification email to ${user.email}`);
+
+        return plainToInstance(LoginResponseDto, {
+            access_token,
+            refresh_token,
+            message: VARIABLES.PASSWORD_CHANGED_SUCCESSFULLY,
+            data: plainToInstance(UserResponseDto, user)
+        });
+    }
 }

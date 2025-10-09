@@ -67,6 +67,7 @@ export class CreateUserDto {
     description: 'List of addresses for the user',
     required: false,
   })
+  
   @IsOptional()
   @IsArray()
   @ArrayMinSize(0)

@@ -47,6 +47,8 @@ export class MailTemplateService {
         return 'Password Reset Instructions';
       case 'user.password-reset-success':
         return 'Your Password Has Been Reset';
+      case 'user.password-changed':
+        return 'Your Password Has Been Changed';
       default:
         return 'Notification from JinVa';
     }

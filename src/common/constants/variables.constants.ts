@@ -14,4 +14,7 @@ export const VARIABLES = {
     EMAIL_VERIFIED: 'Email verified successfully',
     PASSWORD_RESET_EMAIL_SENT: 'Password reset link sent to your email',
     PASSWORD_RESET_SUCCESS: 'Password reset successfully',
+    TOKENS_REFRESHED: 'Tokens refreshed successfully',
+    PASSWORD_CHANGED_SUCCESSFULLY: 'Password changed successfully',
+
 }
