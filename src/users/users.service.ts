@@ -40,11 +40,16 @@ export class UsersService {
     return this.usersRepository.save(user);
   }
 
-  async findUser() {
-    this.logger.log(`Retrieving all users`);
-    const users = await this.usersRepository.find();
+  async findUserById(id: number): Promise<User | null>{
+    if(!id){
+      throw new NotFoundException("User ID required")
+    }
 
-    return users;
+    this.logger.log(`Finding user with id ${id}`);
+    const user = await this.usersRepository.findOne({
+      where: {id},
+    })
+    return user;
   }
 
   async findUserByEmail(email: string): Promise<User | null>{

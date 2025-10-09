@@ -2,58 +2,25 @@ import { Module } from '@nestjs/common';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { UsersModule } from './users/users.module';
-import { ConfigModule, ConfigService } from '@nestjs/config';
+import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { WinstonModule } from 'nest-winston';
 import { AuthModule } from './auth/auth.module';
 import { AuthService } from './auth/auth.service';
-import * as winston from 'winston';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { MailModule } from 'mail/mail.module';
+import { typeOrmConfigAsync } from 'config/typeorm.config';
+import { winstonConfig } from 'config/winston.config';
+import { appConfig } from 'config/app.config';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
+      load: [appConfig]
     }),
-    TypeOrmModule.forRootAsync({
-      inject: [ConfigService],
-      useFactory: (config: ConfigService) => ({
-        type: 'postgres',
-        host: config.get('DB_HOST'),
-        port: config.get<number>('DB_PORT'),
-        username: config.get('DB_USER'),
-        password: config.get('DB_PASS'),
-        database: config.get('DB_NAME'),
-        autoLoadEntities: true,
-        synchronize: false,
-        // logging: true,
-        migrations: [__dirname + '/migrations/*{.js}'],
-        migrationsRun: true,
-      }),
-    }),
-    WinstonModule.forRoot({
-      transports: [
-        process.env.NODE_ENV === 'production'
-          ? 
-            new winston.transports.Console({
-              format: winston.format.combine(
-                winston.format.timestamp(),
-                winston.format.json(),
-              ),
-            })
-          :
-            new winston.transports.Console({
-              format: winston.format.combine(
-                winston.format.colorize({ all: true }),
-                winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
-                winston.format.printf(({ level, message, timestamp, context }) => {
-                  return `[${timestamp}] ${level} ${context ? `[${context}]` : ''}: ${message}`;
-                }),
-              ),
-            }),
-      ],
-    }),
+    TypeOrmModule.forRootAsync(typeOrmConfigAsync),
+    WinstonModule.forRoot(winstonConfig),
     EventEmitterModule.forRoot(),
     MailModule,
     UsersModule,

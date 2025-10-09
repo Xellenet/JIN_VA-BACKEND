@@ -56,4 +56,14 @@ export class UserMailListener {
     });
   }
 
+  @OnEvent(MailEvent.PASSWORD_CHANGED, { async: true })
+  async handlePasswordChanged(payload: PasswordResetSuccessPayload) {
+    await this.mailService.sendMail(payload.email, MailEvent.PASSWORD_CHANGED, {
+      firstname: payload.firstname,
+      appName: this.config.get('APP_NAME'),
+      year: new Date().getFullYear(),
+      supportEmail: this.config.get('SUPPORT_EMAIL'),
+    });
+  }
+
 }

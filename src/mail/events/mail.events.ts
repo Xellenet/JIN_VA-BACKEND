@@ -5,6 +5,7 @@ export const MailEvent = {
   WELCOME_USER: 'user.welcome',
   FORGOT_PASSWORD: 'user.forgot-password',
   PASSWORD_RESET_SUCCESS: 'user.password-reset-success',
+  PASSWORD_CHANGED: 'user.password-changed',
 } as const;
 
 export interface UserRegisteredPayload {
@@ -35,10 +36,16 @@ export interface PasswordResetSuccessPayload {
   firstname: string;
 }
 
+export interface PasswordChangedPayload {
+  email: string;
+  firstname: string;
+}
+
 export type MailEventPayloads = {
   [MailEvent.USER_REGISTERED]: UserRegisteredPayload;
   [MailEvent.ORDER_PLACED]: OrderPlacedPayload;
   [MailEvent.WELCOME_USER]: WelcomeUserPayload;
   [MailEvent.PASSWORD_RESET]: PasswordResetPayload;
   [MailEvent.PASSWORD_RESET_SUCCESS]: PasswordResetSuccessPayload;
+  [MailEvent.PASSWORD_CHANGED]: PasswordChangedPayload;
 };

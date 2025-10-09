@@ -8,6 +8,7 @@ import * as crypto from 'crypto';
 import { Token } from '@common/types/enums';
 import { isAfter, subMinutes } from 'date-fns';
 import { VARIABLES } from '@common/constants/variables.constants';
+import { JwtService } from '@nestjs/jwt';
 
 @Injectable()
 export class UserTokenService {
@@ -15,6 +16,7 @@ export class UserTokenService {
   constructor(
     @InjectRepository(UserToken)
     private readonly tokenRepo: Repository<UserToken>,
+    private readonly jwtService: JwtService,
   ) {}
 
   async createToken(
@@ -40,6 +42,12 @@ export class UserTokenService {
     return this.tokenRepo.save(userToken);
   }
 
+  /**
+   * Validate a user token
+   * @param token - The token to validate
+   * @param type - The type of token
+   * @returns The user associated with the token or null if invalid
+   */
   async validateToken(token: string, type: Token): Promise<User | null> {
     const userToken = await this.tokenRepo.findOne({
       where: { token, type },
@@ -47,7 +55,16 @@ export class UserTokenService {
     });
     this.logger.log(`Validating ${type} token for user with id: ${userToken?.user.id}`);
 
-
+    if(userToken && userToken.type === Token.REFRESH) {
+      try {
+        this.jwtService.verify(token, { ignoreExpiration: true }); 
+        this.logger.log(`JWT token verified for user with id: ${userToken.user.id}`);
+      } catch (error) {
+        this.logger.warn(`JWT token verification failed: ${error.message}`);
+        throw new BadRequestException("Invalid or expired token");
+      }
+      return userToken.user;
+    }
     if (!userToken || userToken.expiresAt < new Date()) {
         throw new BadRequestException("Invalid or expired token");
     }
@@ -103,4 +120,26 @@ export class UserTokenService {
 
     return this.tokenRepo.save(newToken);
   }
+
+  async createJWTTokens(user: User): Promise<{ access_token: string, refresh_token: string }> {
+    const payload = { sub: user.id, email: user.email, role: user.role };
+    const access_token = this.jwtService.sign(payload, { expiresIn: process.env.JWT_ACCESS_EXPIRES_IN });
+    const refresh_token = this.jwtService.sign(payload, { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN });
+    this.logger.log(`Created JWT tokens for user with id: ${user.id}`);
+
+    this.tokenRepo.create({
+      token: refresh_token,
+      user: { id: user.id },
+      type: Token.REFRESH,
+      expiresAt: subMinutes(new Date(), -VARIABLES.REFRESH_TOKEN_EXPIRES_IN_DAYS * 24 * 60),
+    });
+
+    return { access_token, refresh_token };
+  }
+
+  async revokeRefreshTokenForUser(userId: number): Promise<void> {
+    this.logger.log(`Revoking refresh tokens for user with id: ${userId}`);
+    await this.tokenRepo.delete({ user: { id: userId }, type: Token.REFRESH });
+  }
+    
 }
