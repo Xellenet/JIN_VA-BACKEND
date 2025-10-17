@@ -5,9 +5,13 @@ import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { UsersModule } from '@users/users.module';
 import { JwtStrategy } from 'strategies/jwt.strategy';
-import { readFileSync } from 'fs';
-import { join } from 'path';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { MailModule } from 'mail/mail.module';
+import { HttpModule } from '@nestjs/axios';
+import { SocialAuthStrategyFactory } from './social-auth.factory';
+import { GoogleAuthStrategy } from './strategy/google-auth.strategy';
+import { OAuthStateService } from './oauth-state.service';
 
 @Module({
     imports:[
@@ -21,10 +25,22 @@ import { MailModule } from 'mail/mail.module';
             algorithm: 'RS256',
         },
         }),
-
+        HttpModule
     ],
     controllers: [AuthController],
-    providers: [AuthService, JwtStrategy],
-    exports: [AuthService, JwtModule],
+    providers: [
+        AuthService, 
+        JwtStrategy,
+        OAuthStateService,
+        SocialAuthStrategyFactory,
+        GoogleAuthStrategy,
+
+    ],
+    exports: [
+        AuthService, 
+        JwtModule, 
+        SocialAuthStrategyFactory, 
+        OAuthStateService
+    ],
 })
 export class AuthModule {}

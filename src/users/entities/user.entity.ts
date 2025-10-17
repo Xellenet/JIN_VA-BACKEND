@@ -53,6 +53,18 @@ export class User {
   })
   role: Role
 
+  @Column({nullable: true})
+  profilePicture: string;
+
+  @Column({nullable: true})
+  socialProvider: string;
+
+  @Column({nullable: true})
+  socialProviderId: string;
+
+  @Column({default: false})
+  isSocialLogin: boolean;
+
   @OneToMany(() => Address, (address) => address.user, { cascade: true })
   addresses: Address[];
 
