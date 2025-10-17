@@ -1,5 +1,4 @@
 import { BadRequestException, Injectable , Logger} from '@nestjs/common';
-import { JwtService } from '@nestjs/jwt';
 import { ERROR_MESSAGES } from '@common/constants/error-messages.constants';
 import { UserAlreadyExists } from '@common/exceptions/user-already-exists.exception';
 import { CreateUserDto } from '@users/dto/create-user.dto';
@@ -17,7 +16,12 @@ import { Token } from '@common/types/enums';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import * as bcrypt from 'bcrypt';
 import { ChangePasswordDto } from './dto/change-password.dto';
-import { access } from 'fs';
+import { User } from '@users/entities/user.entity';
+import { OAuthCallbackDto } from './dto/oauth-callback.dto';
+import { SocialUserProfile } from '@common/types/user-interfaces.type';
+import { SocialAuthStrategyFactory } from './social-auth.factory';
+import { OAuthStateService } from './oauth-state.service';
+import { UnauthorizedException } from '@nestjs/common/exceptions/unauthorized.exception';
 
 
 @Injectable()
@@ -25,9 +29,10 @@ export class AuthService {
     private readonly logger = new Logger(AuthService.name);
     constructor(
         private readonly userService: UsersService,
-        private readonly jwtService: JwtService,
         private readonly emmitter: EventEmitter2,
         private readonly userTokenService: UserTokenService,
+        private readonly socialAuthStrategyFactory: SocialAuthStrategyFactory,
+        private readonly oauthStateService: OAuthStateService,
         
     ){}
 
@@ -280,4 +285,133 @@ export class AuthService {
             data: plainToInstance(UserResponseDto, user)
         });
     }
+
+
+    /**
+   * Initiate OAuth flow - Redirects user to provider
+   * @param provider - Social provider name (google, facebook, github)
+   * @returns Authorization URL to redirect to
+   */
+  async initiateOAuthFlow(provider: string): Promise<string> {
+    this.logger.log(`Initiating OAuth flow for provider: ${provider}`);
+
+    const strategy = this.socialAuthStrategyFactory.getStrategy(provider);
+    
+    const state = this.oauthStateService.generateState(provider);
+    this.logger.log(`OAuth state generated for ${provider}: ${state}`);
+    const authUrl = strategy.getAuthorizationUrl(state);
+    
+    this.logger.log(`OAuth authorization URL generated for ${provider}`);
+    return authUrl;
+  }
+
+  /**
+   * Handle OAuth callback - Complete the OAuth flow
+   * @param provider - Social provider name
+   * @param callbackDto - Callback data from provider
+   * @returns Login response with tokens
+   */
+  async handleOAuthCallback(
+    provider: string,
+    callbackDto: OAuthCallbackDto,
+  ): Promise<LoginResponseDto> {
+    const { code, state, error, error_description } = callbackDto;
+
+    // Handle OAuth errors
+    if (error) {
+      this.logger.error(`OAuth error from ${provider}: ${error} - ${error_description}`);
+      throw new UnauthorizedException(
+        error_description || `Authentication failed with ${provider}`,
+      );
+    }
+
+    // Validate state for CSRF protection
+    if (!this.oauthStateService.validateState(state, provider)) {
+      this.logger.error(`Invalid OAuth state for provider: ${provider}`);
+      throw new UnauthorizedException('Invalid or expired OAuth state');
+    }
+
+    this.logger.log(`Processing OAuth callback for provider: ${provider}`);
+
+    const strategy = this.socialAuthStrategyFactory.getStrategy(provider);
+
+    const accessToken = await strategy.getAccessToken(code);
+    this.logger.log(`Access token obtained from ${provider}`);
+
+    const socialProfile = await strategy.getUserProfile(accessToken);
+    this.logger.log(`User profile retrieved from ${provider}: ${socialProfile.email}`);
+
+    if (!socialProfile.email) {
+      throw new BadRequestException('Email not provided by social provider');
+    }
+
+    let user = await this.userService.findUserByEmail(socialProfile.email);
+
+    if (!user) {
+      user = await this.registerSocialUser(socialProfile);
+    } else {
+      user = await this.updateSocialLoginInfo(user, socialProfile);
+    }
+
+    this.logger.log(`Generating tokens for social login user: ${user.email}`);
+    const { access_token, refresh_token } = await this.userTokenService.createJWTTokens(user);
+    
+    this.logger.log(`Social login successful for user: ${user.email}`);
+    
+    return plainToInstance(LoginResponseDto, {
+      access_token,
+      refresh_token,
+      message: VARIABLES.USER_LOGGED_IN,
+      data: plainToInstance(UserResponseDto, user),
+    });
+  }
+
+  /**
+   * Register a new user from social provider - PRIVATE HELPER
+   */
+  private async registerSocialUser(socialProfile: SocialUserProfile): Promise<User> {
+    this.logger.log(`Registering new social user: ${socialProfile.email}`);
+
+      const createUserDto = plainToInstance(CreateUserDto, {
+    email: socialProfile.email,
+    firstname: socialProfile.firstname,
+    lastname: socialProfile.lastname,
+    profilePicture: socialProfile.profilePicture,
+    socialProvider: socialProfile.provider,
+    socialProviderId: socialProfile.providerId,
+    isSocialLogin: true,
+  });
+
+    const user = await this.userService.createUser(createUserDto);
+
+    this.logger.log(`Social user registered: ${user.email}`);
+    
+    this.emmitter.emit(MailEvent.SOCIAL_USER_REGISTERED, {
+      email: user.email,
+      firstname: user.firstname,
+      provider: socialProfile.provider,
+    });
+
+    return user;
+  }
+
+  /**
+   * Update existing user with social login info - PRIVATE HELPER
+   */
+  private async updateSocialLoginInfo(
+    user: User,
+    socialProfile: SocialUserProfile,
+  ): Promise<User> {
+    // Only update if not already a social user or if profile picture is missing
+    if (!user.isSocialLogin || !user.profilePicture) {
+        this.userService.updateUserData(user.id, {
+        socialProvider: socialProfile.provider,
+        socialProviderId: socialProfile.providerId,
+        isSocialLogin: true,
+        profilePicture: user.profilePicture || socialProfile.profilePicture,
+      });
+    }
+    return user;
+  }
+
 }

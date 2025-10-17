@@ -4,7 +4,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, LessThan } from 'typeorm';
 import { UserToken } from './entities/user-token.entity';
 import { User } from './entities/user.entity';
-import * as crypto from 'crypto';
+import * as crypto from 'node:crypto';
 import { Token } from '@common/types/enums';
 import { isAfter, subMinutes } from 'date-fns';
 import { VARIABLES } from '@common/constants/variables.constants';
