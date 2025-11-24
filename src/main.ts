@@ -5,6 +5,7 @@ import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { ResponseInterceptor } from './common/interceptors/response.interceptor';
 import { setupSwagger } from './config/swagger.config';
 import { ValidationPipe } from '@nestjs/common';
+import * as cors from 'cors';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bufferLogs: true });
@@ -12,6 +13,12 @@ async function bootstrap() {
 
   app.useLogger(logger);
   app.useGlobalFilters( new AllExceptionsFilter(logger));
+  app.enableCors({
+    origin: process.env.ALLOWED_ORIGINS?.split(','),
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
+    preflightContinue: false,
+    optionsSuccessStatus: 204,
+  });
 
   app.useGlobalInterceptors(new ResponseInterceptor());
   app.useGlobalPipes(
@@ -25,6 +32,6 @@ async function bootstrap() {
 
   app.setGlobalPrefix('api/v1');
   setupSwagger(app);
-  await app.listen(process.env.PORT ?? 3000);
+  await app.listen(process.env.PORT ?? 8000);
 }
 bootstrap();
