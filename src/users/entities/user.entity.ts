@@ -21,7 +21,7 @@ export class User {
   @Column({nullable: true})
   username: string;
 
-  @Column({type: 'date', nullable: true})
+  @Column({ name: 'date_of_birth', type: 'date', nullable: true})
   dateOfBirth: Date;
 
   @Column()
@@ -30,13 +30,13 @@ export class User {
   @Column()
   lastname: string;
 
-  @Column({unique: true, nullable: true})
+  @Column({name: 'phone_number', unique: true, nullable: true})
   phoneNumber: string;
 
-  @Column({nullable: true})
+  @Column({name: 'verified_at', nullable: true})
   verifiedAt: Date;
 
-  @Column({nullable: true})
+  @Column({name: 'account_verified', nullable: true})
   accountVerified: boolean;
 
   @Column({
@@ -53,16 +53,16 @@ export class User {
   })
   role: Role
 
-  @Column({nullable: true})
+  @Column({name: 'profile_picture', nullable: true})
   profilePicture: string;
 
-  @Column({nullable: true})
+  @Column({name: 'social_provider', nullable: true})
   socialProvider: string;
 
-  @Column({nullable: true})
+  @Column({name: 'social_provider_id', nullable: true})
   socialProviderId: string;
 
-  @Column({default: false})
+  @Column({name: 'is_social_login', default: false})
   isSocialLogin: boolean;
 
   @OneToMany(() => Address, (address) => address.user, { cascade: true })
@@ -71,16 +71,16 @@ export class User {
   @OneToMany(() => UserToken, (token) => token.user, { cascade: true })
   tokens: UserToken[];
 
-  @CreateDateColumn({type: 'timestamp'})
+  @CreateDateColumn({name: 'created_at', type: 'timestamp'})
   @Exclude()
   createdAt: Date;
 
-  @UpdateDateColumn({type: 'timestamp'})
+  @UpdateDateColumn({name: 'updated_at', type: 'timestamp'})
   @Exclude()
   updatedAt: Date;
 
 
-  @DeleteDateColumn({type: 'timestamp', nullable: true})
+  @DeleteDateColumn({name: 'deleted_at', type: 'timestamp', nullable: true})
   @Exclude()
   deletedAt?: Date;
 

@@ -1,4 +1,4 @@
-import { Column, CreateDateColumn, Entity, ManyToOne, PrimaryGeneratedColumn, UpdateDateColumn } from "typeorm";
+import { Column, CreateDateColumn, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn, UpdateDateColumn } from "typeorm";
 import { User } from "./user.entity";
 
 @Entity('addresses')
@@ -15,16 +15,17 @@ export class Address{
     @Column()
     country: string;
 
-    @Column()
+    @Column({name: 'zip_code'})
     zipCode: string;
 
 
     @ManyToOne(() => User, (user) => user.addresses, { onDelete: 'CASCADE'})
+    @JoinColumn({ name: 'user_id' })
     user: User;
 
-    @CreateDateColumn({type: 'timestamp'})
+    @CreateDateColumn({name: 'created_at', type: 'timestamp'})
     createdAt: Date;
 
-    @UpdateDateColumn({type: 'timestamp'})
+    @UpdateDateColumn({name: 'updated_at', type: 'timestamp'})
     updatedAt: Date;
 }

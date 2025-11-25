@@ -27,6 +27,6 @@ import { appConfig } from 'config/app.config';
     AuthModule,
   ],
   controllers: [AppController],
-  providers: [AppService, AuthService],
+  providers: [AppService],
 })
 export class AppModule {}

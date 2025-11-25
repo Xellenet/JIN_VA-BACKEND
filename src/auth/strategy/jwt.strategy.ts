@@ -3,15 +3,15 @@ import { PassportStrategy } from "@nestjs/passport";
 import { UsersService } from "@users/users.service";
 import { ExtractJwt, Strategy } from "passport-jwt";
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { resolve } from 'node:path';
 
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy){
     constructor(private readonly userService: UsersService) {
-    super({
+      super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
-      secretOrKey: readFileSync(join(__dirname, '../../../keys/public.key')),
+      secretOrKey: readFileSync(resolve(process.cwd(), 'keys/public.key'), 'utf8'),
       algorithms: ['RS256'],
       ignoreExpiration: false,
     });
