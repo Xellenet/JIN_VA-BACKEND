@@ -1,6 +1,6 @@
 import { Body, Controller, Post, HttpCode, Query, UseGuards, Req } from '@nestjs/common';
 import { AuthService } from './auth.service';
-import { ApiResponse } from '@nestjs/swagger';
+import { ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CreateUserDto } from '@users/dto/create-user.dto';
 import { UserResponseDto } from '@users/dto/user-response.dto';
 import { VARIABLES } from '@common/constants/variables.constants';
@@ -13,6 +13,7 @@ import { ChangePasswordDto } from './dto/change-password.dto';
 /**
  * Auth Controller
  */
+@ApiTags('Authentication')
 @Controller('auth')
 export class AuthController {
     constructor(private readonly authService: AuthService) {}
@@ -88,7 +89,7 @@ export class AuthController {
     @Post('refresh-token')
     @HttpCode(200)
     @ApiResponse({status: 200, description: VARIABLES.TOKENS_REFRESHED, type:LoginResponseDto})
-    async refreshToken(@Body('token') token: string): Promise<LoginResponseDto> {
+    async refreshToken(@Body('refreshToken') token: string): Promise<LoginResponseDto> {
         return await this.authService.refreshTokens(token);
     }
 
@@ -100,6 +101,7 @@ export class AuthController {
         await this.authService.logout(token);
         return { message: 'User logged out successfully' };
     }
+
 
     @Post('change-password')
     @HttpCode(200)

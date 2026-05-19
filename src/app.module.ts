@@ -12,6 +12,9 @@ import { MailModule } from 'mail/mail.module';
 import { typeOrmConfigAsync } from 'config/typeorm.config';
 import { winstonConfig } from 'config/winston.config';
 import { appConfig } from 'config/app.config';
+import { ArtisansModule } from './artisans/artisans.module';
+import { ReviewsModule } from './reviews/reviews.module';
+import { ServicesModule } from './services/services.module';
 
 @Module({
   imports: [
@@ -25,6 +28,9 @@ import { appConfig } from 'config/app.config';
     MailModule,
     UsersModule,
     AuthModule,
+    ArtisansModule,
+    ReviewsModule,
+    ServicesModule,
   ],
   controllers: [AppController],
   providers: [AppService],

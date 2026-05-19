@@ -13,7 +13,8 @@ BEGIN
             'RESET',
             'VERIFY'
         );
-        -- NOTE: Add all enum values from your Token enum
+        -- NOTE: Additional values used by the app are added in a later migration
+        -- to keep this migration backward-compatible with existing environments.
     END IF;
 END $$;
 

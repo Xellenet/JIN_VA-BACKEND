@@ -1,7 +1,8 @@
 export enum Role{
     CUSTOMER = 'CUSTOMER',
     ADMIN = 'ADMIN',
-    STYLIST = 'STYLIST'
+    STYLIST = 'STYLIST',
+    ARTISAN = 'ARTISAN'
 }
 
 export enum Gender{

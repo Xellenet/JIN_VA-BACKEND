@@ -76,8 +76,11 @@ export class UsersService {
     return  isPasswordValid;
   }
 
-  findOne(id: number) {
-    return `This action returns a #${id} user`;
+  async findOne(id: number) {
+    return await this.usersRepository.findOne({
+      where: {id},
+      select: ['password']
+    });
   }
 
   async updateUser(id: number, updateUserDto: UpdateUserDto) {

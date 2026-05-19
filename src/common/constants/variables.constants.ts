@@ -28,4 +28,11 @@ export const VARIABLES = {
     GOOGLE_PROVIDER_NAME: 'google',
     STATE_EXPIRY_MS: 10 * 60 * 1000,
 
+    /** SERVICE FEEDBACK CONSTANTS */
+    SERVICE_CREATED: 'Service created successfully',
+    SERVICE_UPDATED: 'Service updated successfully',
+    SERVICE_DELETED: 'Service deleted successfully',
+    SERVICE_NOT_FOUND: 'Service not found',
+    ALL_SERVICES_RETRIEVED: 'All services retrieved successfully',
+    SERVICE_RETRIEVED: 'Service retrieved successfully',
 }
