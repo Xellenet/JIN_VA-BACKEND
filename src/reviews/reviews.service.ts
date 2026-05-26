@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Review } from './entities/review.entity';
 import { CreateReviewDto } from './dto/create-review.dto';
-import { Artisan } from '../artisans/entities/artisan.entity';
+import { Artisan } from '@users/entities/artisan.entity';
 import { User } from '@users/entities/user.entity';
 
 @Injectable()

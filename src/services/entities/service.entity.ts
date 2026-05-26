@@ -6,25 +6,29 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { Artisan } from '../../artisans/entities/artisan.entity';
+import { Artisan } from '@users/entities/artisan.entity';
 
 @Entity('services')
 export class ServiceEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column({ unique: true })
-  name: string;
+  name!: string;
 
   @Column({ type: 'text', nullable: true })
   description?: string;
 
   @ManyToMany(() => Artisan, (artisan) => artisan.services)
-  artisans: Artisan[];
+  artisans!: Artisan[];
+
+
+  @Column({type: 'decimal', precision: 10, scale: 2, nullable: true})
+  price?: number;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamp' })
-  createdAt: Date;
+  createdAt!: Date;
 
   @UpdateDateColumn({ name: 'updated_at', type: 'timestamp' })
-  updatedAt: Date;
+  updatedAt!: Date;
 }

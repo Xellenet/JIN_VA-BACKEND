@@ -1,22 +1,29 @@
 
 import { ApiProperty } from '@nestjs/swagger';
-import { Artisan } from 'artisans/entities/artisan.entity';
 import { Expose } from 'class-transformer';
 
 export class ServiceResponseDto {
     @ApiProperty({ description: 'The unique identifier of the service.' })
     @Expose()
-    id: number;
+    id!: number;
 
     @ApiProperty({ description: 'The name of the service.' })
     @Expose()
-    name: string;
+    name!: string;
 
-    @ApiProperty({ description: 'The description of the service.' })    
+    @ApiProperty({ description: 'The description of the service.', required: false })
     @Expose()
-    description: string;
+    description?: string;
 
-    @ApiProperty({ description: 'The price of the service.' })
-    artisans: Artisan[]; 
+    @ApiProperty({ description: 'The price of the service.', required: false })
+    @Expose()
+    price?: number;
 
+    @ApiProperty()
+    @Expose()
+    createdAt!: Date;
+
+    @ApiProperty()
+    @Expose()
+    updatedAt!: Date;
 }

@@ -18,7 +18,6 @@ export class Address{
     @Column({name: 'zip_code'})
     zipCode: string;
 
-
     @ManyToOne(() => User, (user) => user.addresses, { onDelete: 'CASCADE'})
     @JoinColumn({ name: 'user_id' })
     user: User;

@@ -1,9 +1,11 @@
 
-import { Entity, PrimaryGeneratedColumn, Column, Index, CreateDateColumn, UpdateDateColumn, DeleteDateColumn, OneToMany } from "typeorm";
+import { Entity, PrimaryGeneratedColumn, Column, Index, CreateDateColumn, UpdateDateColumn, DeleteDateColumn, OneToMany, OneToOne } from "typeorm";
 import { Address } from "./address.entity";
 import { Gender, Role } from "@common/types/enums";
 import { Exclude } from "class-transformer";
 import { UserToken } from "./user-token.entity";
+import { ArtisanProfile } from './artisan-profile.entity';
+import { CustomerProfile } from './customer-profile.entity';
 
 @Entity("users")
 export class User {
@@ -70,6 +72,12 @@ export class User {
 
   @OneToMany(() => UserToken, (token) => token.user, { cascade: true })
   tokens: UserToken[];
+
+  @OneToOne(() => ArtisanProfile, (artisanProfile) => artisanProfile.user)
+  artisanProfile?: ArtisanProfile;
+
+  @OneToOne(() => CustomerProfile, (customerProfile) => customerProfile.user)
+  customerProfile?: CustomerProfile;
 
   @CreateDateColumn({name: 'created_at', type: 'timestamp'})
   @Exclude()

@@ -54,4 +54,7 @@ export class UserResponseDto {
   @Expose()
   @Type(() => AddressResponseDto)
   addresses?: AddressResponseDto[];
+
+  @ApiProperty({ example: 'password123', description: 'User password', required: false })
+  password?: string;
 }

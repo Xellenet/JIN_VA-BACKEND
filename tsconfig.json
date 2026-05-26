@@ -17,7 +17,8 @@
     "baseUrl": "./src",
     "paths": {
       "@common/*": ["common/*"],
-      "@users/*": ["users/*"]
+      "@users/*": ["users/*"],
+      "@services/*": ["services/*"]
     },
     "incremental": true,
     "skipLibCheck": true,

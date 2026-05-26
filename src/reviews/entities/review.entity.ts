@@ -7,17 +7,17 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { Artisan } from '../../artisans/entities/artisan.entity';
+import { Artisan } from '@users/entities/artisan.entity';
 import { User } from '@users/entities/user.entity';
 
 @Entity('reviews')
 export class Review {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @ManyToOne(() => Artisan, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'artisan_id' })
-  artisan: Artisan;
+  artisan!: Artisan;
 
   @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'reviewer_user_id' })
@@ -25,20 +25,20 @@ export class Review {
 
   @ManyToOne(() => User, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'reviewed_user_id' })
-  reviewedUser: User;
+  reviewedUser!: User;
 
   @Column({ name: 'reviewer_name', nullable: true })
   reviewerName?: string;
 
   @Column({ type: 'decimal', precision: 3, scale: 2 })
-  rating: number;
+  rating!: number;
 
   @Column({ type: 'text', nullable: true })
   review?: string;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamp' })
-  createdAt: Date;
+  createdAt!: Date;
 
   @UpdateDateColumn({ name: 'updated_at', type: 'timestamp' })
-  updatedAt: Date;
+  updatedAt!: Date;
 }

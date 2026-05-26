@@ -3,7 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { ReviewsController } from './reviews.controller';
 import { ReviewsService } from './reviews.service';
 import { Review } from './entities/review.entity';
-import { Artisan } from '../artisans/entities/artisan.entity';
+import { Artisan } from '@users/entities/artisan.entity';
 import { User } from '@users/entities/user.entity';
 
 @Module({
