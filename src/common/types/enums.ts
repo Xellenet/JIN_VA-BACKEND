@@ -1,7 +1,7 @@
 export enum Role{
     CUSTOMER = 'CUSTOMER',
     ADMIN = 'ADMIN',
-    STYLIST = 'STYLIST'
+    ARTISAN = 'ARTISAN'
 }
 
 export enum Gender{
@@ -15,4 +15,13 @@ export enum Token {
     EMAIL_VERIFICATION = 'EMAIL_VERIFICATION',
     PASSWORD_RESET = 'PASSWORD_RESET',
     REFRESH = 'REFRESH'
+}
+
+export enum Status {
+    OPEN = 'OPEN',
+    PENDING = 'PENDING',
+    IN_PROGRESS = 'IN_PROGRESS',
+    COMPLETED = 'COMPLETED',
+    CANCELLED = 'CANCELLED',
+    EXPIRED = 'EXPIRED'
 }

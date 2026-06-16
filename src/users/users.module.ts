@@ -6,12 +6,13 @@ import { User } from './entities/user.entity';
 import { Address } from './entities/address.entity';
 import { UserToken } from './entities/user-token.entity';
 import { UserTokenService } from './token.service';
-import { JwtModule } from '@nestjs/jwt';
+import { ArtisanProfile } from './entities/artisan-profile.entity';
+import { CustomerProfile } from './entities/customer-profile.entity';
+import { ServiceEntity } from '@services/entities/service.entity';
 
 @Module({
   imports:[
-    TypeOrmModule.forFeature([User, Address, UserToken]),
-    JwtModule.register({})
+    TypeOrmModule.forFeature([User, Address, UserToken, ArtisanProfile, CustomerProfile, ServiceEntity]),
   ],
   controllers: [UsersController],
   providers: [UsersService, UserTokenService],

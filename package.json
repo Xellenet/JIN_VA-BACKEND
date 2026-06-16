@@ -25,7 +25,9 @@
     "typeorm": "ts-node -r tsconfig-paths/register ./node_modules/typeorm/cli.js -d typeorm.config.ts",
     "migration:generate": "npm run build && npm run typeorm migration:generate ./src/migrations/AutoMigration",
     "migration:run": "npm run build && npm run typeorm migration:run",
-    "migration:revert": "npm run build && npm run typeorm migration:revert"
+    "migration:revert": "npm run build && npm run typeorm migration:revert",
+    "seed": "ts-node -r tsconfig-paths/register src/database/seeds/seed.ts",
+    "seed:force": "ts-node -r tsconfig-paths/register src/database/seeds/seed.ts --force"
   },
   "dependencies": {
     "@nestjs/axios": "^4.0.1",
@@ -42,6 +44,7 @@
     "bcrypt": "^6.0.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.2",
+    "cors": "^2.8.5",
     "date-fns": "^4.1.0",
     "handlebars": "^4.7.8",
     "nest-winston": "^1.10.2",
@@ -53,6 +56,7 @@
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "typeorm": "^0.3.26",
+    "typeorm-naming-strategies": "^4.1.0",
     "winston": "^3.17.0"
   },
   "devDependencies": {

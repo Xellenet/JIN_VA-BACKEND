@@ -6,12 +6,14 @@ import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { WinstonModule } from 'nest-winston';
 import { AuthModule } from './auth/auth.module';
-import { AuthService } from './auth/auth.service';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { MailModule } from 'mail/mail.module';
 import { typeOrmConfigAsync } from 'config/typeorm.config';
 import { winstonConfig } from 'config/winston.config';
 import { appConfig } from 'config/app.config';
+import { ReviewsModule } from './reviews/reviews.module';
+import { ServicesModule } from './services/services.module';
+import { JobsModule } from './jobs/jobs.module';
 
 @Module({
   imports: [
@@ -25,8 +27,11 @@ import { appConfig } from 'config/app.config';
     MailModule,
     UsersModule,
     AuthModule,
+    ReviewsModule,
+    ServicesModule,
+    JobsModule,
   ],
   controllers: [AppController],
-  providers: [AppService, AuthService],
+  providers: [AppService],
 })
 export class AppModule {}

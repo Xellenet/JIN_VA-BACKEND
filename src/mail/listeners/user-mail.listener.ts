@@ -14,7 +14,7 @@ export class UserMailListener {
 
   @OnEvent(MailEvent.USER_REGISTERED, { async: true })
   async handleUserRegistered(payload: UserRegisteredPayload) {
-    const verificationLink = `${this.config.get('FRONTEND_URL')}/verify?token=${payload.verificationToken}`;
+    const verificationLink = `${this.config.get('FRONTEND_URL')}/verify-email?token=${payload.verificationToken}`;
 
     await this.mailService.sendMail(payload.email, MailEvent.USER_REGISTERED, {
       firstname: payload.firstname,

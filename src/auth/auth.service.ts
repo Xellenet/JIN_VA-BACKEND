@@ -8,6 +8,7 @@ import { UserResponseDto } from '@users/dto/user-response.dto';
 import { LoginDto } from './dto/login.dto';
 import { LoginResponseDto } from './dto/login-response.dto';
 import { VARIABLES } from '@common/constants/variables.constants';
+import { SUCCESS_MESSAGES } from '@common/constants/success-messages.constants';
 import { InvalidCredentialsException } from '@common/exceptions/invalid-credentials.exceptions';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { MailEvent } from 'mail/events/mail.events';
@@ -53,7 +54,8 @@ export class AuthService {
         if(user){
             throw new UserAlreadyExists(ERROR_MESSAGES.USER.EMAIL_ALREADY_EXISTS(email))
         }
-        user = await this.userService.createUser(createUserDto);
+        const { data: createdUser } = await this.userService.createUser(createUserDto);
+        user = createdUser;
         this.logger.log(`User registered with email ${user.email}`);
 
         const verificationToken = await this.userTokenService.createToken(
@@ -102,7 +104,7 @@ export class AuthService {
         return plainToInstance(LoginResponseDto, {
             access_token,
             refresh_token,
-            message: VARIABLES.USER_LOGGED_IN,
+            message: SUCCESS_MESSAGES.AUTH.USER_LOGGED_IN,
             data: plainToInstance(UserResponseDto, user)
         });
 
@@ -146,8 +148,9 @@ export class AuthService {
             this.logger.warn(`No user found with email ${email}`);
             throw new BadRequestException(ERROR_MESSAGES.USER.NOT_FOUND_WITH_EMAIL(email));
         }
-
+        
         const existingToken = await this.userTokenService.getValidPasswordResetToken(user.id);
+
         if (existingToken) {
             this.logger.log(`Reusing existing valid password reset token for user with id: ${user.id}`);
             this.emmitter.emit(MailEvent.PASSWORD_RESET, {
@@ -204,7 +207,9 @@ export class AuthService {
         this.logger.log(`Password reset successfully for user with id: ${user.id}`);
 
         await this.userTokenService.revokeToken(token);
-        this.logger.log(`Revoked password reset token for user with id: ${user.id}`);
+        await this.userTokenService.revokeRefreshTokenForUser(user.id);
+
+        this.logger.log(`Revoked password reset token and refresh tokens for user with id: ${user.id}`);
         this.emmitter.emit(MailEvent.PASSWORD_RESET_SUCCESS, {
             email: user.email,
             firstname: user.firstname,
@@ -229,6 +234,7 @@ export class AuthService {
 
     async refreshTokens(refreshToken: string): Promise<LoginResponseDto> {
         this.logger.log('Refreshing tokens using refresh token ');
+        this.logger.log(`Provided refresh token: ${refreshToken}`);
         const user = await this.userTokenService.validateToken(refreshToken, Token.REFRESH);
         if (!user) {
             throw new BadRequestException("Invalid or expired refresh token");
@@ -241,7 +247,7 @@ export class AuthService {
         return plainToInstance(LoginResponseDto, {
             access_token,
             refresh_token,
-            message: VARIABLES.TOKENS_REFRESHED,
+            message: SUCCESS_MESSAGES.AUTH.TOKENS_REFRESHED,
             data: plainToInstance(UserResponseDto, user)
         });
     }
@@ -254,11 +260,17 @@ export class AuthService {
 
     async changePassword(changePasswordDto: ChangePasswordDto, userId: number): Promise<LoginResponseDto>{
         const user = await this.userService.findUserById(userId);
+        const userWithPassword = await this.userService.findOne(userId);
         if (!user) {
             throw new BadRequestException("User not found");
         }
 
-        const isMatch = await bcrypt.compare(changePasswordDto.currentPassword, user.password);
+        if (!userWithPassword) {
+            throw new BadRequestException("User not found");
+        }
+
+        const isMatch = await bcrypt.compare(changePasswordDto.currentPassword, userWithPassword.password);
+
         if (!isMatch) {
             throw new BadRequestException("Current password is incorrect");
         }
@@ -267,7 +279,7 @@ export class AuthService {
         await this.userService.updateUserData(user.id, user);
         this.logger.log(`Password changed successfully for user with id: ${user.id}`);
         
-        this.userTokenService.revokeRefreshTokenForUser(user.id);
+        await this.userTokenService.revokeRefreshTokenForUser(user.id);
         this.logger.log(`Revoked existing refresh tokens for user with id: ${user.id} after password change`);
         const {access_token, refresh_token} = await this.userTokenService.createJWTTokens(user);
         this.logger.log(`New tokens generated for user with id: ${user.id} after password change`);
@@ -281,7 +293,7 @@ export class AuthService {
         return plainToInstance(LoginResponseDto, {
             access_token,
             refresh_token,
-            message: VARIABLES.PASSWORD_CHANGED_SUCCESSFULLY,
+            message: SUCCESS_MESSAGES.AUTH.PASSWORD_CHANGED,
             data: plainToInstance(UserResponseDto, user)
         });
     }
@@ -347,10 +359,10 @@ export class AuthService {
 
     let user = await this.userService.findUserByEmail(socialProfile.email);
 
-    if (!user) {
-      user = await this.registerSocialUser(socialProfile);
-    } else {
+    if (user) {
       user = await this.updateSocialLoginInfo(user, socialProfile);
+    } else {
+      user = await this.registerSocialUser(socialProfile);
     }
 
     this.logger.log(`Generating tokens for social login user: ${user.email}`);
@@ -361,7 +373,7 @@ export class AuthService {
     return plainToInstance(LoginResponseDto, {
       access_token,
       refresh_token,
-      message: VARIABLES.USER_LOGGED_IN,
+      message: SUCCESS_MESSAGES.AUTH.USER_LOGGED_IN,
       data: plainToInstance(UserResponseDto, user),
     });
   }
@@ -382,7 +394,7 @@ export class AuthService {
     isSocialLogin: true,
   });
 
-    const user = await this.userService.createUser(createUserDto);
+    const { data: user } = await this.userService.createUser(createUserDto);
 
     this.logger.log(`Social user registered: ${user.email}`);
     

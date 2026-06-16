@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, CreateDateColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, CreateDateColumn, JoinColumn } from 'typeorm';
 import { User } from './user.entity';
 import { Token } from '@common/types/enums';
 
@@ -8,17 +8,18 @@ export class UserToken {
   id: string;
 
   @ManyToOne(() => User, user => user.tokens, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'user_id' })
   user: User;
 
   @Column({ type: 'enum', enum: Token })
   type: Token;
 
-  @Column()
+  @Column({type: 'text'})
   token: string;
 
-  @Column({ type: 'timestamp' })
+  @Column({name: 'expires_at', type: 'timestamp' })
   expiresAt: Date;
 
-  @CreateDateColumn()
+  @CreateDateColumn({name: 'created_at', type: 'timestamp'})
   createdAt: Date;
 }

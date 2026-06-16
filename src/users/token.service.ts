@@ -121,18 +121,49 @@ export class UserTokenService {
     return this.tokenRepo.save(newToken);
   }
 
-  async createJWTTokens(user: User): Promise<{ access_token: string, refresh_token: string }> {
+async createJWTTokens(user: User): Promise<{ access_token: string, refresh_token: string }> {
     const payload = { sub: user.id, email: user.email, role: user.role };
-    const access_token = this.jwtService.sign(payload, { expiresIn: process.env.JWT_ACCESS_EXPIRES_IN });
-    const refresh_token = this.jwtService.sign(payload, { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN });
+    
+    // Debug: Log env vars
+    const accessExpiresIn = process.env.JWT_ACCESS_EXPIRES_IN || '15m';
+    const refreshExpiresIn = process.env.JWT_REFRESH_EXPIRES_IN || '7d';
+    this.logger.log(`Access expiresIn: ${accessExpiresIn}, Refresh expiresIn: ${refreshExpiresIn}`);
+    
+    // Use the JwtService configuration provided by AuthModule and only set expiresIn here.
+    // Accessing internal module internals can be undefined and cause runtime errors.
+    const accessOptions = { expiresIn: accessExpiresIn };
+    this.logger.log(`Final access options: expiresIn=${accessOptions.expiresIn}`);
+
+    let access_token: string;
+    try {
+      access_token = this.jwtService.sign(payload, accessOptions);
+      this.logger.log('Access token signed successfully');
+    } catch (signError) {
+      this.logger.error(`Access sign error: ${signError.message}`, signError.stack);
+      throw signError;
+    }
+
+    const refreshOptions = { expiresIn: refreshExpiresIn };
+    let refresh_token: string;
+    try {
+      refresh_token = this.jwtService.sign(payload, refreshOptions);
+      this.logger.log('Refresh token signed successfully');
+    } catch (signError) {
+      this.logger.error(`Refresh sign error: ${signError.message}`, signError.stack);
+      throw signError;
+    }
+    
     this.logger.log(`Created JWT tokens for user with id: ${user.id}`);
 
-    this.tokenRepo.create({
+    // Persist the refresh token in DB
+    const refreshEntity = this.tokenRepo.create({
       token: refresh_token,
       user: { id: user.id },
       type: Token.REFRESH,
       expiresAt: subMinutes(new Date(), -VARIABLES.REFRESH_TOKEN_EXPIRES_IN_DAYS * 24 * 60),
     });
+
+    await this.tokenRepo.save(refreshEntity);
 
     return { access_token, refresh_token };
   }
