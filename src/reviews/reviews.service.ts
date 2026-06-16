@@ -5,6 +5,7 @@ import { Review } from './entities/review.entity';
 import { CreateReviewDto } from './dto/create-review.dto';
 import { ArtisanProfile } from '@users/entities/artisan-profile.entity';
 import { User } from '@users/entities/user.entity';
+import { SUCCESS_MESSAGES } from '@common/constants/success-messages.constants';
 
 @Injectable()
 export class ReviewsService {
@@ -19,7 +20,16 @@ export class ReviewsService {
     private readonly usersRepository: Repository<User>,
   ) {}
 
-  async create(createReviewDto: CreateReviewDto): Promise<Review> {
+  /**
+   * Submits a new review for an artisan profile and recalculates the artisan's
+   * aggregate rating.
+   *
+   * @param createReviewDto - Review fields including `artisanProfileId`, rating, and text.
+   * @returns `{ message, data: Review }` with all relations populated.
+   * @throws {NotFoundException} When the artisan profile, reviewer, or reviewed user is not found.
+   * @throws {BadRequestException} When `reviewedUserId` does not match the artisan profile owner.
+   */
+  async create(createReviewDto: CreateReviewDto): Promise<{ message: string; data: Review }> {
     const artisanProfile = await this.artisanProfileRepository.findOne({
       where: { id: createReviewDto.artisanProfileId },
       relations: ['user'],
@@ -82,35 +92,70 @@ export class ReviewsService {
 
     const savedReview = await this.reviewsRepository.save(review);
     await this.refreshArtisanRatings(artisanProfile.id);
-
     this.logger.log(`Added review for artisan profile id: ${artisanProfile.id}`);
-    return this.findOne(savedReview.id);
+
+    const populated = await this.reviewsRepository.findOne({
+      where: { id: savedReview.id },
+      relations: ['artisanProfile', 'reviewerUser', 'reviewedUser'],
+    });
+
+    return { message: SUCCESS_MESSAGES.REVIEW.CREATED, data: populated! };
   }
 
-  async findAll(): Promise<Review[]> {
-    return this.reviewsRepository.find({
+  /**
+   * Returns all reviews ordered by most recently created.
+   *
+   * @returns `{ message, data: Review[] }`.
+   */
+  async findAll(): Promise<{ message: string; data: Review[] }> {
+    const reviews = await this.reviewsRepository.find({
       relations: ['artisanProfile', 'reviewerUser', 'reviewedUser'],
       order: { id: 'DESC' },
     });
+
+    return { message: SUCCESS_MESSAGES.REVIEW.ALL_RETRIEVED, data: reviews };
   }
 
-  async findByArtisanProfileId(artisanProfileId: number): Promise<Review[]> {
-    return this.reviewsRepository.find({
+  /**
+   * Returns all reviews for a given artisan profile.
+   *
+   * @param artisanProfileId - The artisan profile ID to filter by.
+   * @returns `{ message, data: Review[] }`.
+   */
+  async findByArtisanProfileId(artisanProfileId: number): Promise<{ message: string; data: Review[] }> {
+    const reviews = await this.reviewsRepository.find({
       where: { artisanProfile: { id: artisanProfileId } },
       relations: ['artisanProfile', 'reviewerUser', 'reviewedUser'],
       order: { id: 'DESC' },
     });
+
+    return { message: SUCCESS_MESSAGES.REVIEW.ALL_RETRIEVED, data: reviews };
   }
 
-  async findByReviewedUserId(reviewedUserId: number): Promise<Review[]> {
-    return this.reviewsRepository.find({
+  /**
+   * Returns all reviews written about a specific user.
+   *
+   * @param reviewedUserId - The ID of the user who received the reviews.
+   * @returns `{ message, data: Review[] }`.
+   */
+  async findByReviewedUserId(reviewedUserId: number): Promise<{ message: string; data: Review[] }> {
+    const reviews = await this.reviewsRepository.find({
       where: { reviewedUser: { id: reviewedUserId } },
       relations: ['artisanProfile', 'reviewerUser', 'reviewedUser'],
       order: { id: 'DESC' },
     });
+
+    return { message: SUCCESS_MESSAGES.REVIEW.ALL_RETRIEVED, data: reviews };
   }
 
-  async findOne(id: number): Promise<Review> {
+  /**
+   * Returns a single review by its ID.
+   *
+   * @param id - The review ID to look up.
+   * @returns `{ message, data: Review }` with all relations populated.
+   * @throws {NotFoundException} When no review with the given ID exists.
+   */
+  async findOne(id: number): Promise<{ message: string; data: Review }> {
     const review = await this.reviewsRepository.findOne({
       where: { id },
       relations: ['artisanProfile', 'reviewerUser', 'reviewedUser'],
@@ -120,7 +165,7 @@ export class ReviewsService {
       throw new NotFoundException(`Review with id ${id} not found.`);
     }
 
-    return review;
+    return { message: SUCCESS_MESSAGES.REVIEW.RETRIEVED, data: review };
   }
 
   private async refreshArtisanRatings(artisanProfileId: number): Promise<void> {

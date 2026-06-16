@@ -30,7 +30,7 @@ export class JobsController {
     description: 'Job created successfully.',
     type: JobResponseDto,
   })
-  create(@Body() createJobDto: CreateJobDto, @Req() req): JobResponseDto | Promise<JobResponseDto> {
+  create(@Body() createJobDto: CreateJobDto, @Req() req) {
     return this.jobsService.create(createJobDto, req.user);
   }
 

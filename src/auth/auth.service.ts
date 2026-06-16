@@ -8,6 +8,7 @@ import { UserResponseDto } from '@users/dto/user-response.dto';
 import { LoginDto } from './dto/login.dto';
 import { LoginResponseDto } from './dto/login-response.dto';
 import { VARIABLES } from '@common/constants/variables.constants';
+import { SUCCESS_MESSAGES } from '@common/constants/success-messages.constants';
 import { InvalidCredentialsException } from '@common/exceptions/invalid-credentials.exceptions';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { MailEvent } from 'mail/events/mail.events';
@@ -22,7 +23,6 @@ import { SocialUserProfile } from '@common/types/user-interfaces.type';
 import { SocialAuthStrategyFactory } from './social-auth.factory';
 import { OAuthStateService } from './oauth-state.service';
 import { UnauthorizedException } from '@nestjs/common/exceptions/unauthorized.exception';
-import { logger } from 'handlebars';
 
 
 @Injectable()
@@ -54,7 +54,8 @@ export class AuthService {
         if(user){
             throw new UserAlreadyExists(ERROR_MESSAGES.USER.EMAIL_ALREADY_EXISTS(email))
         }
-        user = await this.userService.createUser(createUserDto);
+        const { data: createdUser } = await this.userService.createUser(createUserDto);
+        user = createdUser;
         this.logger.log(`User registered with email ${user.email}`);
 
         const verificationToken = await this.userTokenService.createToken(
@@ -103,7 +104,7 @@ export class AuthService {
         return plainToInstance(LoginResponseDto, {
             access_token,
             refresh_token,
-            message: VARIABLES.USER_LOGGED_IN,
+            message: SUCCESS_MESSAGES.AUTH.USER_LOGGED_IN,
             data: plainToInstance(UserResponseDto, user)
         });
 
@@ -246,7 +247,7 @@ export class AuthService {
         return plainToInstance(LoginResponseDto, {
             access_token,
             refresh_token,
-            message: VARIABLES.TOKENS_REFRESHED,
+            message: SUCCESS_MESSAGES.AUTH.TOKENS_REFRESHED,
             data: plainToInstance(UserResponseDto, user)
         });
     }
@@ -292,7 +293,7 @@ export class AuthService {
         return plainToInstance(LoginResponseDto, {
             access_token,
             refresh_token,
-            message: VARIABLES.PASSWORD_CHANGED_SUCCESSFULLY,
+            message: SUCCESS_MESSAGES.AUTH.PASSWORD_CHANGED,
             data: plainToInstance(UserResponseDto, user)
         });
     }
@@ -358,10 +359,10 @@ export class AuthService {
 
     let user = await this.userService.findUserByEmail(socialProfile.email);
 
-    if (!user) {
-      user = await this.registerSocialUser(socialProfile);
-    } else {
+    if (user) {
       user = await this.updateSocialLoginInfo(user, socialProfile);
+    } else {
+      user = await this.registerSocialUser(socialProfile);
     }
 
     this.logger.log(`Generating tokens for social login user: ${user.email}`);
@@ -372,7 +373,7 @@ export class AuthService {
     return plainToInstance(LoginResponseDto, {
       access_token,
       refresh_token,
-      message: VARIABLES.USER_LOGGED_IN,
+      message: SUCCESS_MESSAGES.AUTH.USER_LOGGED_IN,
       data: plainToInstance(UserResponseDto, user),
     });
   }
@@ -393,7 +394,7 @@ export class AuthService {
     isSocialLogin: true,
   });
 
-    const user = await this.userService.createUser(createUserDto);
+    const { data: user } = await this.userService.createUser(createUserDto);
 
     this.logger.log(`Social user registered: ${user.email}`);
     

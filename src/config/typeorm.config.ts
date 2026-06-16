@@ -15,6 +15,6 @@ export const typeOrmConfigAsync: TypeOrmModuleAsyncOptions = {
     synchronize: false,
     migrations: [__dirname + '/../migrations/*{.ts,.js}'],
     migrationsRun: true,
-    logging: config.get('NODE_ENV') !== 'production',
+    logging: config.get('NODE_ENV') !== 'production' ? ['error', 'warn', 'schema'] : false,
   }),
 };

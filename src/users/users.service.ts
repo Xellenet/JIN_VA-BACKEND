@@ -1,11 +1,14 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { UpdateMeDto } from './dto/update-me.dto';
+import { UserResponseDto } from './dto/user-response.dto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { User } from './entities/user.entity';
 import { In, Repository } from 'typeorm';
 import { UserAlreadyExists } from '@common/exceptions/user-already-exists.exception';
 import { ERROR_MESSAGES } from '@common/constants/error-messages.constants';
+import { SUCCESS_MESSAGES } from '@common/constants/success-messages.constants';
 import * as bcrypt from 'bcrypt';
 import { VARIABLES } from '@common/constants/variables.constants';
 import { ArtisanProfile } from './entities/artisan-profile.entity';
@@ -32,24 +35,30 @@ export class UsersService {
     @InjectRepository(ServiceEntity)
     private readonly servicesRepository: Repository<ServiceEntity>,
   ) {}
-  async createUser(createUserDto: CreateUserDto): Promise<User> {
+
+  /**
+   * Creates a new user account and auto-provisions the matching role profile
+   * (artisan or customer). Password is bcrypt-hashed before persistence.
+   *
+   * @param createUserDto - Required fields for the new user.
+   * @returns `{ message, data: User }` — callers that need the raw `User` entity
+   *   (e.g. `AuthService`) should destructure: `const { data: user } = await createUser(dto)`.
+   * @throws {BadRequestException} When no email is provided.
+   * @throws {UserAlreadyExists} When a user with the same email already exists.
+   */
+  async createUser(createUserDto: CreateUserDto): Promise<{ message: string; data: User }> {
     let user;
     const email = createUserDto.email;
-    if(!email) {
-      throw new BadRequestException("Provide User Email!")
+    if (!email) {
+      throw new BadRequestException('Provide User Email!');
     }
 
     user = await this.findUserByEmail(email);
-    if(user){
-      throw new UserAlreadyExists(ERROR_MESSAGES.USER.EMAIL_ALREADY_EXISTS(email))
+    if (user) {
+      throw new UserAlreadyExists(ERROR_MESSAGES.USER.EMAIL_ALREADY_EXISTS(email));
     }
     const hashedPassword = await bcrypt.hash(createUserDto.password, VARIABLES.SALT_OR_ROUNDS);
-    user = this.usersRepository.create(
-      {
-        ...createUserDto,
-        password: hashedPassword,
-      }
-    );
+    user = this.usersRepository.create({ ...createUserDto, password: hashedPassword });
 
     this.logger.log(`Created user with id: ${user.id}`);
 
@@ -81,50 +90,91 @@ export class UsersService {
       await this.customerProfilesRepository.save(customerProfile);
     }
 
-    return savedUser;
+    return { message: SUCCESS_MESSAGES.USER.CREATED, data: savedUser };
   }
 
-  async findUserById(id: number): Promise<User | null>{
-    if(!id){
-      throw new NotFoundException("User ID required")
+  /**
+   * Returns the full profile of the authenticated user, including their addresses.
+   *
+   * @param userId - The ID of the authenticated user (from `req.user.id`).
+   * @returns `{ message, data: UserResponseDto }` with addresses populated.
+   * @throws {NotFoundException} When no user with the given ID exists.
+   */
+  async findMe(userId: number): Promise<{ message: string; data: UserResponseDto }> {
+    const user = await this.usersRepository.findOne({
+      where: { id: userId },
+      relations: ['addresses'],
+    });
+
+    if (!user) {
+      throw new NotFoundException(`User with ID ${userId} not found`);
     }
 
+    return {
+      message: SUCCESS_MESSAGES.USER.RETRIEVED,
+      data: plainToInstance(UserResponseDto, user, { excludeExtraneousValues: true }),
+    };
+  }
+
+  /**
+   * Applies a partial update to the authenticated user's own base profile.
+   * Email, password, and role changes are intentionally excluded — they each
+   * require dedicated, security-sensitive flows.
+   *
+   * @param userId - The ID of the authenticated user (from `req.user.id`).
+   * @param updateMeDto - Fields to update (all optional).
+   * @returns `{ message, data: UserResponseDto }` reflecting the saved state.
+   * @throws {NotFoundException} When no user with the given ID exists.
+   */
+  async updateMe(userId: number, updateMeDto: UpdateMeDto): Promise<{ message: string; data: UserResponseDto }> {
+    const user = await this.usersRepository.findOne({
+      where: { id: userId },
+      relations: ['addresses'],
+    });
+
+    if (!user) {
+      throw new NotFoundException(`User with ID ${userId} not found`);
+    }
+
+    Object.assign(user, updateMeDto);
+    const saved = await this.usersRepository.save(user);
+    this.logger.log(`User ${userId} updated their own profile`);
+
+    return {
+      message: SUCCESS_MESSAGES.USER.UPDATED,
+      data: plainToInstance(UserResponseDto, saved, { excludeExtraneousValues: true }),
+    };
+  }
+
+  async findUserById(id: number): Promise<User | null> {
+    if (!id) {
+      throw new NotFoundException('User ID required');
+    }
     this.logger.log(`Finding user with id ${id}`);
-    const user = await this.usersRepository.findOne({
-      where: {id},
-    })
-    return user;
+    return this.usersRepository.findOne({ where: { id } });
   }
 
-  async findUserByEmail(email: string): Promise<User | null>{
-    if(!email){
-      throw new NotFoundException("Email required")
+  async findUserByEmail(email: string): Promise<User | null> {
+    if (!email) {
+      throw new NotFoundException('Email required');
     }
-
     this.logger.log(`Finding user with email ${email}`);
-    const user = await this.usersRepository.findOne({
-      where: {email},
-    })
-    return user;
+    return this.usersRepository.findOne({ where: { email } });
   }
 
-  async  validatePassword(password: string, userId: number): Promise<boolean> {
+  async validatePassword(password: string, userId: number): Promise<boolean> {
     const user = await this.usersRepository.findOne({
-      where: {id: userId},
+      where: { id: userId },
       select: ['password'],
     });
     if (!user) {
-      throw new NotFoundException(`User with ID ${userId} not found `);
+      throw new NotFoundException(`User with ID ${userId} not found`);
     }
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-    return  isPasswordValid;
+    return bcrypt.compare(password, user.password);
   }
 
   async findOne(id: number) {
-    return await this.usersRepository.findOne({
-      where: {id},
-      select: ['password']
-    });
+    return this.usersRepository.findOne({ where: { id }, select: ['password'] });
   }
 
   async updateUser(id: number, updateUserDto: UpdateUserDto) {
@@ -132,7 +182,6 @@ export class UsersService {
     this.logger.log(`Updated user with id: ${id}`);
     return this.findOne(id);
   }
-
 
   async updateUserData(id: number, user: Partial<User>) {
     await this.usersRepository.update(id, user);
@@ -144,7 +193,15 @@ export class UsersService {
     this.logger.log(`Removed user with id: ${id}`);
   }
 
-  async findArtisanProfileByUserId(userId: number): Promise<ArtisanProfileResponseDto> {
+  /**
+   * Returns the artisan profile for a given user, including linked services and
+   * the user's base data with addresses.
+   *
+   * @param userId - The user ID whose artisan profile to retrieve.
+   * @returns `{ message, data: ArtisanProfileResponseDto }`.
+   * @throws {NotFoundException} When no artisan profile exists for the user.
+   */
+  async findArtisanProfileByUserId(userId: number): Promise<{ message: string; data: ArtisanProfileResponseDto }> {
     const profile = await this.artisanProfilesRepository.findOne({
       where: { user: { id: userId } },
       relations: ['user', 'user.addresses', 'services'],
@@ -154,15 +211,27 @@ export class UsersService {
       throw new NotFoundException(`Artisan profile for user id ${userId} not found`);
     }
 
-    return this.toArtisanProfileResponse(profile);
+    return {
+      message: SUCCESS_MESSAGES.ARTISAN_PROFILE.RETRIEVED,
+      data: this.toArtisanProfileResponse(profile),
+    };
   }
 
+  /**
+   * Applies a partial update to an artisan's profile, optionally replacing the
+   * linked services list. Pass `serviceIds: []` to unlink all services.
+   *
+   * @param userId - The user ID whose artisan profile to update.
+   * @param updateArtisanProfileDto - Fields to update.
+   * @returns `{ message, data: ArtisanProfileResponseDto }` reflecting the saved state.
+   * @throws {NotFoundException} When the artisan profile or any requested service is not found.
+   */
   async updateArtisanProfile(
     userId: number,
     updateArtisanProfileDto: UpdateArtisanProfileDto,
-  ): Promise<ArtisanProfileResponseDto> {
+  ): Promise<{ message: string; data: ArtisanProfileResponseDto }> {
     const { serviceIds, ...profileUpdates } = updateArtisanProfileDto;
-    
+
     const profile = await this.artisanProfilesRepository.findOne({
       where: { user: { id: userId } },
       relations: ['user', 'user.addresses', 'services'],
@@ -176,24 +245,37 @@ export class UsersService {
       if (serviceIds.length === 0) {
         profile.services = [];
       } else {
-        const services = await this.servicesRepository.findBy({
-          id: In(serviceIds),
-        });
-        
+        const services = await this.servicesRepository.findBy({ id: In(serviceIds) });
         if (services.length !== serviceIds.length) {
           throw new NotFoundException('One or more services were not found.');
         }
-        
         profile.services = services;
       }
     }
 
     Object.assign(profile, profileUpdates);
-    await this.artisanProfilesRepository.save(profile);
-    return this.findArtisanProfileByUserId(userId);
+    const saved = await this.artisanProfilesRepository.save(profile);
+
+    const updated = await this.artisanProfilesRepository.findOne({
+      where: { id: saved.id },
+      relations: ['user', 'user.addresses', 'services'],
+    });
+
+    return {
+      message: SUCCESS_MESSAGES.ARTISAN_PROFILE.UPDATED,
+      data: this.toArtisanProfileResponse(updated!),
+    };
   }
 
-  async findCustomerProfileByUserId(userId: number): Promise<CustomerProfileResponseDto> {
+  /**
+   * Returns the customer profile for a given user, including preferred services
+   * and the user's base data with addresses.
+   *
+   * @param userId - The user ID whose customer profile to retrieve.
+   * @returns `{ message, data: CustomerProfileResponseDto }`.
+   * @throws {NotFoundException} When no customer profile exists for the user.
+   */
+  async findCustomerProfileByUserId(userId: number): Promise<{ message: string; data: CustomerProfileResponseDto }> {
     const profile = await this.customerProfilesRepository.findOne({
       where: { user: { id: userId } },
       relations: ['user', 'user.addresses', 'preferredServices'],
@@ -203,15 +285,29 @@ export class UsersService {
       throw new NotFoundException(`Customer profile for user id ${userId} not found`);
     }
 
-    return this.toCustomerProfileResponse(profile);
+    return {
+      message: SUCCESS_MESSAGES.CUSTOMER_PROFILE.RETRIEVED,
+      data: this.toCustomerProfileResponse(profile),
+    };
   }
 
+  /**
+   * Applies a partial update to a customer's profile, optionally replacing the
+   * preferred services list. Pass `preferredServiceIds: []` to clear all.
+   * Budget validation (`max >= min`) is enforced before saving.
+   *
+   * @param userId - The user ID whose customer profile to update.
+   * @param updateCustomerProfileDto - Fields to update.
+   * @returns `{ message, data: CustomerProfileResponseDto }` reflecting the saved state.
+   * @throws {NotFoundException} When the customer profile or any requested service is not found.
+   * @throws {BadRequestException} When `budgetMax` is less than `budgetMin`.
+   */
   async updateCustomerProfile(
     userId: number,
     updateCustomerProfileDto: UpdateCustomerProfileDto,
-  ): Promise<CustomerProfileResponseDto> {
+  ): Promise<{ message: string; data: CustomerProfileResponseDto }> {
     const { preferredServiceIds, ...profileUpdates } = updateCustomerProfileDto;
-    
+
     const profile = await this.customerProfilesRepository.findOne({
       where: { user: { id: userId } },
       relations: ['user', 'user.addresses', 'preferredServices'],
@@ -242,21 +338,26 @@ export class UsersService {
       if (preferredServiceIds.length === 0) {
         profile.preferredServices = [];
       } else {
-        const preferredServices = await this.servicesRepository.findBy({
-          id: In(preferredServiceIds),
-        });
-        
+        const preferredServices = await this.servicesRepository.findBy({ id: In(preferredServiceIds) });
         if (preferredServices.length !== preferredServiceIds.length) {
           throw new NotFoundException('One or more preferred services were not found.');
         }
-        
         profile.preferredServices = preferredServices;
       }
     }
 
     Object.assign(profile, profileUpdates);
-    await this.customerProfilesRepository.save(profile);
-    return this.findCustomerProfileByUserId(userId);
+    const saved = await this.customerProfilesRepository.save(profile);
+
+    const updated = await this.customerProfilesRepository.findOne({
+      where: { id: saved.id },
+      relations: ['user', 'user.addresses', 'preferredServices'],
+    });
+
+    return {
+      message: SUCCESS_MESSAGES.CUSTOMER_PROFILE.UPDATED,
+      data: this.toCustomerProfileResponse(updated!),
+    };
   }
 
   private toArtisanProfileResponse(profile: ArtisanProfile): ArtisanProfileResponseDto {

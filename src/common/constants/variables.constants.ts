@@ -10,16 +10,6 @@ export const VARIABLES = {
     ACCESS_TOKEN_EXPIRES_IN_MINUTES: 15,
     REFRESH_TOKEN_EXPIRES_IN_DAYS: 7,
 
-    /** USER FEEDBACK CONSTANTS */
-    USER_LOGGED_IN: 'User logged in successfully',
-    USER_REGISTERED: 'User registered successfully',
-    EMAIL_VERIFIED: 'Email verified successfully',
-    PASSWORD_RESET_EMAIL_SENT: 'Password reset link sent to your email',
-    PASSWORD_RESET_SUCCESS: 'Password reset successfully',
-    TOKENS_REFRESHED: 'Tokens refreshed successfully',
-    PASSWORD_CHANGED_SUCCESSFULLY: 'Password changed successfully',
-
-
     /** SOCIAL LOGIN CONSTANTS */
     GOOGLE_OAUTH_REDIRECT_URI: 'http://localhost:3000/auth/google/callback',
     GOOGLE_AUTHORIZATION_URL: 'https://accounts.google.com/o/oauth2/v2/auth',
@@ -28,11 +18,4 @@ export const VARIABLES = {
     GOOGLE_PROVIDER_NAME: 'google',
     STATE_EXPIRY_MS: 10 * 60 * 1000,
 
-    /** SERVICE FEEDBACK CONSTANTS */
-    SERVICE_CREATED: 'Service created successfully',
-    SERVICE_UPDATED: 'Service updated successfully',
-    SERVICE_DELETED: 'Service deleted successfully',
-    SERVICE_NOT_FOUND: 'Service not found',
-    ALL_SERVICES_RETRIEVED: 'All services retrieved successfully',
-    SERVICE_RETRIEVED: 'Service retrieved successfully',
 }

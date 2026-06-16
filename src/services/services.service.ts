@@ -11,7 +11,7 @@ import { CreateServiceDto } from './dto/create-service.dto';
 import { UpdateServiceDto } from './dto/update-service.dto';
 import { ServiceResponseDto } from './dto/service-response.dto';
 import { plainToInstance } from 'class-transformer';
-import { VARIABLES } from '@common/constants/variables.constants';
+import { SUCCESS_MESSAGES } from '@common/constants/success-messages.constants';
 
 @Injectable()
 export class ServicesService {
@@ -23,11 +23,13 @@ export class ServicesService {
   ) {}
 
   /**
-   * Create a new service
-   * @param createServiceDto 
-   * @returns {Promise<ServiceResponseDto>}
+   * Creates a new service offering.
+   *
+   * @param createServiceDto - Fields required to create the service.
+   * @returns The created service wrapped in a `{ message, data }` response payload.
+   * @throws {BadRequestException} When a service with the same name already exists.
    */
-  async create(createServiceDto: CreateServiceDto): Promise<ServiceResponseDto> {
+  async create(createServiceDto: CreateServiceDto): Promise<{ message: string; data: ServiceResponseDto }> {
     const existing = await this.servicesRepository.findOne({
       where: { name: createServiceDto.name },
     });
@@ -41,44 +43,65 @@ export class ServicesService {
     const service = this.servicesRepository.create(createServiceDto);
     const saved = await this.servicesRepository.save(service);
     this.logger.log(`Created service with id: ${saved.id}`);
-    return plainToInstance(ServiceResponseDto, {
-        message: VARIABLES.SERVICE_CREATED,
-        data: plainToInstance(ServiceEntity, saved),
-        
-    });
+
+    return {
+      message: SUCCESS_MESSAGES.SERVICE.CREATED,
+      data: plainToInstance(ServiceResponseDto, saved, { excludeExtraneousValues: true }),
+    };
   }
 
   /**
-   * Retrieve all services
-   * @returns {Promise<ServiceResponseDto[]>}
+   * Returns all services ordered by most recently created.
+   *
+   * @returns All services wrapped in a `{ message, data }` response payload.
    */
-  async findAll(): Promise<ServiceResponseDto> {
+  async findAll(): Promise<{ message: string; data: ServiceResponseDto[] }> {
     const services = await this.servicesRepository.find({
       order: { id: 'DESC' },
     });
-    return plainToInstance(ServiceResponseDto, { 
-        message: VARIABLES.ALL_SERVICES_RETRIEVED,
-        data: plainToInstance(ServiceEntity, services),
-    });
+
+    return {
+      message: SUCCESS_MESSAGES.SERVICE.ALL_RETRIEVED,
+      data: plainToInstance(ServiceResponseDto, services, { excludeExtraneousValues: true }),
+    };
   }
 
-  async findOne(id: number): Promise<ServiceResponseDto> {
-    const service = await this.servicesRepository.findOne({
-      where: { id },
-    });
+  /**
+   * Returns a single service by its ID.
+   *
+   * @param id - The service ID to look up.
+   * @returns The matching service wrapped in a `{ message, data }` response payload.
+   * @throws {NotFoundException} When no service with the given ID exists.
+   */
+  async findOne(id: number): Promise<{ message: string; data: ServiceResponseDto }> {
+    const service = await this.servicesRepository.findOne({ where: { id } });
 
     if (!service) {
       throw new NotFoundException(`Service with id ${id} not found.`);
     }
 
-    return plainToInstance(ServiceResponseDto, {
-      message: VARIABLES.SERVICE_RETRIEVED,
-      data: plainToInstance(ServiceEntity, service),
-    });
+    return {
+      message: SUCCESS_MESSAGES.SERVICE.RETRIEVED,
+      data: plainToInstance(ServiceResponseDto, service, { excludeExtraneousValues: true }),
+    };
   }
 
-  async update(id: number, updateServiceDto: UpdateServiceDto): Promise<ServiceResponseDto> {
-    const service = await this.findOne(id);
+  /**
+   * Applies a partial update to an existing service.
+   * Validates that a renamed service does not clash with an existing name.
+   *
+   * @param id - The ID of the service to update.
+   * @param updateServiceDto - Fields to update.
+   * @returns The updated service wrapped in a `{ message, data }` response payload.
+   * @throws {NotFoundException} When no service with the given ID exists.
+   * @throws {BadRequestException} When the new name is already taken by another service.
+   */
+  async update(id: number, updateServiceDto: UpdateServiceDto): Promise<{ message: string; data: ServiceResponseDto }> {
+    const service = await this.servicesRepository.findOne({ where: { id } });
+
+    if (!service) {
+      throw new NotFoundException(`Service with id ${id} not found.`);
+    }
 
     if (updateServiceDto.name && updateServiceDto.name !== service.name) {
       const existing = await this.servicesRepository.findOne({
@@ -93,21 +116,27 @@ export class ServicesService {
     }
 
     Object.assign(service, updateServiceDto);
-    await this.servicesRepository.save(service);
-
+    const saved = await this.servicesRepository.save(service);
     this.logger.log(`Updated service with id: ${id}`);
-    
-    return plainToInstance( ServiceResponseDto, {
-        message: VARIABLES.SERVICE_UPDATED,
-        data: plainToInstance(ServiceEntity, service),
-    });
+
+    return {
+      message: SUCCESS_MESSAGES.SERVICE.UPDATED,
+      data: plainToInstance(ServiceResponseDto, saved, { excludeExtraneousValues: true }),
+    };
   }
 
+  /**
+   * Permanently deletes a service by its ID.
+   *
+   * @param id - The ID of the service to delete.
+   * @returns A `{ message }` confirmation payload (no data).
+   * @throws {NotFoundException} When no service with the given ID exists.
+   */
   async remove(id: number): Promise<{ message: string }> {
     await this.findOne(id);
     await this.servicesRepository.delete(id);
-
     this.logger.log(`Deleted service with id: ${id}`);
-    return { message: 'Service deleted successfully' };
+
+    return { message: SUCCESS_MESSAGES.SERVICE.DELETED };
   }
 }
