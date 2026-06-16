@@ -2,11 +2,9 @@ import {
   Column,
   CreateDateColumn,
   Entity,
-  ManyToMany,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { Artisan } from '@users/entities/artisan.entity';
 
 @Entity('services')
 export class ServiceEntity {
@@ -18,10 +16,6 @@ export class ServiceEntity {
 
   @Column({ type: 'text', nullable: true })
   description?: string;
-
-  @ManyToMany(() => Artisan, (artisan) => artisan.services)
-  artisans!: Artisan[];
-
 
   @Column({type: 'decimal', precision: 10, scale: 2, nullable: true})
   price?: number;

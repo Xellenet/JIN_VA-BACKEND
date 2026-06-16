@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Review } from './entities/review.entity';
 import { CreateReviewDto } from './dto/create-review.dto';
-import { Artisan } from '@users/entities/artisan.entity';
+import { ArtisanProfile } from '@users/entities/artisan-profile.entity';
 import { User } from '@users/entities/user.entity';
 
 @Injectable()
@@ -13,20 +13,22 @@ export class ReviewsService {
   constructor(
     @InjectRepository(Review)
     private readonly reviewsRepository: Repository<Review>,
-    @InjectRepository(Artisan)
-    private readonly artisansRepository: Repository<Artisan>,
+    @InjectRepository(ArtisanProfile)
+    private readonly artisanProfileRepository: Repository<ArtisanProfile>,
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
   ) {}
 
   async create(createReviewDto: CreateReviewDto): Promise<Review> {
-    const artisan = await this.artisansRepository.findOne({
-      where: { id: createReviewDto.artisanId },
+    const artisanProfile = await this.artisanProfileRepository.findOne({
+      where: { id: createReviewDto.artisanProfileId },
       relations: ['user'],
     });
 
-    if (!artisan) {
-      throw new NotFoundException(`Artisan with id ${createReviewDto.artisanId} not found.`);
+    if (!artisanProfile) {
+      throw new NotFoundException(
+        `Artisan profile with id ${createReviewDto.artisanProfileId} not found.`,
+      );
     }
 
     let reviewerUser: User | undefined;
@@ -56,21 +58,21 @@ export class ReviewsService {
         );
       }
 
-      if (artisan.user?.id && artisan.user.id !== foundReviewedUser.id) {
+      if (artisanProfile.user?.id && artisanProfile.user.id !== foundReviewedUser.id) {
         throw new BadRequestException(
           'reviewedUserId must match the artisan profile owner user id.',
         );
       }
 
       reviewedUser = foundReviewedUser;
-    } else if (artisan.user) {
-      reviewedUser = artisan.user;
+    } else if (artisanProfile.user) {
+      reviewedUser = artisanProfile.user;
     } else {
-      throw new NotFoundException('Artisan owner user was not found for review mapping.');
+      throw new NotFoundException('Artisan profile owner user was not found for review mapping.');
     }
 
     const review = this.reviewsRepository.create({
-      artisan,
+      artisanProfile,
       reviewerUser,
       reviewedUser,
       reviewerName: createReviewDto.reviewerName,
@@ -79,23 +81,23 @@ export class ReviewsService {
     });
 
     const savedReview = await this.reviewsRepository.save(review);
-    await this.refreshArtisanRatings(artisan.id);
+    await this.refreshArtisanRatings(artisanProfile.id);
 
-    this.logger.log(`Added review for artisan id: ${artisan.id}`);
+    this.logger.log(`Added review for artisan profile id: ${artisanProfile.id}`);
     return this.findOne(savedReview.id);
   }
 
   async findAll(): Promise<Review[]> {
     return this.reviewsRepository.find({
-      relations: ['artisan', 'reviewerUser', 'reviewedUser'],
+      relations: ['artisanProfile', 'reviewerUser', 'reviewedUser'],
       order: { id: 'DESC' },
     });
   }
 
-  async findByArtisanId(artisanId: number): Promise<Review[]> {
+  async findByArtisanProfileId(artisanProfileId: number): Promise<Review[]> {
     return this.reviewsRepository.find({
-      where: { artisan: { id: artisanId } },
-      relations: ['artisan', 'reviewerUser', 'reviewedUser'],
+      where: { artisanProfile: { id: artisanProfileId } },
+      relations: ['artisanProfile', 'reviewerUser', 'reviewedUser'],
       order: { id: 'DESC' },
     });
   }
@@ -103,7 +105,7 @@ export class ReviewsService {
   async findByReviewedUserId(reviewedUserId: number): Promise<Review[]> {
     return this.reviewsRepository.find({
       where: { reviewedUser: { id: reviewedUserId } },
-      relations: ['artisan', 'reviewerUser', 'reviewedUser'],
+      relations: ['artisanProfile', 'reviewerUser', 'reviewedUser'],
       order: { id: 'DESC' },
     });
   }
@@ -111,7 +113,7 @@ export class ReviewsService {
   async findOne(id: number): Promise<Review> {
     const review = await this.reviewsRepository.findOne({
       where: { id },
-      relations: ['artisan', 'reviewerUser', 'reviewedUser'],
+      relations: ['artisanProfile', 'reviewerUser', 'reviewedUser'],
     });
 
     if (!review) {
@@ -121,20 +123,20 @@ export class ReviewsService {
     return review;
   }
 
-  private async refreshArtisanRatings(artisanId: number): Promise<void> {
+  private async refreshArtisanRatings(artisanProfileId: number): Promise<void> {
     const rawStats = await this.reviewsRepository
       .createQueryBuilder('review')
       .select('COALESCE(AVG(review.rating), 0)', 'averageRating')
-      .addSelect('COUNT(review.id)', 'totalRatings')
-      .where('review.artisan_id = :artisanId', { artisanId })
-      .getRawOne<{ averageRating: string; totalRatings: string }>();
+      .addSelect('COUNT(review.id)', 'totalReviews')
+      .where('review.artisan_profile_id = :artisanProfileId', { artisanProfileId })
+      .getRawOne<{ averageRating: string; totalReviews: string }>();
 
     const averageRating = rawStats?.averageRating ? Number(rawStats.averageRating) : 0;
-    const totalRatings = rawStats?.totalRatings ? Number(rawStats.totalRatings) : 0;
+    const totalReviews = rawStats?.totalReviews ? Number(rawStats.totalReviews) : 0;
 
-    await this.artisansRepository.update(artisanId, {
+    await this.artisanProfileRepository.update(artisanProfileId, {
       averageRating: Number(averageRating.toFixed(2)),
-      totalRatings,
+      totalReviews,
     });
   }
 }

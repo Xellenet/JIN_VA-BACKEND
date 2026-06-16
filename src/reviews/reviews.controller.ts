@@ -25,10 +25,10 @@ export class ReviewsController {
     return this.reviewsService.findAll();
   }
 
-  @Get('artisan/:artisanId')
-  @ApiOkResponse({ description: 'Returns reviews for one artisan.', type: [Review] })
-  findByArtisan(@Param('artisanId', ParseIntPipe) artisanId: number) {
-    return this.reviewsService.findByArtisanId(artisanId);
+  @Get('artisan-profile/:artisanProfileId')
+  @ApiOkResponse({ description: 'Returns reviews for one artisan profile.', type: [Review] })
+  findByArtisanProfile(@Param('artisanProfileId', ParseIntPipe) artisanProfileId: number) {
+    return this.reviewsService.findByArtisanProfileId(artisanProfileId);
   }
 
   @Get('users/:reviewedUserId')

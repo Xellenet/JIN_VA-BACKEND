@@ -16,3 +16,12 @@ export enum Token {
     PASSWORD_RESET = 'PASSWORD_RESET',
     REFRESH = 'REFRESH'
 }
+
+export enum Status {
+    OPEN = 'OPEN',
+    PENDING = 'PENDING',
+    IN_PROGRESS = 'IN_PROGRESS',
+    COMPLETED = 'COMPLETED',
+    CANCELLED = 'CANCELLED',
+    EXPIRED = 'EXPIRED'
+}

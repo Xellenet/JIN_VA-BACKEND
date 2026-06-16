@@ -7,7 +7,7 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { Artisan } from '@users/entities/artisan.entity';
+import { ArtisanProfile } from '@users/entities/artisan-profile.entity';
 import { User } from '@users/entities/user.entity';
 
 @Entity('reviews')
@@ -15,9 +15,9 @@ export class Review {
   @PrimaryGeneratedColumn()
   id!: number;
 
-  @ManyToOne(() => Artisan, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'artisan_id' })
-  artisan!: Artisan;
+  @ManyToOne(() => ArtisanProfile, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'artisan_profile_id' })
+  artisanProfile!: ArtisanProfile;
 
   @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'reviewer_user_id' })

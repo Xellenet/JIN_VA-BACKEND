@@ -13,6 +13,7 @@ import { winstonConfig } from 'config/winston.config';
 import { appConfig } from 'config/app.config';
 import { ReviewsModule } from './reviews/reviews.module';
 import { ServicesModule } from './services/services.module';
+import { JobsModule } from './jobs/jobs.module';
 
 @Module({
   imports: [
@@ -28,6 +29,7 @@ import { ServicesModule } from './services/services.module';
     AuthModule,
     ReviewsModule,
     ServicesModule,
+    JobsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
