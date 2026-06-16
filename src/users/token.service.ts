@@ -121,7 +121,7 @@ export class UserTokenService {
     return this.tokenRepo.save(newToken);
   }
 
-async createJWTTokens(user: User): Promise<{ access_token: string, refresh_token: string }> {
+async createJWTTokens(user: User): Promise<{ access_token: string; refresh_token: string; expires_at: Date }> {
     const payload = { sub: user.id, email: user.email, role: user.role };
     
     // Debug: Log env vars
@@ -165,7 +165,10 @@ async createJWTTokens(user: User): Promise<{ access_token: string, refresh_token
 
     await this.tokenRepo.save(refreshEntity);
 
-    return { access_token, refresh_token };
+    const { exp } = this.jwtService.decode(access_token) as { exp: number };
+    const expires_at = new Date(exp * 1000);
+
+    return { access_token, refresh_token, expires_at };
   }
 
   async revokeRefreshTokenForUser(userId: number): Promise<void> {

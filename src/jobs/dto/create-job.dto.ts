@@ -1,29 +1,67 @@
-import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
+import {
+  IsInt,
+  IsNotEmpty,
+  IsNumber,
+  IsOptional,
+  IsPositive,
+  IsString,
+  MaxLength,
+  Min,
+} from 'class-validator';
 
 export class CreateJobDto {
-    @ApiProperty({ example: 'Leaky faucet repair' })
-    title!: string;
+  @ApiProperty({ example: 'Leaky faucet repair', description: 'Short job title (max 150 chars)' })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(150)
+  title!: string;
 
-    @ApiProperty({ example: 'The kitchen faucet is leaking and needs to be fixed.' })
-    description!: string;
+  @ApiPropertyOptional({
+    example: 'The kitchen faucet has been leaking for two days and needs to be fixed urgently.',
+    description: 'Full description of work required (max 2000 chars)',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  description?: string;
 
-    @ApiProperty({ example: 1, description: 'ID of the service category for this job' })
-    serviceId!: number;
+  @ApiProperty({ example: 1, description: 'ID of the service category this job belongs to' })
+  @IsInt()
+  @IsPositive()
+  @Type(() => Number)
+  serviceId!: number;
 
-    @ApiProperty({ example: 'Accra, Ghana' })
-    location!: string;
+  @ApiProperty({ example: 'Accra, Ghana', description: 'Human-readable job location (max 200 chars)' })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(200)
+  location!: string;
 
-    @ApiPropertyOptional({ example: 5, description: 'Minimum budget for the job' })
-    budgetMin?: number;
+  @ApiPropertyOptional({ example: 50, description: 'Minimum acceptable budget (>= 0)' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Type(() => Number)
+  budgetMin?: number;
 
-    @ApiPropertyOptional({ example: 50, description: 'Maximum budget for the job' })
-    budgetMax?: number;
+  @ApiPropertyOptional({ example: 500, description: 'Maximum acceptable budget (>= 0)' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Type(() => Number)
+  budgetMax?: number;
 
-    @ApiPropertyOptional({ example: 5.6037, description: 'Latitude of the job location' })
-    latitude?: number;
+  @ApiPropertyOptional({ example: 5.6037, description: 'Latitude of the job site' })
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  latitude?: number;
 
-    @ApiPropertyOptional({ example: -0.187, description: 'Longitude of the job location' })
-    longitude?: number; 
-
-
+  @ApiPropertyOptional({ example: -0.187, description: 'Longitude of the job site' })
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  longitude?: number;
 }

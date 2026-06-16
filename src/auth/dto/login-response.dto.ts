@@ -12,6 +12,10 @@ export class LoginResponseDto {
     @Expose()
     refresh_token: string;
 
+    @ApiProperty({ example: '2026-06-16T14:03:21.000Z', description: 'ISO timestamp when the access token expires' })
+    @Expose()
+    expires_at: Date;
+
     @ApiProperty({ example: SUCCESS_MESSAGES.AUTH.USER_LOGGED_IN, description: 'Login success message' })
     @Expose()
     message: string;

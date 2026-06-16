@@ -25,3 +25,9 @@ export enum Status {
     CANCELLED = 'CANCELLED',
     EXPIRED = 'EXPIRED'
 }
+
+export enum ApplicationStatus {
+    PENDING = 'PENDING',
+    ACCEPTED = 'ACCEPTED',
+    REJECTED = 'REJECTED',
+}
