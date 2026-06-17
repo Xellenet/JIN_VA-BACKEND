@@ -48,6 +48,11 @@ export const SUCCESS_MESSAGES = {
     CONFIRMED: 'Job confirmed as complete. Payment has been released.',
     CANCELLED: 'Job cancelled successfully.',
   },
+  FAVOURITE: {
+    ADDED: 'Artisan added to favourites.',
+    REMOVED: 'Artisan removed from favourites.',
+    ALL_RETRIEVED: 'Favourites retrieved successfully.',
+  },
   AUTH: {
     USER_REGISTERED: 'User registered successfully',
     USER_LOGGED_IN: 'User logged in successfully',
