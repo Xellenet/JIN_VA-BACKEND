@@ -46,6 +46,12 @@ export class ArtisanProfile {
 	@Column({ name: 'availability_status', default: 'AVAILABLE' })
 	availabilityStatus!: string;
 
+	@Column({ name: 'is_verified', type: 'boolean', default: false })
+	isVerified!: boolean;
+
+	@Column({ type: 'varchar', nullable: true })
+	location?: string;
+
 	@ManyToMany(() => ServiceEntity)
 	@JoinTable({
 		name: 'artisan_profile_services',

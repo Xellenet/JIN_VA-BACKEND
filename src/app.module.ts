@@ -14,6 +14,7 @@ import { appConfig } from 'config/app.config';
 import { ReviewsModule } from './reviews/reviews.module';
 import { ServicesModule } from './services/services.module';
 import { JobsModule } from './jobs/jobs.module';
+import { ArtisansModule } from './artisans/artisans.module';
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { JobsModule } from './jobs/jobs.module';
     ReviewsModule,
     ServicesModule,
     JobsModule,
+    ArtisansModule,
   ],
   controllers: [AppController],
   providers: [AppService],

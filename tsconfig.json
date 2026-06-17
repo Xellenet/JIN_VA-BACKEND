@@ -19,7 +19,8 @@
       "@common/*": ["common/*"],
       "@users/*": ["users/*"],
       "@services/*": ["services/*"],
-      "@jobs/*": ["jobs/*"]
+      "@jobs/*": ["jobs/*"],
+      "@artisans/*": ["artisans/*"]
     },
     "incremental": true,
     "skipLibCheck": true,

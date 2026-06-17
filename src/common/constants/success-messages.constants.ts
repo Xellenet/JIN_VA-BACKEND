@@ -13,7 +13,10 @@ export const SUCCESS_MESSAGES = {
   },
   ARTISAN_PROFILE: {
     RETRIEVED: 'Artisan profile retrieved successfully',
+    ALL_RETRIEVED: 'Artisans retrieved successfully',
     UPDATED: 'Artisan profile updated successfully',
+    SERVICE_ADDED: 'Service added to your profile successfully.',
+    SERVICE_REMOVED: 'Service removed from your profile successfully.',
   },
   CUSTOMER_PROFILE: {
     RETRIEVED: 'Customer profile retrieved successfully',
