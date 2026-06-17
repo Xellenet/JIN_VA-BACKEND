@@ -3,16 +3,18 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
   Param,
   ParseIntPipe,
   Patch,
   Post,
-  HttpCode,
+  Query,
 } from '@nestjs/common';
-import { ApiCreatedResponse, ApiOkResponse, ApiTags } from '@nestjs/swagger';
+import { ApiCreatedResponse, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ServicesService } from './services.service';
 import { CreateServiceDto } from './dto/create-service.dto';
 import { UpdateServiceDto } from './dto/update-service.dto';
+import { GetServicesQueryDto } from './dto/get-services-query.dto';
 import { SUCCESS_MESSAGES } from '@common/constants/success-messages.constants';
 import { ServiceResponseDto } from './dto/service-response.dto';
 
@@ -38,14 +40,19 @@ export class ServicesController {
   }
 
   /**
-   * Returns all services, ordered by most recently added.
+   * Returns a paginated list of service categories.
+   * Supports optional `search` (name substring), `page`, and `limit` query params.
+   * Defaults to page 1 with up to 100 results — enough to load the entire catalogue
+   * in a single call while still protecting against runaway queries.
    *
-   * @returns An array of all service categories.
+   * @param query - Optional search and pagination parameters.
+   * @returns Paginated array of service categories.
    */
   @Get()
+  @ApiOperation({ summary: 'Get all service categories (paginated, searchable)' })
   @ApiOkResponse({ description: SUCCESS_MESSAGES.SERVICE.ALL_RETRIEVED, type: [ServiceResponseDto] })
-  findAll() {
-    return this.servicesService.findAll();
+  findAll(@Query() query: GetServicesQueryDto) {
+    return this.servicesService.findAll(query);
   }
 
   /**

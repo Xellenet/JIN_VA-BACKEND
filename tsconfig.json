@@ -18,7 +18,8 @@
     "paths": {
       "@common/*": ["common/*"],
       "@users/*": ["users/*"],
-      "@services/*": ["services/*"]
+      "@services/*": ["services/*"],
+      "@jobs/*": ["jobs/*"]
     },
     "incremental": true,
     "skipLibCheck": true,

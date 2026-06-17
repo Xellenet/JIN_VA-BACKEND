@@ -20,6 +20,7 @@ import { plainToInstance } from 'class-transformer';
 import { ArtisanProfileResponseDto } from './dto/artisan-profile-response.dto';
 import { CustomerProfileResponseDto } from './dto/customer-profile-response.dto';
 import { ServiceEntity } from '@services/entities/service.entity';
+import { UserTokenService } from './token.service';
 
 
 @Injectable()
@@ -34,6 +35,7 @@ export class UsersService {
     private readonly customerProfilesRepository: Repository<CustomerProfile>,
     @InjectRepository(ServiceEntity)
     private readonly servicesRepository: Repository<ServiceEntity>,
+    private readonly userTokenService: UserTokenService,
   ) {}
 
   /**
@@ -142,6 +144,51 @@ export class UsersService {
 
     return {
       message: SUCCESS_MESSAGES.USER.UPDATED,
+      data: plainToInstance(UserResponseDto, saved, { excludeExtraneousValues: true }),
+    };
+  }
+
+  /**
+   * Soft-deletes the authenticated user's account and revokes all active refresh tokens.
+   * The record is retained in the database with a non-null `deletedAt` timestamp.
+   *
+   * @param userId - The ID of the authenticated user (from `req.user.id`).
+   * @returns `{ message }` confirming the deletion.
+   * @throws {NotFoundException} When no active user with the given ID exists.
+   */
+  async deleteMe(userId: number): Promise<{ message: string }> {
+    const user = await this.usersRepository.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException(`User with ID ${userId} not found`);
+    }
+    await this.userTokenService.revokeRefreshTokenForUser(userId);
+    await this.usersRepository.softDelete({ id: userId });
+    this.logger.log(`User ${userId} soft-deleted their account`);
+    return { message: SUCCESS_MESSAGES.USER.DELETED };
+  }
+
+  /**
+   * Stores an uploaded avatar filename and updates the user's `profilePicture` field
+   * to the publicly accessible path `/uploads/avatars/<filename>`.
+   *
+   * @param userId - The ID of the authenticated user (from `req.user.id`).
+   * @param filename - The filename assigned by Multer disk storage.
+   * @returns `{ message, data: UserResponseDto }` with the updated profile picture URL.
+   * @throws {NotFoundException} When no user with the given ID exists.
+   */
+  async updateAvatar(userId: number, filename: string): Promise<{ message: string; data: UserResponseDto }> {
+    const user = await this.usersRepository.findOne({
+      where: { id: userId },
+      relations: ['addresses'],
+    });
+    if (!user) {
+      throw new NotFoundException(`User with ID ${userId} not found`);
+    }
+    user.profilePicture = `/uploads/avatars/${filename}`;
+    const saved = await this.usersRepository.save(user);
+    this.logger.log(`User ${userId} updated their avatar to ${filename}`);
+    return {
+      message: SUCCESS_MESSAGES.USER.AVATAR_UPLOADED,
       data: plainToInstance(UserResponseDto, saved, { excludeExtraneousValues: true }),
     };
   }
