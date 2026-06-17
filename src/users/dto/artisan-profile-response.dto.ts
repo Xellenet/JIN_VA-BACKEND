@@ -36,6 +36,14 @@ export class ArtisanProfileResponseDto {
   @Expose()
   availabilityStatus: string;
 
+  @ApiProperty({ example: false, description: 'Whether the artisan has been verified by an admin' })
+  @Expose()
+  isVerified: boolean;
+
+  @ApiProperty({ example: 'Accra, Ghana', required: false })
+  @Expose()
+  location?: string;
+
   @ApiProperty({ type: [ServiceResponseDto], required: false })
   @Expose()
   @Type(() => ServiceResponseDto)
