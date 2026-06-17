@@ -5,13 +5,16 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { ILike, Repository } from 'typeorm';
 import { ServiceEntity } from './entities/service.entity';
 import { CreateServiceDto } from './dto/create-service.dto';
 import { UpdateServiceDto } from './dto/update-service.dto';
+import { GetServicesQueryDto } from './dto/get-services-query.dto';
 import { ServiceResponseDto } from './dto/service-response.dto';
 import { plainToInstance } from 'class-transformer';
 import { SUCCESS_MESSAGES } from '@common/constants/success-messages.constants';
+
+type Pagination = { total: number; page: number; limit: number; totalPages: number };
 
 @Injectable()
 export class ServicesService {
@@ -51,18 +54,31 @@ export class ServicesService {
   }
 
   /**
-   * Returns all services ordered by most recently created.
+   * Returns a paginated list of services, optionally filtered by name.
    *
-   * @returns All services wrapped in a `{ message, data }` response payload.
+   * @param query - Optional `search` (name substring), `page`, and `limit`.
+   * @returns `{ message, data, pagination }` response payload.
    */
-  async findAll(): Promise<{ message: string; data: ServiceResponseDto[] }> {
-    const services = await this.servicesRepository.find({
+  async findAll(
+    query: GetServicesQueryDto,
+  ): Promise<{ message: string; data: ServiceResponseDto[]; pagination: Pagination }> {
+    const page  = query.page  ?? 1;
+    const limit = query.limit ?? 100;
+    const skip  = (page - 1) * limit;
+
+    const where = query.search ? { name: ILike(`%${query.search}%`) } : {};
+
+    const [services, total] = await this.servicesRepository.findAndCount({
+      where,
       order: { id: 'DESC' },
+      skip,
+      take: limit,
     });
 
     return {
       message: SUCCESS_MESSAGES.SERVICE.ALL_RETRIEVED,
       data: plainToInstance(ServiceResponseDto, services, { excludeExtraneousValues: true }),
+      pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
   }
 

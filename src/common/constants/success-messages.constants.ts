@@ -8,6 +8,8 @@ export const SUCCESS_MESSAGES = {
     CREATED: 'User created successfully',
     RETRIEVED: 'User profile retrieved successfully',
     UPDATED: 'User profile updated successfully',
+    DELETED: 'Account deleted successfully.',
+    AVATAR_UPLOADED: 'Profile picture updated successfully.',
   },
   ARTISAN_PROFILE: {
     RETRIEVED: 'Artisan profile retrieved successfully',
@@ -35,6 +37,13 @@ export const SUCCESS_MESSAGES = {
     ALL_RETRIEVED: 'Jobs retrieved successfully',
     UPDATED: 'Job updated successfully',
     DELETED: 'Job deleted successfully',
+    APPLICATION_SUBMITTED: 'Application submitted successfully.',
+    APPLICATIONS_RETRIEVED: 'Applications retrieved successfully.',
+    APPLICATION_ACCEPTED: 'Application accepted. Job is now pending artisan start.',
+    STARTED: 'Job started. Work is now in progress.',
+    COMPLETION_REQUESTED: 'Completion request submitted. Awaiting customer confirmation.',
+    CONFIRMED: 'Job confirmed as complete. Payment has been released.',
+    CANCELLED: 'Job cancelled successfully.',
   },
   AUTH: {
     USER_REGISTERED: 'User registered successfully',

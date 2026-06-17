@@ -9,11 +9,17 @@ import {
 } from 'typeorm';
 import { ArtisanProfile } from '@users/entities/artisan-profile.entity';
 import { User } from '@users/entities/user.entity';
+import { Job } from '@jobs/entities/job.entity';
 
 @Entity('reviews')
 export class Review {
   @PrimaryGeneratedColumn()
   id!: number;
+
+  /** The completed job this review is tied to. Unique — one review per job. */
+  @ManyToOne(() => Job, { nullable: false, onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'job_id' })
+  job!: Job;
 
   @ManyToOne(() => ArtisanProfile, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'artisan_profile_id' })

@@ -96,14 +96,15 @@ export class AuthService {
         }
 
         this.logger.log(`Generating tokens for user with email ${email}`);
-        const { access_token, refresh_token } = await this.userTokenService.createJWTTokens(user);
+        const { access_token, refresh_token, expires_at } = await this.userTokenService.createJWTTokens(user);
         this.logger.log(`Tokens generated for user with email ${email}`);
 
-        
+
         this.logger.log(`User logged in with email ${email}`);
         return plainToInstance(LoginResponseDto, {
             access_token,
             refresh_token,
+            expires_at,
             message: SUCCESS_MESSAGES.AUTH.USER_LOGGED_IN,
             data: plainToInstance(UserResponseDto, user)
         });
@@ -241,12 +242,13 @@ export class AuthService {
         }
 
         this.logger.log(`Generating new tokens for user with id: ${user.id}`);
-        const { access_token, refresh_token } = await this.userTokenService.createJWTTokens(user);
+        const { access_token, refresh_token, expires_at } = await this.userTokenService.createJWTTokens(user);
         this.logger.log(`New tokens generated for user with id: ${user.id}`);
 
         return plainToInstance(LoginResponseDto, {
             access_token,
             refresh_token,
+            expires_at,
             message: SUCCESS_MESSAGES.AUTH.TOKENS_REFRESHED,
             data: plainToInstance(UserResponseDto, user)
         });
@@ -260,17 +262,11 @@ export class AuthService {
 
     async changePassword(changePasswordDto: ChangePasswordDto, userId: number): Promise<LoginResponseDto>{
         const user = await this.userService.findUserById(userId);
-        const userWithPassword = await this.userService.findOne(userId);
         if (!user) {
             throw new BadRequestException("User not found");
         }
 
-        if (!userWithPassword) {
-            throw new BadRequestException("User not found");
-        }
-
-        const isMatch = await bcrypt.compare(changePasswordDto.currentPassword, userWithPassword.password);
-
+        const isMatch = await this.userService.validatePassword(changePasswordDto.currentPassword, userId);
         if (!isMatch) {
             throw new BadRequestException("Current password is incorrect");
         }
@@ -278,10 +274,10 @@ export class AuthService {
         user.password = await bcrypt.hash(changePasswordDto.newPassword, VARIABLES.SALT_OR_ROUNDS);
         await this.userService.updateUserData(user.id, user);
         this.logger.log(`Password changed successfully for user with id: ${user.id}`);
-        
+
         await this.userTokenService.revokeRefreshTokenForUser(user.id);
         this.logger.log(`Revoked existing refresh tokens for user with id: ${user.id} after password change`);
-        const {access_token, refresh_token} = await this.userTokenService.createJWTTokens(user);
+        const { access_token, refresh_token, expires_at } = await this.userTokenService.createJWTTokens(user);
         this.logger.log(`New tokens generated for user with id: ${user.id} after password change`);
 
         this.emmitter.emit(MailEvent.PASSWORD_CHANGED, {
@@ -293,6 +289,7 @@ export class AuthService {
         return plainToInstance(LoginResponseDto, {
             access_token,
             refresh_token,
+            expires_at,
             message: SUCCESS_MESSAGES.AUTH.PASSWORD_CHANGED,
             data: plainToInstance(UserResponseDto, user)
         });
@@ -366,13 +363,14 @@ export class AuthService {
     }
 
     this.logger.log(`Generating tokens for social login user: ${user.email}`);
-    const { access_token, refresh_token } = await this.userTokenService.createJWTTokens(user);
-    
+    const { access_token, refresh_token, expires_at } = await this.userTokenService.createJWTTokens(user);
+
     this.logger.log(`Social login successful for user: ${user.email}`);
-    
+
     return plainToInstance(LoginResponseDto, {
       access_token,
       refresh_token,
+      expires_at,
       message: SUCCESS_MESSAGES.AUTH.USER_LOGGED_IN,
       data: plainToInstance(UserResponseDto, user),
     });

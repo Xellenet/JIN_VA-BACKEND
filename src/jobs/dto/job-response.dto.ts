@@ -1,70 +1,87 @@
-import { ApiProperty } from "@nestjs/swagger";
-import { Expose, Type } from "class-transformer";
-import { ServiceResponseDto } from "@services/dto/service-response.dto";
-import { UserResponseDto } from "@users/dto/user-response.dto"; 
-export class JobDataResponseDto {
-    @ApiProperty({ description: 'The unique identifier of the job.' })
-    @Expose()
-    id!: number;
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Expose, Type } from 'class-transformer';
+import { Status } from '@common/types/enums';
 
-    @ApiProperty({ description: 'Title of the job.' })
-    @Expose()
-    title!: string;
+export class JobCustomerDto {
+  @ApiProperty({ example: 5 })
+  @Expose()
+  id!: number;
 
-    @ApiProperty({ description: 'Description of the job.' })
-    @Expose()
-    description!: string;
+  @ApiProperty({ example: 'John' })
+  @Expose()
+  firstname!: string;
 
-    @ApiProperty({ type: ServiceResponseDto })
-    @Expose()
-    @Type(() => ServiceResponseDto)
-    service!: ServiceResponseDto;
-
-    @ApiProperty({ type: UserResponseDto })
-    @Expose()
-    @Type(() => UserResponseDto)
-    customer!: UserResponseDto;
-
-    @ApiProperty({ description: 'The location of the job.' })
-    @Expose()
-    location!: string;
-
-    @ApiProperty({ description: 'The minimum budget for the job.' })
-    @Expose()
-    budgetMin?: number;
-
-    @ApiProperty({ description: 'The maximum budget for the job.' })
-    @Expose()
-    budgetMax?: number;
-
-    @ApiProperty({ description: 'The latitude of the job location.' })
-    @Expose()
-    latitude?: number;
-
-    @ApiProperty({ description: 'The longitude of the job location.' })
-    @Expose()
-    longitude?: number;
-
-    @ApiProperty({ description: 'The status of the job.' })
-    @Expose()
-    status!: string;
-
-    @ApiProperty({ description: 'The date and time when the job was created.' })
-    @Expose()
-    createdAt!: Date;
-
-    @ApiProperty({ description: 'The date and time when the job was last updated.' })
-    @Expose()
-    updatedAt!: Date;
+  @ApiProperty({ example: 'Doe' })
+  @Expose()
+  lastname!: string;
 }
 
-export class JobResponseDto {
-    @ApiProperty({ example: 'Job created successfully' })
-    @Expose()
-    message!: string;
+export class JobServiceDto {
+  @ApiProperty({ example: 1 })
+  @Expose()
+  id!: number;
 
-    @ApiProperty({ type: JobDataResponseDto })
-    @Expose()
-    @Type(() => JobDataResponseDto)
-    data!: JobDataResponseDto;
+  @ApiProperty({ example: 'Plumbing' })
+  @Expose()
+  name!: string;
+}
+
+/**
+ * Shape of a single job returned from any jobs endpoint.
+ * Customer and service are collapsed to id + name only.
+ */
+export class JobResponseDto {
+  @ApiProperty({ example: 1 })
+  @Expose()
+  id!: number;
+
+  @ApiProperty({ example: 'Leaky faucet repair' })
+  @Expose()
+  title!: string;
+
+  @ApiPropertyOptional({ example: 'The kitchen faucet has been leaking for two days.' })
+  @Expose()
+  description?: string;
+
+  @ApiProperty({ type: () => JobCustomerDto })
+  @Expose()
+  @Type(() => JobCustomerDto)
+  customer!: JobCustomerDto;
+
+  @ApiProperty({ type: () => JobServiceDto })
+  @Expose()
+  @Type(() => JobServiceDto)
+  service!: JobServiceDto;
+
+  @ApiProperty({ example: 'Accra, Ghana' })
+  @Expose()
+  location!: string;
+
+  @ApiPropertyOptional({ example: 50 })
+  @Expose()
+  budgetMin?: number;
+
+  @ApiPropertyOptional({ example: 500 })
+  @Expose()
+  budgetMax?: number;
+
+  @ApiPropertyOptional({ example: 5.6037 })
+  @Expose()
+  latitude?: number;
+
+  @ApiPropertyOptional({ example: -0.187 })
+  @Expose()
+  longitude?: number;
+
+  @ApiProperty({ enum: Status, example: Status.OPEN })
+  @Expose()
+  status!: Status;
+
+  @ApiProperty()
+  @Expose()
+  createdAt!: Date;
+
+  @ApiProperty()
+  @Expose()
+  updatedAt!: Date;
 }
