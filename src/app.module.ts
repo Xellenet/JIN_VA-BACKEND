@@ -16,6 +16,8 @@ import { ServicesModule } from './services/services.module';
 import { JobsModule } from './jobs/jobs.module';
 import { ArtisansModule } from './artisans/artisans.module';
 import { FavouritesModule } from './favourites/favourites.module';
+import { MessagesModule } from './messages/messages.module';
+import { NotificationsModule } from './notifications/notifications.module';
 
 @Module({
   imports: [
@@ -34,6 +36,8 @@ import { FavouritesModule } from './favourites/favourites.module';
     JobsModule,
     ArtisansModule,
     FavouritesModule,
+    MessagesModule,
+    NotificationsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -20,7 +20,9 @@
       "@users/*": ["users/*"],
       "@services/*": ["services/*"],
       "@jobs/*": ["jobs/*"],
-      "@artisans/*": ["artisans/*"]
+      "@artisans/*": ["artisans/*"],
+      "@messages/*": ["messages/*"],
+      "@notifications/*": ["notifications/*"]
     },
     "incremental": true,
     "skipLibCheck": true,
