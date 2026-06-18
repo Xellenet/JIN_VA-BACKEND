@@ -7,6 +7,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { WinstonModule } from 'nest-winston';
 import { AuthModule } from './auth/auth.module';
 import { EventEmitterModule } from '@nestjs/event-emitter';
+import { ScheduleModule } from '@nestjs/schedule';
 import { MailModule } from 'mail/mail.module';
 import { typeOrmConfigAsync } from 'config/typeorm.config';
 import { winstonConfig } from 'config/winston.config';
@@ -20,6 +21,12 @@ import { MessagesModule } from './messages/messages.module';
 import { DirectMessagesModule } from './direct-messages/direct-messages.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { AvailabilityModule } from './availability/availability.module';
+import { VerificationModule } from './verification/verification.module';
+import { SchedulerModule } from './scheduler/scheduler.module';
+import { BookingsModule } from './bookings/bookings.module';
+import { AdminModule } from './admin/admin.module';
+import { UploadsModule } from './uploads/uploads.module';
+import { PushNotificationsModule } from './push-notifications/push-notifications.module';
 
 @Module({
   imports: [
@@ -30,6 +37,7 @@ import { AvailabilityModule } from './availability/availability.module';
     TypeOrmModule.forRootAsync(typeOrmConfigAsync),
     WinstonModule.forRoot(winstonConfig),
     EventEmitterModule.forRoot(),
+    ScheduleModule.forRoot(),
     MailModule,
     UsersModule,
     AuthModule,
@@ -42,6 +50,12 @@ import { AvailabilityModule } from './availability/availability.module';
     DirectMessagesModule,
     NotificationsModule,
     AvailabilityModule,
+    VerificationModule,
+    SchedulerModule,
+    BookingsModule,
+    AdminModule,
+    UploadsModule,
+    PushNotificationsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
