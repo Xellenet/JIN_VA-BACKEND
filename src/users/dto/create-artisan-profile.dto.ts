@@ -1,8 +1,9 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsArray,
-  IsIn,
+  IsEnum,
   IsInt,
+  IsISO4217CurrencyCode,
   IsNumber,
   IsOptional,
   IsPositive,
@@ -11,6 +12,7 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
+import { AvailabilityStatus } from '@common/types/enums';
 
 export class CreateArtisanProfileDto {
   @ApiPropertyOptional({ example: 'Experienced master plumber and maintenance specialist.' })
@@ -33,16 +35,23 @@ export class CreateArtisanProfileDto {
   @IsPositive()
   hourlyRate?: number;
 
+  @ApiPropertyOptional({
+    example: 'GHS',
+    description: 'ISO 4217 currency code for the hourly rate (e.g. GHS, USD, EUR)',
+  })
+  @IsOptional()
+  @IsISO4217CurrencyCode()
+  currency?: string;
+
   @ApiPropertyOptional({ example: 'Chamamme Home Services' })
   @IsOptional()
   @IsString()
   @MaxLength(150)
   businessName?: string;
 
-  @ApiPropertyOptional({ example: 'AVAILABLE' })
+  @ApiPropertyOptional({ enum: AvailabilityStatus, example: AvailabilityStatus.AVAILABLE })
   @IsOptional()
-  @IsString()
-  @IsIn(['AVAILABLE', 'BUSY', 'OFFLINE'])
+  @IsEnum(AvailabilityStatus)
   availabilityStatus?: string;
 
   @ApiPropertyOptional({

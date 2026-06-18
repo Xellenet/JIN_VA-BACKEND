@@ -68,6 +68,13 @@ export const SUCCESS_MESSAGES = {
     RETRIEVED: 'Notification preferences retrieved.',
     UPDATED: 'Notification preferences updated.',
   },
+  AVAILABILITY: {
+    RETRIEVED:      'Availability retrieved successfully.',
+    STATUS_UPDATED: 'Availability status updated.',
+    SLOT_ADDED:     'Availability slot added.',
+    SLOT_UPDATED:   'Availability slot updated.',
+    SLOT_REMOVED:   'Availability slot removed.',
+  },
   AUTH: {
     USER_REGISTERED: 'User registered successfully',
     USER_LOGGED_IN: 'User logged in successfully',

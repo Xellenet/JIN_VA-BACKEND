@@ -34,6 +34,10 @@ export class ArtisanProfile {
 	@Column({ name: 'hourly_rate', type: 'decimal', precision: 10, scale: 2, nullable: true })
 	hourlyRate?: number;
 
+	/** ISO 4217 currency code for hourlyRate (e.g. "GHS", "USD", "EUR"). */
+	@Column({ name: 'currency', type: 'varchar', length: 3, default: 'GHS' })
+	currency!: string;
+
 	@Column({ name: 'business_name', nullable: true })
 	businessName?: string;
 

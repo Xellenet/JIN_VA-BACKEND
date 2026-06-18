@@ -20,6 +20,10 @@ export class ArtisanProfileResponseDto {
   @Expose()
   hourlyRate?: number;
 
+  @ApiProperty({ example: 'GHS', description: 'ISO 4217 currency code for the hourly rate' })
+  @Expose()
+  currency!: string;
+
   @ApiProperty({ example: 'XelleNet Pros', required: false })
   @Expose()
   businessName?: string;
