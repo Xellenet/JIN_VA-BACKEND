@@ -19,6 +19,7 @@ import { FavouritesModule } from './favourites/favourites.module';
 import { MessagesModule } from './messages/messages.module';
 import { DirectMessagesModule } from './direct-messages/direct-messages.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { AvailabilityModule } from './availability/availability.module';
 
 @Module({
   imports: [
@@ -40,6 +41,7 @@ import { NotificationsModule } from './notifications/notifications.module';
     MessagesModule,
     DirectMessagesModule,
     NotificationsModule,
+    AvailabilityModule,
   ],
   controllers: [AppController],
   providers: [AppService],
