@@ -32,10 +32,39 @@ export enum ApplicationStatus {
     REJECTED = 'REJECTED',
 }
 
+export enum BookingStatus {
+  PENDING   = 'PENDING',
+  CONFIRMED = 'CONFIRMED',
+  COMPLETED = 'COMPLETED',
+  CANCELLED = 'CANCELLED',
+  DECLINED  = 'DECLINED',
+}
+
 export enum AvailabilityStatus {
   AVAILABLE   = 'AVAILABLE',
   BUSY        = 'BUSY',
   UNAVAILABLE = 'UNAVAILABLE',
+}
+
+export enum DocumentType {
+  GHANA_CARD      = 'GHANA_CARD',
+  PASSPORT        = 'PASSPORT',
+  VOTERS_ID       = 'VOTERS_ID',
+  DRIVERS_LICENSE = 'DRIVERS_LICENSE',
+  NATIONAL_ID     = 'NATIONAL_ID',
+}
+
+export enum VerificationStatus {
+  PENDING      = 'PENDING',
+  UNDER_REVIEW = 'UNDER_REVIEW',
+  APPROVED     = 'APPROVED',
+  REJECTED     = 'REJECTED',
+}
+
+export enum DevicePlatform {
+  IOS     = 'ios',
+  ANDROID = 'android',
+  WEB     = 'web',
 }
 
 export enum NotificationType {
@@ -49,6 +78,12 @@ export enum NotificationType {
     JOB_EXPIRED              = 'JOB_EXPIRED',
     MESSAGE_RECEIVED         = 'MESSAGE_RECEIVED',
     REVIEW_RECEIVED          = 'REVIEW_RECEIVED',
-    ARTISAN_PROFILE_VERIFIED = 'ARTISAN_PROFILE_VERIFIED',
-    SECURITY_ALERT           = 'SECURITY_ALERT',
+    ARTISAN_PROFILE_VERIFIED       = 'ARTISAN_PROFILE_VERIFIED',
+    ARTISAN_VERIFICATION_REJECTED  = 'ARTISAN_VERIFICATION_REJECTED',
+    BOOKING_RECEIVED               = 'BOOKING_RECEIVED',
+    BOOKING_CONFIRMED              = 'BOOKING_CONFIRMED',
+    BOOKING_DECLINED               = 'BOOKING_DECLINED',
+    BOOKING_CANCELLED              = 'BOOKING_CANCELLED',
+    BOOKING_COMPLETED              = 'BOOKING_COMPLETED',
+    SECURITY_ALERT                 = 'SECURITY_ALERT',
 }

@@ -10,6 +10,9 @@ export const SUCCESS_MESSAGES = {
     UPDATED: 'User profile updated successfully',
     DELETED: 'Account deleted successfully.',
     AVATAR_UPLOADED: 'Profile picture updated successfully.',
+    ADDRESS_ADDED: 'Address added successfully.',
+    ADDRESS_UPDATED: 'Address updated successfully.',
+    ADDRESS_REMOVED: 'Address removed successfully.',
   },
   ARTISAN_PROFILE: {
     RETRIEVED: 'Artisan profile retrieved successfully',
