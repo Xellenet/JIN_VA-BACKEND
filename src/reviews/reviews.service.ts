@@ -7,6 +7,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Repository, SelectQueryBuilder } from 'typeorm';
 import { Review } from './entities/review.entity';
 import { CreateReviewDto } from './dto/create-review.dto';
@@ -17,6 +18,7 @@ import { Job } from '@jobs/entities/job.entity';
 import { Status } from '@common/types/enums';
 import { SUCCESS_MESSAGES } from '@common/constants/success-messages.constants';
 import { ERROR_MESSAGES } from '@common/constants/error-messages.constants';
+import { APP_EVENTS, ReviewReceivedPayload } from '@common/events/app.events';
 
 type Pagination = { total: number; page: number; limit: number; totalPages: number };
 type ReviewList = { message: string; data: Review[]; pagination: Pagination };
@@ -35,6 +37,7 @@ export class ReviewsService {
     private readonly usersRepository: Repository<User>,
     @InjectRepository(Job)
     private readonly jobsRepository: Repository<Job>,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   /**
@@ -103,6 +106,14 @@ export class ReviewsService {
     const savedReview = await this.reviewsRepository.save(review);
     await this.refreshArtisanRatings(artisanProfile.id);
     this.logger.log(`Review submitted for job ${dto.jobId} by customer ${customerId}`);
+
+    this.eventEmitter.emit(APP_EVENTS.REVIEW_RECEIVED, {
+      artisanUserId: job.acceptedArtisan!.id,
+      jobTitle:      job.title ?? `Job #${job.id}`,
+      jobId:         job.id,
+      rating:        dto.rating,
+      reviewerName:  reviewer ? `${reviewer.firstname} ${reviewer.lastname}` : 'A customer',
+    } as ReviewReceivedPayload);
 
     const populated = await this.reviewsRepository.findOne({
       where: { id: savedReview.id },

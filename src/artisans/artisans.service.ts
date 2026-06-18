@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { plainToInstance } from 'class-transformer';
 import { In, Repository, SelectQueryBuilder } from 'typeorm';
 import { ArtisanProfile } from '@users/entities/artisan-profile.entity';
@@ -16,6 +17,7 @@ import { GetArtisansQueryDto, ArtisanSortBy } from './dto/get-artisans-query.dto
 import { UpdateArtisanProfileDto } from '@users/dto/update-artisan-profile.dto';
 import { ArtisanProfileResponseDto } from '@users/dto/artisan-profile-response.dto';
 import { SUCCESS_MESSAGES } from '@common/constants/success-messages.constants';
+import { APP_EVENTS, ArtisanProfileVerifiedPayload } from '@common/events/app.events';
 
 type Pagination = { total: number; page: number; limit: number; totalPages: number };
 type PublicList = { message: string; data: ArtisanPublicResponseDto[]; pagination: Pagination };
@@ -33,6 +35,7 @@ export class ArtisansService {
     private readonly usersRepository: Repository<User>,
     @InjectRepository(ServiceEntity)
     private readonly servicesRepository: Repository<ServiceEntity>,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   // ─── Public discovery ────────────────────────────────────────────────────────
@@ -230,6 +233,36 @@ export class ArtisansService {
     };
   }
 
+  // ─── Admin actions ───────────────────────────────────────────────────────────
+
+  /**
+   * Marks an artisan's profile as verified and notifies them.
+   * Called by the admin module (Phase 6).
+   *
+   * @param artisanProfileId - The ID of the ArtisanProfile row (not the user ID).
+   * @throws {NotFoundException} When no profile with the given ID exists.
+   * @throws {BadRequestException} When the profile is already verified.
+   */
+  async markVerified(artisanProfileId: number): Promise<{ message: string }> {
+    const profile = await this.artisanProfileRepository.findOne({
+      where:     { id: artisanProfileId },
+      relations: ['user'],
+    });
+    if (!profile) throw new NotFoundException(`Artisan profile ${artisanProfileId} not found.`);
+    if (profile.isVerified) throw new BadRequestException('This artisan profile is already verified.');
+
+    profile.isVerified = true;
+    await this.artisanProfileRepository.save(profile);
+
+    this.logger.log(`Artisan profile ${artisanProfileId} marked verified (user ${profile.user.id})`);
+
+    this.eventEmitter.emit(APP_EVENTS.ARTISAN_PROFILE_VERIFIED, {
+      artisanUserId: profile.user.id,
+    } as ArtisanProfileVerifiedPayload);
+
+    return { message: 'Artisan profile verified successfully.' };
+  }
+
   // ─── Private helpers ─────────────────────────────────────────────────────────
 
   private buildSearchQb(): SelectQueryBuilder<ArtisanProfile> {
@@ -237,7 +270,7 @@ export class ArtisansService {
       .createQueryBuilder('ap')
       .innerJoinAndSelect('ap.user', 'user')
       .leftJoinAndSelect('ap.services', 'services')
-      .where('user.deleted_at IS NULL');
+      .where('user.deletedAt IS NULL');
   }
 
   private applySearchFilters(
@@ -262,7 +295,7 @@ export class ArtisansService {
         `(LOWER(user.firstname) LIKE :kw
           OR LOWER(user.lastname) LIKE :kw
           OR LOWER(ap.bio) LIKE :kw
-          OR LOWER(ap.business_name) LIKE :kw)`,
+          OR LOWER(ap.businessName) LIKE :kw)`,
         { kw },
       );
     }
@@ -274,17 +307,17 @@ export class ArtisansService {
     }
 
     if (query.minRating !== undefined) {
-      qb.andWhere('ap.average_rating >= :minRating', { minRating: query.minRating });
+      qb.andWhere('ap.averageRating >= :minRating', { minRating: query.minRating });
     }
 
     if (query.availabilityStatus) {
-      qb.andWhere('ap.availability_status = :availabilityStatus', {
+      qb.andWhere('ap.availabilityStatus = :availabilityStatus', {
         availabilityStatus: query.availabilityStatus,
       });
     }
 
     if (query.isVerified !== undefined) {
-      qb.andWhere('ap.is_verified = :isVerified', { isVerified: query.isVerified });
+      qb.andWhere('ap.isVerified = :isVerified', { isVerified: query.isVerified });
     }
   }
 
@@ -294,17 +327,17 @@ export class ArtisansService {
   ): void {
     switch (sortBy) {
       case ArtisanSortBy.NEWEST:
-        qb.orderBy('ap.created_at', 'DESC');
+        qb.orderBy('ap.createdAt', 'DESC');
         break;
       case ArtisanSortBy.EXPERIENCE:
-        qb.orderBy('ap.experience_years', 'DESC', 'NULLS LAST');
+        qb.orderBy('ap.experienceYears', 'DESC', 'NULLS LAST');
         break;
       case ArtisanSortBy.HOURLY_RATE:
-        qb.orderBy('ap.hourly_rate', 'ASC', 'NULLS LAST');
+        qb.orderBy('ap.hourlyRate', 'ASC', 'NULLS LAST');
         break;
       case ArtisanSortBy.RATING:
       default:
-        qb.orderBy('ap.average_rating', 'DESC');
+        qb.orderBy('ap.averageRating', 'DESC');
         break;
     }
   }

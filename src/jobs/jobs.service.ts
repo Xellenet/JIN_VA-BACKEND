@@ -7,6 +7,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { plainToInstance } from 'class-transformer';
 import { Repository } from 'typeorm';
 import { Job } from './entities/job.entity';
@@ -22,6 +23,17 @@ import { User } from '@users/entities/user.entity';
 import { ApplicationStatus, Role, Status } from '@common/types/enums';
 import { SUCCESS_MESSAGES } from '@common/constants/success-messages.constants';
 import { PaymentsService } from '../payments/payments.service';
+import {
+  APP_EVENTS,
+  JobApplicationAcceptedPayload,
+  JobApplicationReceivedPayload,
+  JobApplicationRejectedPayload,
+  JobCancelledPayload,
+  JobCompletedPayload,
+  JobCompletionRequestedPayload,
+  JobExpiredPayload,
+  JobStartedPayload,
+} from '@common/events/app.events';
 
 const IMMUTABLE_STATUSES = new Set([Status.COMPLETED, Status.CANCELLED, Status.EXPIRED]);
 
@@ -45,6 +57,7 @@ export class JobsService {
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
     private readonly paymentsService: PaymentsService,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   // ─── Job CRUD ────────────────────────────────────────────────────────────────
@@ -241,6 +254,13 @@ export class JobsService {
 
     this.logger.log(`Artisan ${artisanId} applied to job ${jobId} (application ${application.id})`);
 
+    this.eventEmitter.emit(APP_EVENTS.JOB_APPLICATION_RECEIVED, {
+      customerId:  job.customer.id,
+      artisanName: `${artisan.firstname} ${artisan.lastname}`,
+      jobTitle:    job.title ?? `Job #${job.id}`,
+      jobId:       job.id,
+    } as JobApplicationReceivedPayload);
+
     const populated = await this.applicationsRepository.findOne({
       where: { id: application.id },
       relations: ['artisan'],
@@ -311,6 +331,12 @@ export class JobsService {
       );
     }
 
+    // Load other pending applicants before bulk-rejecting so we can notify them.
+    const pendingApplications = await this.applicationsRepository.find({
+      where:     { job: { id: jobId }, status: ApplicationStatus.PENDING },
+      relations: ['artisan'],
+    });
+
     // Hold payment before committing any DB changes so a payment failure leaves the job OPEN.
     const intentId = await this.paymentsService.holdPayment(
       jobId,
@@ -344,6 +370,21 @@ export class JobsService {
       `Job ${jobId} → PENDING. Accepted artisan ${application.artisanId}. Intent: ${intentId}`,
     );
 
+    this.eventEmitter.emit(APP_EVENTS.JOB_APPLICATION_ACCEPTED, {
+      artisanId: application.artisan.id,
+      jobTitle:  job.title ?? `Job #${job.id}`,
+      jobId:     job.id,
+    } as JobApplicationAcceptedPayload);
+
+    // Notify each rejected applicant.
+    for (const rejected of pendingApplications.filter(a => a.id !== appId)) {
+      this.eventEmitter.emit(APP_EVENTS.JOB_APPLICATION_REJECTED, {
+        artisanId: rejected.artisan.id,
+        jobTitle:  job.title ?? `Job #${job.id}`,
+        jobId:     job.id,
+      } as JobApplicationRejectedPayload);
+    }
+
     return { message: SUCCESS_MESSAGES.JOB.APPLICATION_ACCEPTED, data: await this.loadJobDto(jobId) };
   }
 
@@ -374,6 +415,13 @@ export class JobsService {
     await this.jobsRepository.save(job);
 
     this.logger.log(`Job ${jobId} → IN_PROGRESS by artisan ${artisanId}`);
+
+    this.eventEmitter.emit(APP_EVENTS.JOB_STARTED, {
+      customerId: job.customer.id,
+      jobTitle:   job.title ?? `Job #${job.id}`,
+      jobId:      job.id,
+    } as JobStartedPayload);
+
     return { message: SUCCESS_MESSAGES.JOB.STARTED, data: await this.loadJobDto(jobId) };
   }
 
@@ -408,6 +456,13 @@ export class JobsService {
     await this.jobsRepository.save(job);
 
     this.logger.log(`Job ${jobId} — completion requested by artisan ${artisanId}`);
+
+    this.eventEmitter.emit(APP_EVENTS.JOB_COMPLETION_REQUESTED, {
+      customerId: job.customer.id,
+      jobTitle:   job.title ?? `Job #${job.id}`,
+      jobId:      job.id,
+    } as JobCompletionRequestedPayload);
+
     return { message: SUCCESS_MESSAGES.JOB.COMPLETION_REQUESTED, data: await this.loadJobDto(jobId) };
   }
 
@@ -447,6 +502,15 @@ export class JobsService {
     await this.jobsRepository.save(job);
 
     this.logger.log(`Job ${jobId} → COMPLETED. Payment captured. Customer ${customerId}`);
+
+    if (job.acceptedArtisanId) {
+      this.eventEmitter.emit(APP_EVENTS.JOB_COMPLETED, {
+        artisanId: job.acceptedArtisanId,
+        jobTitle:  job.title ?? `Job #${job.id}`,
+        jobId:     job.id,
+      } as JobCompletedPayload);
+    }
+
     return { message: SUCCESS_MESSAGES.JOB.CONFIRMED, data: await this.loadJobDto(jobId) };
   }
 
@@ -486,7 +550,60 @@ export class JobsService {
     await this.jobsRepository.save(job);
 
     this.logger.log(`Job ${jobId} → CANCELLED by customer ${customerId}`);
+
+    if (job.acceptedArtisanId) {
+      this.eventEmitter.emit(APP_EVENTS.JOB_CANCELLED, {
+        artisanId: job.acceptedArtisanId,
+        jobTitle:  job.title ?? `Job #${job.id}`,
+        jobId:     job.id,
+      } as JobCancelledPayload);
+    }
+
     return { message: SUCCESS_MESSAGES.JOB.CANCELLED };
+  }
+
+  // ─── Admin / scheduler actions ──────────────────────────────────────────────
+
+  /**
+   * Marks an OPEN job as EXPIRED, rejects all pending applications, and
+   * emits notifications so the customer and waiting artisans are informed.
+   * Called by the scheduled jobs module (Phase 9) or admin (Phase 6).
+   * Silently no-ops if the job is not OPEN.
+   *
+   * @param jobId - The job to expire.
+   */
+  async expireJob(jobId: number): Promise<void> {
+    const job = await this.loadJobOrFail(jobId);
+    if (job.status !== Status.OPEN) return;
+
+    // Load pending applicants before marking them rejected so we can notify them.
+    const pendingApplications = await this.applicationsRepository.find({
+      where:     { job: { id: jobId }, status: ApplicationStatus.PENDING },
+      relations: ['artisan'],
+    });
+
+    if (pendingApplications.length > 0) {
+      await this.applicationsRepository
+        .createQueryBuilder()
+        .update(JobApplication)
+        .set({ status: ApplicationStatus.REJECTED })
+        .where('job_id = :jobId AND status = :status', { jobId, status: ApplicationStatus.PENDING })
+        .execute();
+    }
+
+    job.status = Status.EXPIRED;
+    await this.jobsRepository.save(job);
+
+    this.logger.log(
+      `Job ${jobId} → EXPIRED. ${pendingApplications.length} pending applications closed.`,
+    );
+
+    this.eventEmitter.emit(APP_EVENTS.JOB_EXPIRED, {
+      customerId:       job.customer.id,
+      jobTitle:         job.title ?? `Job #${job.id}`,
+      jobId:            job.id,
+      pendingArtisanIds: pendingApplications.map(a => a.artisan.id),
+    } as JobExpiredPayload);
   }
 
   // ─── Private helpers ─────────────────────────────────────────────────────────
