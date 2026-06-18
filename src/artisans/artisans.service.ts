@@ -237,7 +237,7 @@ export class ArtisansService {
       .createQueryBuilder('ap')
       .innerJoinAndSelect('ap.user', 'user')
       .leftJoinAndSelect('ap.services', 'services')
-      .where('user.deleted_at IS NULL');
+      .where('user.deletedAt IS NULL');
   }
 
   private applySearchFilters(
@@ -262,7 +262,7 @@ export class ArtisansService {
         `(LOWER(user.firstname) LIKE :kw
           OR LOWER(user.lastname) LIKE :kw
           OR LOWER(ap.bio) LIKE :kw
-          OR LOWER(ap.business_name) LIKE :kw)`,
+          OR LOWER(ap.businessName) LIKE :kw)`,
         { kw },
       );
     }
@@ -274,17 +274,17 @@ export class ArtisansService {
     }
 
     if (query.minRating !== undefined) {
-      qb.andWhere('ap.average_rating >= :minRating', { minRating: query.minRating });
+      qb.andWhere('ap.averageRating >= :minRating', { minRating: query.minRating });
     }
 
     if (query.availabilityStatus) {
-      qb.andWhere('ap.availability_status = :availabilityStatus', {
+      qb.andWhere('ap.availabilityStatus = :availabilityStatus', {
         availabilityStatus: query.availabilityStatus,
       });
     }
 
     if (query.isVerified !== undefined) {
-      qb.andWhere('ap.is_verified = :isVerified', { isVerified: query.isVerified });
+      qb.andWhere('ap.isVerified = :isVerified', { isVerified: query.isVerified });
     }
   }
 
@@ -294,17 +294,17 @@ export class ArtisansService {
   ): void {
     switch (sortBy) {
       case ArtisanSortBy.NEWEST:
-        qb.orderBy('ap.created_at', 'DESC');
+        qb.orderBy('ap.createdAt', 'DESC');
         break;
       case ArtisanSortBy.EXPERIENCE:
-        qb.orderBy('ap.experience_years', 'DESC', 'NULLS LAST');
+        qb.orderBy('ap.experienceYears', 'DESC', 'NULLS LAST');
         break;
       case ArtisanSortBy.HOURLY_RATE:
-        qb.orderBy('ap.hourly_rate', 'ASC', 'NULLS LAST');
+        qb.orderBy('ap.hourlyRate', 'ASC', 'NULLS LAST');
         break;
       case ArtisanSortBy.RATING:
       default:
-        qb.orderBy('ap.average_rating', 'DESC');
+        qb.orderBy('ap.averageRating', 'DESC');
         break;
     }
   }

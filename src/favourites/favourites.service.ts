@@ -111,9 +111,9 @@ export class FavouritesService {
       .innerJoinAndSelect('fav.artisan', 'artisan')
       .innerJoinAndSelect('artisan.user', 'user')
       .leftJoinAndSelect('artisan.services', 'services')
-      .where('fav.customer_id = :customerId', { customerId })
-      .andWhere('user.deleted_at IS NULL')
-      .orderBy('fav.created_at', 'DESC')
+      .where('fav.customer = :customerId', { customerId })
+      .andWhere('user.deletedAt IS NULL')
+      .orderBy('fav.createdAt', 'DESC')
       .skip(skip)
       .take(limit)
       .getManyAndCount();

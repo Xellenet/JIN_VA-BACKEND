@@ -53,6 +53,17 @@ export const SUCCESS_MESSAGES = {
     REMOVED: 'Artisan removed from favourites.',
     ALL_RETRIEVED: 'Favourites retrieved successfully.',
   },
+  MESSAGE: {
+    SENT: 'Message sent.',
+    CONVERSATIONS_RETRIEVED: 'Conversations retrieved.',
+    THREAD_RETRIEVED: 'Messages retrieved.',
+    MARKED_READ: 'Messages marked as read.',
+  },
+  NOTIFICATION: {
+    ALL_RETRIEVED: 'Notifications retrieved.',
+    MARKED_READ: 'Notification marked as read.',
+    ALL_MARKED_READ: 'All notifications marked as read.',
+  },
   AUTH: {
     USER_REGISTERED: 'User registered successfully',
     USER_LOGGED_IN: 'User logged in successfully',

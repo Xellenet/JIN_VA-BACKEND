@@ -7,6 +7,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { plainToInstance } from 'class-transformer';
 import { Repository } from 'typeorm';
 import { Job } from './entities/job.entity';
@@ -22,6 +23,15 @@ import { User } from '@users/entities/user.entity';
 import { ApplicationStatus, Role, Status } from '@common/types/enums';
 import { SUCCESS_MESSAGES } from '@common/constants/success-messages.constants';
 import { PaymentsService } from '../payments/payments.service';
+import {
+  APP_EVENTS,
+  JobApplicationAcceptedPayload,
+  JobApplicationReceivedPayload,
+  JobCancelledPayload,
+  JobCompletedPayload,
+  JobCompletionRequestedPayload,
+  JobStartedPayload,
+} from '@common/events/app.events';
 
 const IMMUTABLE_STATUSES = new Set([Status.COMPLETED, Status.CANCELLED, Status.EXPIRED]);
 
@@ -45,6 +55,7 @@ export class JobsService {
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
     private readonly paymentsService: PaymentsService,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   // ─── Job CRUD ────────────────────────────────────────────────────────────────
@@ -241,6 +252,13 @@ export class JobsService {
 
     this.logger.log(`Artisan ${artisanId} applied to job ${jobId} (application ${application.id})`);
 
+    this.eventEmitter.emit(APP_EVENTS.JOB_APPLICATION_RECEIVED, {
+      customerId:  job.customer.id,
+      artisanName: `${artisan.firstname} ${artisan.lastname}`,
+      jobTitle:    job.title ?? `Job #${job.id}`,
+      jobId:       job.id,
+    } as JobApplicationReceivedPayload);
+
     const populated = await this.applicationsRepository.findOne({
       where: { id: application.id },
       relations: ['artisan'],
@@ -344,6 +362,12 @@ export class JobsService {
       `Job ${jobId} → PENDING. Accepted artisan ${application.artisanId}. Intent: ${intentId}`,
     );
 
+    this.eventEmitter.emit(APP_EVENTS.JOB_APPLICATION_ACCEPTED, {
+      artisanId: application.artisan.id,
+      jobTitle:  job.title ?? `Job #${job.id}`,
+      jobId:     job.id,
+    } as JobApplicationAcceptedPayload);
+
     return { message: SUCCESS_MESSAGES.JOB.APPLICATION_ACCEPTED, data: await this.loadJobDto(jobId) };
   }
 
@@ -374,6 +398,13 @@ export class JobsService {
     await this.jobsRepository.save(job);
 
     this.logger.log(`Job ${jobId} → IN_PROGRESS by artisan ${artisanId}`);
+
+    this.eventEmitter.emit(APP_EVENTS.JOB_STARTED, {
+      customerId: job.customer.id,
+      jobTitle:   job.title ?? `Job #${job.id}`,
+      jobId:      job.id,
+    } as JobStartedPayload);
+
     return { message: SUCCESS_MESSAGES.JOB.STARTED, data: await this.loadJobDto(jobId) };
   }
 
@@ -408,6 +439,13 @@ export class JobsService {
     await this.jobsRepository.save(job);
 
     this.logger.log(`Job ${jobId} — completion requested by artisan ${artisanId}`);
+
+    this.eventEmitter.emit(APP_EVENTS.JOB_COMPLETION_REQUESTED, {
+      customerId: job.customer.id,
+      jobTitle:   job.title ?? `Job #${job.id}`,
+      jobId:      job.id,
+    } as JobCompletionRequestedPayload);
+
     return { message: SUCCESS_MESSAGES.JOB.COMPLETION_REQUESTED, data: await this.loadJobDto(jobId) };
   }
 
@@ -447,6 +485,15 @@ export class JobsService {
     await this.jobsRepository.save(job);
 
     this.logger.log(`Job ${jobId} → COMPLETED. Payment captured. Customer ${customerId}`);
+
+    if (job.acceptedArtisanId) {
+      this.eventEmitter.emit(APP_EVENTS.JOB_COMPLETED, {
+        artisanId: job.acceptedArtisanId,
+        jobTitle:  job.title ?? `Job #${job.id}`,
+        jobId:     job.id,
+      } as JobCompletedPayload);
+    }
+
     return { message: SUCCESS_MESSAGES.JOB.CONFIRMED, data: await this.loadJobDto(jobId) };
   }
 
@@ -486,6 +533,15 @@ export class JobsService {
     await this.jobsRepository.save(job);
 
     this.logger.log(`Job ${jobId} → CANCELLED by customer ${customerId}`);
+
+    if (job.acceptedArtisanId) {
+      this.eventEmitter.emit(APP_EVENTS.JOB_CANCELLED, {
+        artisanId: job.acceptedArtisanId,
+        jobTitle:  job.title ?? `Job #${job.id}`,
+        jobId:     job.id,
+      } as JobCancelledPayload);
+    }
+
     return { message: SUCCESS_MESSAGES.JOB.CANCELLED };
   }
 
