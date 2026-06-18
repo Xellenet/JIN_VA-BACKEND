@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   IsInt,
+  IsISO4217CurrencyCode,
   IsNotEmpty,
   IsNumber,
   IsOptional,
@@ -52,6 +53,13 @@ export class CreateJobDto {
   @Min(0)
   @Type(() => Number)
   budgetMax?: number;
+
+  @ApiProperty({
+    example: 'GHS',
+    description: 'ISO 4217 currency code for the budget amounts (e.g. GHS, USD, EUR)',
+  })
+  @IsISO4217CurrencyCode()
+  currency!: string;
 
   @ApiPropertyOptional({ example: 5.6037, description: 'Latitude of the job site' })
   @IsOptional()

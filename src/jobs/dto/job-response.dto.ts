@@ -65,6 +65,10 @@ export class JobResponseDto {
   @Expose()
   budgetMax?: number;
 
+  @ApiProperty({ example: 'GHS', description: 'ISO 4217 currency code for budget amounts' })
+  @Expose()
+  currency!: string;
+
   @ApiPropertyOptional({ example: 5.6037 })
   @Expose()
   latitude?: number;

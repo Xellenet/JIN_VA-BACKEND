@@ -48,6 +48,10 @@ export class Job {
   @Column({ name: 'budget_max', type: 'decimal', precision: 10, scale: 2, nullable: true })
   budgetMax?: number;
 
+  /** ISO 4217 currency code for budgetMin / budgetMax (e.g. "GHS", "USD", "EUR"). */
+  @Column({ name: 'currency', type: 'varchar', length: 3, default: 'GHS' })
+  currency!: string;
+
   @Column({ type: 'decimal', precision: 10, scale: 2, nullable: true })
   latitude?: number;
 

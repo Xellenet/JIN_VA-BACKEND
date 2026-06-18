@@ -32,6 +32,12 @@ export enum ApplicationStatus {
     REJECTED = 'REJECTED',
 }
 
+export enum AvailabilityStatus {
+  AVAILABLE   = 'AVAILABLE',
+  BUSY        = 'BUSY',
+  UNAVAILABLE = 'UNAVAILABLE',
+}
+
 export enum NotificationType {
     JOB_APPLICATION_RECEIVED = 'JOB_APPLICATION_RECEIVED',
     JOB_APPLICATION_ACCEPTED = 'JOB_APPLICATION_ACCEPTED',
