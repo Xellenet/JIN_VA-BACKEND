@@ -32,6 +32,18 @@ export class ArtisanNotificationPreferencesResponseDto {
   @Expose() @ApiProperty({ description: 'Your platform profile was verified by an admin' })
   profileVerified!: boolean;
 
+  @Expose() @ApiProperty({ description: 'Your verification submission was rejected' })
+  verificationRejected!: boolean;
+
+  @Expose() @ApiProperty({ description: 'New booking request received' })
+  bookingReceived!: boolean;
+
+  @Expose() @ApiProperty({ description: 'Customer cancelled a confirmed booking' })
+  bookingCancelled!: boolean;
+
+  @Expose() @ApiProperty({ description: 'Customer marked a booking as completed' })
+  bookingCompletedArtisan!: boolean;
+
   @Expose() @ApiProperty({ description: 'New direct message received' })
   messageReceived!: boolean;
 

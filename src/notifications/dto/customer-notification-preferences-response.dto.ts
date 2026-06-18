@@ -26,6 +26,12 @@ export class CustomerNotificationPreferencesResponseDto {
   @Expose() @ApiProperty({ description: 'Your job posting expired without being filled' })
   jobExpired!: boolean;
 
+  @Expose() @ApiProperty({ description: 'Artisan confirmed your booking' })
+  bookingConfirmed!: boolean;
+
+  @Expose() @ApiProperty({ description: 'Artisan declined your booking request' })
+  bookingDeclined!: boolean;
+
   @Expose() @ApiProperty({ description: 'New direct message received' })
   messageReceived!: boolean;
 
