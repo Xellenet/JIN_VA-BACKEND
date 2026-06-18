@@ -1,4 +1,5 @@
 import {
+  Body,
   Controller,
   Get,
   HttpCode,
@@ -22,6 +23,9 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { NotificationsService } from './notifications.service';
 import { GetNotificationsQueryDto } from './dto/get-notifications-query.dto';
 import { NotificationResponseDto } from './dto/notification-response.dto';
+import { CustomerNotificationPreferencesResponseDto } from './dto/customer-notification-preferences-response.dto';
+import { ArtisanNotificationPreferencesResponseDto } from './dto/artisan-notification-preferences-response.dto';
+import { UpdateNotificationPreferencesDto } from './dto/update-notification-preferences.dto';
 
 /**
  * In-app notification feed for the authenticated user.
@@ -33,6 +37,62 @@ import { NotificationResponseDto } from './dto/notification-response.dto';
 @ApiBearerAuth()
 export class NotificationsController {
   constructor(private readonly notificationsService: NotificationsService) {}
+
+  /**
+   * Returns the authenticated user's notification preferences.
+   * All flags default to true until the user changes them.
+   * Declared before dynamic routes to avoid route-shadowing.
+   */
+  @Get('preferences')
+  @ApiOperation({
+    summary: 'Get notification preferences',
+    description:
+      'Returns the caller\'s notification preferences. ' +
+      'The shape differs by role — customers see booking/job/payment toggles; ' +
+      'artisans see opportunity/application/payment-released toggles. ' +
+      'Both roles see the channel toggles (email, SMS, push).',
+  })
+  @ApiOkResponse({
+    description: 'Preferences retrieved (shape varies by role)',
+    schema: {
+      oneOf: [
+        { $ref: '#/components/schemas/CustomerNotificationPreferencesResponseDto' },
+        { $ref: '#/components/schemas/ArtisanNotificationPreferencesResponseDto' },
+      ],
+    },
+  })
+  @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
+  getPreferences(@Req() req: any) {
+    return this.notificationsService.getPreferences(req.user.id);
+  }
+
+  /**
+   * Partially updates the authenticated user's notification preferences.
+   * Only the supplied flags are updated; omitted flags are unchanged.
+   * Role-irrelevant fields are silently ignored.
+   */
+  @Patch('preferences')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Update notification preferences',
+    description:
+      'Toggle individual notification types or channels on or off. ' +
+      'Only role-relevant fields are applied — artisan-only flags are ignored for customers and vice versa. ' +
+      'Send only the fields you want to change; omitted fields remain as-is.',
+  })
+  @ApiOkResponse({
+    description: 'Preferences updated (shape varies by role)',
+    schema: {
+      oneOf: [
+        { $ref: '#/components/schemas/CustomerNotificationPreferencesResponseDto' },
+        { $ref: '#/components/schemas/ArtisanNotificationPreferencesResponseDto' },
+      ],
+    },
+  })
+  @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
+  updatePreferences(@Req() req: any, @Body() dto: UpdateNotificationPreferencesDto) {
+    return this.notificationsService.updatePreferences(req.user.id, dto);
+  }
 
   /**
    * Returns the count of unread notifications.
