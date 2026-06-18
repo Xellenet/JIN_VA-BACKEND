@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
+  IsDateString,
   IsInt,
   IsISO4217CurrencyCode,
   IsNotEmpty,
@@ -72,4 +73,12 @@ export class CreateJobDto {
   @IsNumber()
   @Type(() => Number)
   longitude?: number;
+
+  @ApiPropertyOptional({
+    example: '2026-07-01T00:00:00.000Z',
+    description: 'Optional deadline — after this date the cron job expires the posting automatically',
+  })
+  @IsOptional()
+  @IsDateString()
+  deadline?: string;
 }

@@ -73,6 +73,10 @@ export class Job {
   @Column({ name: 'payment_intent_id', type: 'varchar', nullable: true })
   paymentIntentId?: string;
 
+  /** Optional deadline after which the cron job automatically expires the posting. */
+  @Column({ name: 'deadline', type: 'timestamptz', nullable: true })
+  deadline?: Date;
+
   /** Set when the accepted artisan signals the work is done and awaits customer confirmation. */
   @Column({ name: 'completion_requested_at', type: 'timestamp', nullable: true })
   completionRequestedAt?: Date;

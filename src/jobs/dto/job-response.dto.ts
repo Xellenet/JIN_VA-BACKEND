@@ -81,6 +81,10 @@ export class JobResponseDto {
   @Expose()
   status!: Status;
 
+  @ApiPropertyOptional({ description: 'Auto-expire deadline (set by the customer at creation)' })
+  @Expose()
+  deadline?: Date;
+
   @ApiProperty()
   @Expose()
   createdAt!: Date;
