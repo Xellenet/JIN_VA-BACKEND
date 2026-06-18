@@ -62,3 +62,4 @@ docker-compose.yml
 flyway.conf
 JinVa-PRD.pdf
 .claude/
+/uploads

@@ -23,6 +23,7 @@ import { SocialUserProfile } from '@common/types/user-interfaces.type';
 import { SocialAuthStrategyFactory } from './social-auth.factory';
 import { OAuthStateService } from './oauth-state.service';
 import { UnauthorizedException } from '@nestjs/common/exceptions/unauthorized.exception';
+import { APP_EVENTS, SecurityAlertPayload } from '@common/events/app.events';
 
 
 @Injectable()
@@ -216,6 +217,10 @@ export class AuthService {
             firstname: user.firstname,
         });
         this.logger.log(`Emitted event for sending password reset success email to ${user.email}`);
+        this.emmitter.emit(APP_EVENTS.SECURITY_ALERT, {
+            userId: user.id,
+            event:  'PASSWORD_RESET',
+        } as SecurityAlertPayload);
     }
 
 
@@ -285,6 +290,10 @@ export class AuthService {
             firstname: user.firstname,
         });
         this.logger.log(`Emitted event for sending password change notification email to ${user.email}`);
+        this.emmitter.emit(APP_EVENTS.SECURITY_ALERT, {
+            userId: user.id,
+            event:  'PASSWORD_CHANGED',
+        } as SecurityAlertPayload);
 
         return plainToInstance(LoginResponseDto, {
             access_token,

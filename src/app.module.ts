@@ -17,6 +17,7 @@ import { JobsModule } from './jobs/jobs.module';
 import { ArtisansModule } from './artisans/artisans.module';
 import { FavouritesModule } from './favourites/favourites.module';
 import { MessagesModule } from './messages/messages.module';
+import { DirectMessagesModule } from './direct-messages/direct-messages.module';
 import { NotificationsModule } from './notifications/notifications.module';
 
 @Module({
@@ -37,6 +38,7 @@ import { NotificationsModule } from './notifications/notifications.module';
     ArtisansModule,
     FavouritesModule,
     MessagesModule,
+    DirectMessagesModule,
     NotificationsModule,
   ],
   controllers: [AppController],

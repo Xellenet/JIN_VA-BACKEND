@@ -64,6 +64,10 @@ export const SUCCESS_MESSAGES = {
     MARKED_READ: 'Notification marked as read.',
     ALL_MARKED_READ: 'All notifications marked as read.',
   },
+  NOTIFICATION_PREFERENCES: {
+    RETRIEVED: 'Notification preferences retrieved.',
+    UPDATED: 'Notification preferences updated.',
+  },
   AUTH: {
     USER_REGISTERED: 'User registered successfully',
     USER_LOGGED_IN: 'User logged in successfully',
