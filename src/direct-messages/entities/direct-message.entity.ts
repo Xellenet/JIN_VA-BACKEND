@@ -4,24 +4,24 @@ import { User } from '../../users/entities/user.entity';
 @Entity('direct_messages')
 export class DirectMessage {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @ManyToOne(() => User, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'sender_id' })
   @Index()
-  sender: User;
+  sender!: User;
 
   @ManyToOne(() => User, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'receiver_id' })
   @Index()
-  receiver: User;
+  receiver!: User;
 
   @Column('text')
-  content: string;
+  content!: string;
 
   @Column({ name: 'is_read', default: false })
-  isRead: boolean;
+  isRead!: boolean;
 
   @CreateDateColumn({ name: 'created_at' })
-  createdAt: Date;
+  createdAt!: Date;
 }

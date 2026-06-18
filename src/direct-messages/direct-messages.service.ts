@@ -86,7 +86,7 @@ export class DirectMessagesService {
       ])
       .leftJoin('dm.sender', 'sender')
       .where(
-        '(sender.id = :me AND dm.receiver.id = :other) OR (sender.id = :other AND dm.receiver.id = :me)',
+        '(dm.sender_id = :me AND dm.receiver_id = :other) OR (dm.sender_id = :other AND dm.receiver_id = :me)',
         { me: currentUserId, other: otherUserId },
       )
       .orderBy('dm.createdAt', 'ASC')
@@ -103,8 +103,10 @@ export class DirectMessagesService {
       this.userRepo.findOne({ where: { id: receiverId } }),
     ]);
     if (!receiver) throw new NotFoundException('Recipient not found');
+    if (!sender) throw new NotFoundException('Sender not found');
 
-    const dm = this.dmRepo.create({ sender, receiver, content: dto.content });
+    // Use ID references so create() resolves the single-entity overload correctly
+    const dm = this.dmRepo.create({ sender: { id: senderId }, receiver: { id: receiverId }, content: dto.content });
     const saved = await this.dmRepo.save(dm);
 
     return {
