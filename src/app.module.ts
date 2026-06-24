@@ -27,6 +27,7 @@ import { BookingsModule } from './bookings/bookings.module';
 import { AdminModule } from './admin/admin.module';
 import { UploadsModule } from './uploads/uploads.module';
 import { PushNotificationsModule } from './push-notifications/push-notifications.module';
+import { DisputesModule } from './disputes/disputes.module';
 
 @Module({
   imports: [
@@ -56,6 +57,7 @@ import { PushNotificationsModule } from './push-notifications/push-notifications
     AdminModule,
     UploadsModule,
     PushNotificationsModule,
+    DisputesModule,
   ],
   controllers: [AppController],
   providers: [AppService],

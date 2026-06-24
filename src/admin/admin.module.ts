@@ -9,11 +9,15 @@ import { JobApplication } from '@jobs/entities/job-application.entity';
 import { ArtisanVerification } from '../verification/entities/artisan-verification.entity';
 import { Booking } from '../bookings/entities/booking.entity';
 import { JobsModule } from '@jobs/jobs.module';
+import { VerificationModule } from '../verification/verification.module';
+import { DisputesModule } from '../disputes/disputes.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([User, ArtisanProfile, Job, JobApplication, ArtisanVerification, Booking]),
     JobsModule,
+    VerificationModule,
+    DisputesModule,
   ],
   controllers: [AdminController],
   providers: [AdminService],
