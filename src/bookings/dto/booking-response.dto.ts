@@ -6,11 +6,23 @@ class BookingCustomerDto {
   @Expose() @ApiProperty() id!: number;
   @Expose() @ApiProperty() firstname!: string;
   @Expose() @ApiProperty() lastname!: string;
+  @Expose() @ApiPropertyOptional() profilePicture?: string;
+}
+
+class BookingArtisanUserDto {
+  @Expose() @ApiProperty() id!: number;
+  @Expose() @ApiProperty() firstname!: string;
+  @Expose() @ApiProperty() lastname!: string;
+  @Expose() @ApiPropertyOptional() profilePicture?: string;
 }
 
 class BookingArtisanProfileDto {
   @Expose() @ApiProperty() id!: number;
   @Expose() @ApiPropertyOptional() businessName?: string;
+  @Expose()
+  @ApiPropertyOptional({ type: BookingArtisanUserDto })
+  @Type(() => BookingArtisanUserDto)
+  user?: BookingArtisanUserDto;
 }
 
 class BookingSlotDto {

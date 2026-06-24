@@ -205,6 +205,7 @@ export class BookingsService {
       .createQueryBuilder('b')
       .leftJoinAndSelect('b.customer', 'customer')
       .leftJoinAndSelect('b.artisanProfile', 'artisanProfile')
+      .leftJoinAndSelect('artisanProfile.user', 'artisanUser')
       .leftJoinAndSelect('b.availabilitySlot', 'availabilitySlot')
       .orderBy('b.scheduledDate', 'DESC');
 
@@ -221,7 +222,7 @@ export class BookingsService {
     };
   }
 
-  private async loadOrFail(id: number, relations: string[] = ['customer', 'artisanProfile', 'availabilitySlot']): Promise<Booking> {
+  private async loadOrFail(id: number, relations: string[] = ['customer', 'artisanProfile', 'artisanProfile.user', 'availabilitySlot']): Promise<Booking> {
     const booking = await this.repo.findOne({ where: { id }, relations });
     if (!booking) throw new NotFoundException('Booking not found.');
     return booking;

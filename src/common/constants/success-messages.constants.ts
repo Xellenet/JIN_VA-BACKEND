@@ -78,6 +78,14 @@ export const SUCCESS_MESSAGES = {
     SLOT_UPDATED:   'Availability slot updated.',
     SLOT_REMOVED:   'Availability slot removed.',
   },
+  DISPUTE: {
+    RAISED: 'Dispute raised successfully.',
+    RETRIEVED: 'Dispute retrieved successfully.',
+    ALL_RETRIEVED: 'Disputes retrieved successfully.',
+    REVIEW_STARTED: 'Dispute moved to under review.',
+    RESOLVED: 'Dispute resolved successfully.',
+    CLOSED: 'Dispute closed successfully.',
+  },
   AUTH: {
     USER_REGISTERED: 'User registered successfully',
     USER_LOGGED_IN: 'User logged in successfully',

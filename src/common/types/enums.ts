@@ -67,6 +67,13 @@ export enum DevicePlatform {
   WEB     = 'web',
 }
 
+export enum DisputeStatus {
+  OPEN         = 'OPEN',
+  UNDER_REVIEW = 'UNDER_REVIEW',
+  RESOLVED     = 'RESOLVED',
+  CLOSED       = 'CLOSED',
+}
+
 export enum NotificationType {
     JOB_APPLICATION_RECEIVED = 'JOB_APPLICATION_RECEIVED',
     JOB_APPLICATION_ACCEPTED = 'JOB_APPLICATION_ACCEPTED',
