@@ -59,3 +59,9 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 /keys
 
 docker-compose.yml
+flyway.conf
+JinVa-PRD.pdf
+.claude/
+# Ignore uploaded files but keep the folder structure via .gitkeep
+/uploads/**/*
+!/uploads/**/.gitkeep

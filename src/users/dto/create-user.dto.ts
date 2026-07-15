@@ -67,6 +67,28 @@ export class CreateUserDto {
     description: 'List of addresses for the user',
     required: false,
   })
+
+  @ApiProperty({ example: "google", description: "The social provider of the user." })
+  @IsOptional()
+  @IsString()
+  socialProvider?: string;
+
+  @ApiProperty({ example: "google-unique-id-12345", description: "The social provider ID of the user." })
+  @IsOptional()
+  @IsString()
+  socialProviderId?: string;
+  
+  @ApiProperty({ example: true, description: "Indicates if the user registered via social login." })
+  @IsOptional()
+  @IsNotEmpty()
+  @IsString()
+  isSocialLogin?: boolean;
+
+  @ApiProperty({ example: "http://example.com/profile.jpg", description: "URL of the user's profile picture." })
+  @IsOptional()
+  @IsString()
+  profilePicture?: string;
+  
   @IsOptional()
   @IsArray()
   @ArrayMinSize(0)

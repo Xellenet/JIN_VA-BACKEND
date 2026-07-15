@@ -2,6 +2,9 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { CreateUserDto } from '@users/dto/create-user.dto';
+import { UserResponseDto } from '@users/dto/user-response.dto';
+import { LoginDto } from './dto/login.dto';
+import { LoginResponseDto } from './dto/login-response.dto';
 
 describe('AuthController', () => {
   let controller: AuthController;
@@ -32,7 +35,7 @@ describe('AuthController', () => {
   describe('registerUser', () => {
     it('should call authService.registerUser and return result', async () => {
       const dto: CreateUserDto = { email: 'test@example.com', password: 'pass' } as CreateUserDto;
-      const expected = { id: 1, email: dto.email };
+      const expected = { id: 1, email: dto.email } as UserResponseDto;
       mockAuthService.registerUser.mockResolvedValueOnce(expected);
 
       const result = await controller.registerUser(dto);
@@ -44,8 +47,8 @@ describe('AuthController', () => {
 
   describe('loginUser', () => {
     it('should call authService.loginUser and return result', async () => {
-      const loginDto = { email: 'test@example.com', password: 'pass' };
-      const expected = { access_token: 'token' };
+      const loginDto: LoginDto = { email: 'test@example.com', password: 'pass' };
+      const expected = { access_token: 'token' } as LoginResponseDto;
       mockAuthService.loginUser.mockResolvedValueOnce(expected);
 
       const result = await controller.loginUser(loginDto);

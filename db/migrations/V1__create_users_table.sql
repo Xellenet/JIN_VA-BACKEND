@@ -1,0 +1,21 @@
+CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    password VARCHAR(255) NOT NULL,
+    username VARCHAR(255),
+    date_of_birth DATE,
+    firstname VARCHAR(255) NOT NULL,
+    lastname VARCHAR(255) NOT NULL,
+    phone_number VARCHAR(255) UNIQUE,
+    verified_at TIMESTAMP,
+    account_verified BOOLEAN,
+    gender VARCHAR(50) NOT NULL,
+    role VARCHAR(50) DEFAULT 'CUSTOMER',
+    profile_picture VARCHAR(255),
+    social_provider VARCHAR(255),
+    social_provider_id VARCHAR(255),
+    is_social_login BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
+    deleted_at TIMESTAMP
+);

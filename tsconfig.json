@@ -17,7 +17,12 @@
     "baseUrl": "./src",
     "paths": {
       "@common/*": ["common/*"],
-      "@users/*": ["users/*"]
+      "@users/*": ["users/*"],
+      "@services/*": ["services/*"],
+      "@jobs/*": ["jobs/*"],
+      "@artisans/*": ["artisans/*"],
+      "@messages/*": ["messages/*"],
+      "@notifications/*": ["notifications/*"]
     },
     "incremental": true,
     "skipLibCheck": true,
@@ -27,6 +32,6 @@
     "strictBindCallApply": false,
     "noFallthroughCasesInSwitch": false
   },
-  "include": ["src/**/*", "typeorm.config.ts"],
+  "include": ["src/**/*", "typeorm.config.ts", "src/**/*.hbs"],
   "exclude": ["node_modules", "dist"]
 }

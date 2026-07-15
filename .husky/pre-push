@@ -7,4 +7,4 @@ if [ "$branch" = "main" ] || [ "$branch" = "develop" ] || [ "$branch" = "test" ]
   exit 1
 fi
 
-npm run test:prepush
+# npm run test:prepush

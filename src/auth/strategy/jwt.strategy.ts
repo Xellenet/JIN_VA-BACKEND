@@ -1,23 +1,27 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, UnauthorizedException } from "@nestjs/common";
 import { PassportStrategy } from "@nestjs/passport";
 import { UsersService } from "@users/users.service";
 import { ExtractJwt, Strategy } from "passport-jwt";
-import { readFileSync } from 'fs';
-import { join } from 'path';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy){
     constructor(private readonly userService: UsersService) {
-    super({
+      super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
-      secretOrKey: readFileSync(join(__dirname, '../../../keys/public.key')),
+      secretOrKey: readFileSync(resolve(process.cwd(), 'keys/public.key'), 'utf8'),
       algorithms: ['RS256'],
+      ignoreExpiration: false,
     });
   }
 
     async validate(payload: any) {
       const user = await this.userService.findUserByEmail(payload.email);
+      if (user?.isBanned) {
+        throw new UnauthorizedException('Your account has been suspended. Contact support for assistance.');
+      }
       return user;
     }
 }

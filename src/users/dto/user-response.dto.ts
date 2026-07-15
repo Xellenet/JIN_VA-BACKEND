@@ -46,6 +46,14 @@ export class UserResponseDto {
   @Expose()
   phoneNumber: string;
 
+  @ApiProperty({ example: 'https://api.example.com/uploads/avatars/abc.jpg', description: 'Profile picture URL', nullable: true })
+  @Expose()
+  profilePicture?: string;
+
+  @ApiProperty({ example: true, description: 'Whether the account email has been verified' })
+  @Expose()
+  accountVerified: boolean;
+
   @ApiProperty({
     description: 'User addresses',
     type: [AddressResponseDto],
@@ -54,4 +62,7 @@ export class UserResponseDto {
   @Expose()
   @Type(() => AddressResponseDto)
   addresses?: AddressResponseDto[];
+
+  @ApiProperty({ example: 'password123', description: 'User password', required: false })
+  password?: string;
 }

@@ -1,18 +1,22 @@
-import { VARIABLES } from "@common/constants/variables.constants";
+import { SUCCESS_MESSAGES } from "@common/constants/success-messages.constants";
 import { ApiProperty } from "@nestjs/swagger";
 import { UserResponseDto } from "@users/dto/user-response.dto";
 import { Expose } from "class-transformer";
 
 export class LoginResponseDto {
-    @ApiProperty({ example: VARIABLES.TOKEN_EXAMPLE, description: 'JWT token for authenticated user' })
+    @ApiProperty({ example: 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...', description: 'JWT access token' })
     @Expose()
     access_token: string;
 
-    @ApiProperty({ example: VARIABLES.TOKEN_EXAMPLE, description: 'Refresh token for obtaining new access tokens' })
+    @ApiProperty({ example: 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...', description: 'Refresh token for obtaining new access tokens' })
     @Expose()
     refresh_token: string;
 
-    @ApiProperty({ example: VARIABLES.USER_LOGGED_IN, description: 'Login success message' })
+    @ApiProperty({ example: '2026-06-16T14:03:21.000Z', description: 'ISO timestamp when the access token expires' })
+    @Expose()
+    expires_at: Date;
+
+    @ApiProperty({ example: SUCCESS_MESSAGES.AUTH.USER_LOGGED_IN, description: 'Login success message' })
     @Expose()
     message: string;
 
