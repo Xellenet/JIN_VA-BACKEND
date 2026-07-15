@@ -5,13 +5,19 @@ import { ExtractJwt, Strategy } from "passport-jwt";
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
+function loadPublicKey(): string {
+  if (process.env.JWT_PUBLIC_KEY) {
+    return process.env.JWT_PUBLIC_KEY.replace(/\\n/g, '\n');
+  }
+  return readFileSync(resolve(process.cwd(), 'keys/public.key'), 'utf8');
+}
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy){
     constructor(private readonly userService: UsersService) {
       super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
-      secretOrKey: readFileSync(resolve(process.cwd(), 'keys/public.key'), 'utf8'),
+      secretOrKey: loadPublicKey(),
       algorithms: ['RS256'],
       ignoreExpiration: false,
     });
