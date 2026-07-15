@@ -40,7 +40,7 @@ async function bootstrap() {
   // Serve uploaded files (e.g. avatars) at /uploads/*
   app.useStaticAssets(join(process.cwd(), 'uploads'), { prefix: '/uploads' });
 
-  app.setGlobalPrefix('api/v1');
+  app.setGlobalPrefix('api/v1', { exclude: ['/'] });
   setupSwagger(app);
   await app.listen(process.env.PORT ?? 8000);
 }
