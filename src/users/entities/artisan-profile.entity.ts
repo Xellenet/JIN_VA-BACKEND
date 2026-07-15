@@ -12,6 +12,7 @@ import {
 } from 'typeorm';
 import { User } from './user.entity';
 import { ServiceEntity } from '@services/entities/service.entity';
+import { PayoutType } from '@common/types/enums';
 
 @Entity('artisan_profiles')
 @Check(`"experience_years" IS NULL OR "experience_years" > 0`)
@@ -63,6 +64,32 @@ export class ArtisanProfile {
 		inverseJoinColumn: { name: 'service_id', referencedColumnName: 'id' },
 	})
 	services!: ServiceEntity[];
+
+	// ─── Paystack payout details ─────────────────────────────────────────────────
+
+	/** 'mobile_money' | 'bank' — set when artisan registers a payout method */
+	@Column({ name: 'payout_type', type: 'varchar', length: 20, nullable: true })
+	payoutType?: PayoutType;
+
+	/** Paystack transfer recipient code — generated when artisan sets up payout */
+	@Column({ name: 'paystack_recipient_code', nullable: true })
+	paystackRecipientCode?: string;
+
+	/** Display name for the payout account */
+	@Column({ name: 'payout_account_name', nullable: true })
+	payoutAccountName?: string;
+
+	/** Phone number (mobile money) or account number (bank) */
+	@Column({ name: 'payout_account_number', nullable: true })
+	payoutAccountNumber?: string;
+
+	/**
+	 * Bank/provider code sent to Paystack.
+	 * Mobile money: 'MTN' | 'VOD' | 'ATL'
+	 * Bank: Paystack bank code (e.g. '030' for GCB)
+	 */
+	@Column({ name: 'payout_bank_code', nullable: true })
+	payoutBankCode?: string;
 
 	@CreateDateColumn({ name: 'created_at', type: 'timestamp' })
 	createdAt!: Date;

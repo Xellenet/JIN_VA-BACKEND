@@ -28,6 +28,7 @@ import { AdminModule } from './admin/admin.module';
 import { UploadsModule } from './uploads/uploads.module';
 import { PushNotificationsModule } from './push-notifications/push-notifications.module';
 import { DisputesModule } from './disputes/disputes.module';
+import { PaymentsModule } from './payments/payments.module';
 
 @Module({
   imports: [
@@ -58,6 +59,7 @@ import { DisputesModule } from './disputes/disputes.module';
     UploadsModule,
     PushNotificationsModule,
     DisputesModule,
+    PaymentsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

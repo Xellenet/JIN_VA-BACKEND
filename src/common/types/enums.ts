@@ -67,6 +67,21 @@ export enum DevicePlatform {
   WEB     = 'web',
 }
 
+export enum PaymentStatus {
+  PENDING          = 'PENDING',          // payment record created, not yet paid
+  HELD             = 'HELD',             // customer paid; funds sitting in platform account
+  PENDING_TRANSFER = 'PENDING_TRANSFER', // payment held but artisan has no payout method yet
+  RELEASED         = 'RELEASED',         // transfer to artisan confirmed
+  REFUNDED         = 'REFUNDED',         // customer refunded
+  CANCELLED        = 'CANCELLED',        // job cancelled before payment
+  FAILED           = 'FAILED',           // payment attempt failed
+}
+
+export enum PayoutType {
+  MOBILE_MONEY = 'mobile_money',
+  BANK         = 'bank',
+}
+
 export enum DisputeStatus {
   OPEN         = 'OPEN',
   UNDER_REVIEW = 'UNDER_REVIEW',
