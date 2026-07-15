@@ -1,11 +1,14 @@
 import {
-  BadRequestException,
   Body,
   Controller,
   Delete,
   Get,
   HttpCode,
   HttpStatus,
+  MaxFileSizeValidator,
+  Param,
+  ParseFilePipe,
+  ParseIntPipe,
   Patch,
   Post,
   Req,
@@ -25,8 +28,7 @@ import {
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { diskStorage } from 'multer';
-import { extname } from 'path';
+import { memoryStorage } from 'multer';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '@common/decorators/roles.decorator';
@@ -39,6 +41,10 @@ import { UpdateCustomerProfileDto } from './dto/update-customer-profile.dto';
 import { UserResponseDto } from './dto/user-response.dto';
 import { ArtisanProfileResponseDto } from './dto/artisan-profile-response.dto';
 import { CustomerProfileResponseDto } from './dto/customer-profile-response.dto';
+import { UploadsService } from '../uploads/uploads.service';
+import { CreateAddressDto } from './dto/create-address.dto';
+import { UpdateAddressDto } from './dto/update-address.dto';
+import { AddressResponseDto } from './dto/address-response.dto';
 
 /**
  * Handles user management and self-service profile operations.
@@ -50,7 +56,10 @@ import { CustomerProfileResponseDto } from './dto/customer-profile-response.dto'
 @ApiTags('Users')
 @Controller('users')
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(
+    private readonly usersService: UsersService,
+    private readonly uploadsService: UploadsService,
+  ) {}
 
   /**
    * Creates a new user account. This is an admin-only operation; regular users
@@ -150,29 +159,18 @@ export class UsersController {
   })
   @ApiOkResponse({ description: 'Profile picture updated successfully', type: UserResponseDto })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
-  @UseInterceptors(
-    FileInterceptor('avatar', {
-      storage: diskStorage({
-        destination: './uploads/avatars',
-        filename: (_req, file, cb) => {
-          const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-          cb(null, `avatar-${unique}${extname(file.originalname)}`);
-        },
+  @UseInterceptors(FileInterceptor('avatar', { storage: memoryStorage() }))
+  async uploadAvatar(
+    @Req() req: any,
+    @UploadedFile(
+      new ParseFilePipe({
+        validators: [new MaxFileSizeValidator({ maxSize: 5 * 1024 * 1024 })],
       }),
-      fileFilter: (_req, file, cb) => {
-        if (!/image\/(jpeg|jpg|png|webp)/.test(file.mimetype)) {
-          return cb(new BadRequestException('Only jpeg, jpg, png, and webp images are allowed.'), false);
-        }
-        cb(null, true);
-      },
-      limits: { fileSize: 5 * 1024 * 1024 },
-    }),
-  )
-  uploadAvatar(@Req() req: any, @UploadedFile() file: Express.Multer.File) {
-    if (!file) {
-      throw new BadRequestException('No file uploaded.');
-    }
-    return this.usersService.updateAvatar(req.user.id, file.filename);
+    )
+    file: Express.Multer.File,
+  ) {
+    const upload = await this.uploadsService.uploadAvatar(file);
+    return this.usersService.updateAvatar(req.user.id, upload.url);
   }
 
   /**
@@ -258,5 +256,43 @@ export class UsersController {
     @Body() updateCustomerProfileDto: UpdateCustomerProfileDto,
   ) {
     return this.usersService.updateCustomerProfile(req.user.id, updateCustomerProfileDto);
+  }
+
+  @Post('me/addresses')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Add a new address to the authenticated user account' })
+  @ApiCreatedResponse({ description: 'Address added successfully', type: AddressResponseDto })
+  @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
+  addAddress(@Req() req: any, @Body() dto: CreateAddressDto) {
+    return this.usersService.addAddress(req.user.id, dto);
+  }
+
+  @Patch('me/addresses/:id')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Update one of the authenticated user\'s addresses' })
+  @ApiOkResponse({ description: 'Address updated successfully', type: AddressResponseDto })
+  @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
+  updateAddress(
+    @Req() req: any,
+    @Param('id', ParseIntPipe) addressId: number,
+    @Body() dto: UpdateAddressDto,
+  ) {
+    return this.usersService.updateAddress(req.user.id, addressId, dto);
+  }
+
+  @Delete('me/addresses/:id')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Remove one of the authenticated user\'s addresses' })
+  @ApiOkResponse({ description: 'Address removed successfully' })
+  @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
+  removeAddress(
+    @Req() req: any,
+    @Param('id', ParseIntPipe) addressId: number,
+  ) {
+    return this.usersService.removeAddress(req.user.id, addressId);
   }
 }

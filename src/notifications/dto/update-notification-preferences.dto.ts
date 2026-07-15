@@ -81,6 +81,30 @@ export class UpdateNotificationPreferencesDto {
   @IsBoolean() @IsOptional()
   profileVerified?: boolean;
 
+  @ApiPropertyOptional({ description: '[Artisan] Verification submission rejected by admin' })
+  @IsBoolean() @IsOptional()
+  verificationRejected?: boolean;
+
+  @ApiPropertyOptional({ description: '[Artisan] New booking request received' })
+  @IsBoolean() @IsOptional()
+  bookingReceived?: boolean;
+
+  @ApiPropertyOptional({ description: '[Artisan] Customer cancelled a confirmed booking' })
+  @IsBoolean() @IsOptional()
+  bookingCancelled?: boolean;
+
+  @ApiPropertyOptional({ description: '[Artisan] Customer marked a booking as completed' })
+  @IsBoolean() @IsOptional()
+  bookingCompletedArtisan?: boolean;
+
+  @ApiPropertyOptional({ description: '[Customer] Artisan confirmed your booking' })
+  @IsBoolean() @IsOptional()
+  bookingConfirmed?: boolean;
+
+  @ApiPropertyOptional({ description: '[Customer] Artisan declined your booking' })
+  @IsBoolean() @IsOptional()
+  bookingDeclined?: boolean;
+
   // ─── Shared ───────────────────────────────────────────────────────────────
   @ApiPropertyOptional({ description: 'New direct message received' })
   @IsBoolean() @IsOptional()

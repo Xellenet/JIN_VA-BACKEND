@@ -92,6 +92,31 @@ export class NotificationPreferences {
   @Column({ name: 'profile_verified', type: 'boolean', default: true })
   profileVerified!: boolean;
 
+  /** Artisan's verification submission was rejected */
+  @Column({ name: 'verification_rejected', type: 'boolean', default: true })
+  verificationRejected!: boolean;
+
+  // ─── Booking notification types ───────────────────────────────────────────
+  /** [Artisan] New booking request received */
+  @Column({ name: 'booking_received', type: 'boolean', default: true })
+  bookingReceived!: boolean;
+
+  /** [Customer] Artisan confirmed a booking */
+  @Column({ name: 'booking_confirmed', type: 'boolean', default: true })
+  bookingConfirmed!: boolean;
+
+  /** [Customer] Artisan declined a booking */
+  @Column({ name: 'booking_declined', type: 'boolean', default: true })
+  bookingDeclined!: boolean;
+
+  /** [Artisan] Customer cancelled a confirmed booking */
+  @Column({ name: 'booking_cancelled', type: 'boolean', default: true })
+  bookingCancelled!: boolean;
+
+  /** [Artisan] Customer marked a booking as completed */
+  @Column({ name: 'booking_completed_artisan', type: 'boolean', default: true })
+  bookingCompletedArtisan!: boolean;
+
   // ─── Shared ───────────────────────────────────────────────────────────────
   @Column({ name: 'message_received', type: 'boolean', default: true })
   messageReceived!: boolean;

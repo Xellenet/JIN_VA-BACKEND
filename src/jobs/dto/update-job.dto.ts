@@ -1,6 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsNumber, IsOptional, IsString, MaxLength, Min } from 'class-validator';
+import { IsDateString, IsISO4217CurrencyCode, IsNumber, IsOptional, IsString, MaxLength, Min } from 'class-validator';
 
 /**
  * Fields a job owner may update on an existing OPEN job.
@@ -52,4 +52,17 @@ export class UpdateJobDto {
   @IsNumber()
   @Type(() => Number)
   longitude?: number;
+
+  @ApiPropertyOptional({
+    example: 'USD',
+    description: 'ISO 4217 currency code for the budget amounts (e.g. GHS, USD, EUR)',
+  })
+  @IsOptional()
+  @IsISO4217CurrencyCode()
+  currency?: string;
+
+  @ApiPropertyOptional({ example: '2026-07-01T00:00:00.000Z', description: 'Revised auto-expire deadline' })
+  @IsOptional()
+  @IsDateString()
+  deadline?: string;
 }

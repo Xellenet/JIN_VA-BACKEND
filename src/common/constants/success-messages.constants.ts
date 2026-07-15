@@ -10,6 +10,9 @@ export const SUCCESS_MESSAGES = {
     UPDATED: 'User profile updated successfully',
     DELETED: 'Account deleted successfully.',
     AVATAR_UPLOADED: 'Profile picture updated successfully.',
+    ADDRESS_ADDED: 'Address added successfully.',
+    ADDRESS_UPDATED: 'Address updated successfully.',
+    ADDRESS_REMOVED: 'Address removed successfully.',
   },
   ARTISAN_PROFILE: {
     RETRIEVED: 'Artisan profile retrieved successfully',
@@ -67,6 +70,21 @@ export const SUCCESS_MESSAGES = {
   NOTIFICATION_PREFERENCES: {
     RETRIEVED: 'Notification preferences retrieved.',
     UPDATED: 'Notification preferences updated.',
+  },
+  AVAILABILITY: {
+    RETRIEVED:      'Availability retrieved successfully.',
+    STATUS_UPDATED: 'Availability status updated.',
+    SLOT_ADDED:     'Availability slot added.',
+    SLOT_UPDATED:   'Availability slot updated.',
+    SLOT_REMOVED:   'Availability slot removed.',
+  },
+  DISPUTE: {
+    RAISED: 'Dispute raised successfully.',
+    RETRIEVED: 'Dispute retrieved successfully.',
+    ALL_RETRIEVED: 'Disputes retrieved successfully.',
+    REVIEW_STARTED: 'Dispute moved to under review.',
+    RESOLVED: 'Dispute resolved successfully.',
+    CLOSED: 'Dispute closed successfully.',
   },
   AUTH: {
     USER_REGISTERED: 'User registered successfully',

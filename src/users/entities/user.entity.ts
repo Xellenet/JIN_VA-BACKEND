@@ -67,6 +67,12 @@ export class User {
   @Column({name: 'is_social_login', default: false})
   isSocialLogin: boolean;
 
+  @Column({ name: 'is_banned', type: 'boolean', default: false })
+  isBanned!: boolean;
+
+  @Column({ name: 'banned_at', type: 'timestamp', nullable: true })
+  bannedAt?: Date;
+
   @OneToMany(() => Address, (address) => address.user, { cascade: true })
   addresses: Address[];
 

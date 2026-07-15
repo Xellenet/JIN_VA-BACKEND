@@ -48,6 +48,10 @@ export class Job {
   @Column({ name: 'budget_max', type: 'decimal', precision: 10, scale: 2, nullable: true })
   budgetMax?: number;
 
+  /** ISO 4217 currency code for budgetMin / budgetMax (e.g. "GHS", "USD", "EUR"). */
+  @Column({ name: 'currency', type: 'varchar', length: 3, default: 'GHS' })
+  currency!: string;
+
   @Column({ type: 'decimal', precision: 10, scale: 2, nullable: true })
   latitude?: number;
 
@@ -68,6 +72,10 @@ export class Job {
   /** Opaque payment-provider intent ID; set when the payment hold is placed. */
   @Column({ name: 'payment_intent_id', type: 'varchar', nullable: true })
   paymentIntentId?: string;
+
+  /** Optional deadline after which the cron job automatically expires the posting. */
+  @Column({ name: 'deadline', type: 'timestamptz', nullable: true })
+  deadline?: Date;
 
   /** Set when the accepted artisan signals the work is done and awaits customer confirmation. */
   @Column({ name: 'completion_requested_at', type: 'timestamp', nullable: true })

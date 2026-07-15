@@ -10,7 +10,10 @@ import { ValidationPipe } from '@nestjs/common';
 import { join } from 'path';
 
 async function bootstrap() {
-  const app = await NestFactory.create<NestExpressApplication>(AppModule, { bufferLogs: true });
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    bufferLogs: true,
+    rawBody: true, // exposes req.rawBody — required for Paystack webhook signature verification
+  });
   const logger = app.get(WINSTON_MODULE_NEST_PROVIDER);
 
   app.useLogger(logger);

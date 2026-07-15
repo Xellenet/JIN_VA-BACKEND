@@ -42,9 +42,13 @@ export class ArtisanPublicResponseDto {
   @Expose()
   experienceYears?: number;
 
-  @ApiPropertyOptional({ example: 45.5, description: 'Hourly rate in platform currency' })
+  @ApiPropertyOptional({ example: 45.5 })
   @Expose()
   hourlyRate?: number;
+
+  @ApiProperty({ example: 'GHS', description: 'ISO 4217 currency code for the hourly rate' })
+  @Expose()
+  currency!: string;
 
   @ApiPropertyOptional({ example: 'Kofi Home Services' })
   @Expose()

@@ -9,10 +9,12 @@ import { UserTokenService } from './token.service';
 import { ArtisanProfile } from './entities/artisan-profile.entity';
 import { CustomerProfile } from './entities/customer-profile.entity';
 import { ServiceEntity } from '@services/entities/service.entity';
+import { UploadsModule } from '../uploads/uploads.module';
 
 @Module({
   imports:[
     TypeOrmModule.forFeature([User, Address, UserToken, ArtisanProfile, CustomerProfile, ServiceEntity]),
+    UploadsModule,
   ],
   controllers: [UsersController],
   providers: [UsersService, UserTokenService],

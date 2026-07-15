@@ -13,8 +13,12 @@ import * as bcrypt from 'bcrypt';
 import { VARIABLES } from '@common/constants/variables.constants';
 import { ArtisanProfile } from './entities/artisan-profile.entity';
 import { CustomerProfile } from './entities/customer-profile.entity';
+import { Address } from './entities/address.entity';
 import { UpdateArtisanProfileDto } from './dto/update-artisan-profile.dto';
 import { UpdateCustomerProfileDto } from './dto/update-customer-profile.dto';
+import { CreateAddressDto } from './dto/create-address.dto';
+import { UpdateAddressDto } from './dto/update-address.dto';
+import { AddressResponseDto } from './dto/address-response.dto';
 import { Role } from '@common/types/enums';
 import { plainToInstance } from 'class-transformer';
 import { ArtisanProfileResponseDto } from './dto/artisan-profile-response.dto';
@@ -33,6 +37,8 @@ export class UsersService {
     private readonly artisanProfilesRepository: Repository<ArtisanProfile>,
     @InjectRepository(CustomerProfile)
     private readonly customerProfilesRepository: Repository<CustomerProfile>,
+    @InjectRepository(Address)
+    private readonly addressesRepository: Repository<Address>,
     @InjectRepository(ServiceEntity)
     private readonly servicesRepository: Repository<ServiceEntity>,
     private readonly userTokenService: UserTokenService,
@@ -176,7 +182,7 @@ export class UsersService {
    * @returns `{ message, data: UserResponseDto }` with the updated profile picture URL.
    * @throws {NotFoundException} When no user with the given ID exists.
    */
-  async updateAvatar(userId: number, filename: string): Promise<{ message: string; data: UserResponseDto }> {
+  async updateAvatar(userId: number, url: string): Promise<{ message: string; data: UserResponseDto }> {
     const user = await this.usersRepository.findOne({
       where: { id: userId },
       relations: ['addresses'],
@@ -184,9 +190,9 @@ export class UsersService {
     if (!user) {
       throw new NotFoundException(`User with ID ${userId} not found`);
     }
-    user.profilePicture = `/uploads/avatars/${filename}`;
+    user.profilePicture = url;
     const saved = await this.usersRepository.save(user);
-    this.logger.log(`User ${userId} updated their avatar to ${filename}`);
+    this.logger.log(`User ${userId} updated their avatar`);
     return {
       message: SUCCESS_MESSAGES.USER.AVATAR_UPLOADED,
       data: plainToInstance(UserResponseDto, saved, { excludeExtraneousValues: true }),
@@ -405,6 +411,52 @@ export class UsersService {
       message: SUCCESS_MESSAGES.CUSTOMER_PROFILE.UPDATED,
       data: this.toCustomerProfileResponse(updated!),
     };
+  }
+
+  async addAddress(
+    userId: number,
+    dto: CreateAddressDto,
+  ): Promise<{ message: string; data: AddressResponseDto }> {
+    const user = await this.usersRepository.findOne({ where: { id: userId } });
+    if (!user) throw new NotFoundException(`User with ID ${userId} not found`);
+
+    const address = this.addressesRepository.create({ ...dto, user });
+    const saved = await this.addressesRepository.save(address);
+    this.logger.log(`User ${userId} added address ${saved.id}`);
+    return {
+      message: SUCCESS_MESSAGES.USER.ADDRESS_ADDED,
+      data: plainToInstance(AddressResponseDto, saved, { excludeExtraneousValues: true }),
+    };
+  }
+
+  async updateAddress(
+    userId: number,
+    addressId: number,
+    dto: UpdateAddressDto,
+  ): Promise<{ message: string; data: AddressResponseDto }> {
+    const address = await this.addressesRepository.findOne({
+      where: { id: addressId, user: { id: userId } },
+    });
+    if (!address) throw new NotFoundException(`Address ${addressId} not found`);
+
+    Object.assign(address, dto);
+    const saved = await this.addressesRepository.save(address);
+    this.logger.log(`User ${userId} updated address ${addressId}`);
+    return {
+      message: SUCCESS_MESSAGES.USER.ADDRESS_UPDATED,
+      data: plainToInstance(AddressResponseDto, saved, { excludeExtraneousValues: true }),
+    };
+  }
+
+  async removeAddress(userId: number, addressId: number): Promise<{ message: string }> {
+    const address = await this.addressesRepository.findOne({
+      where: { id: addressId, user: { id: userId } },
+    });
+    if (!address) throw new NotFoundException(`Address ${addressId} not found`);
+
+    await this.addressesRepository.remove(address);
+    this.logger.log(`User ${userId} removed address ${addressId}`);
+    return { message: SUCCESS_MESSAGES.USER.ADDRESS_REMOVED };
   }
 
   private toArtisanProfileResponse(profile: ArtisanProfile): ArtisanProfileResponseDto {

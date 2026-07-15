@@ -65,6 +65,10 @@ export class JobResponseDto {
   @Expose()
   budgetMax?: number;
 
+  @ApiProperty({ example: 'GHS', description: 'ISO 4217 currency code for budget amounts' })
+  @Expose()
+  currency!: string;
+
   @ApiPropertyOptional({ example: 5.6037 })
   @Expose()
   latitude?: number;
@@ -76,6 +80,10 @@ export class JobResponseDto {
   @ApiProperty({ enum: Status, example: Status.OPEN })
   @Expose()
   status!: Status;
+
+  @ApiPropertyOptional({ description: 'Auto-expire deadline (set by the customer at creation)' })
+  @Expose()
+  deadline?: Date;
 
   @ApiProperty()
   @Expose()

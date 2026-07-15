@@ -62,4 +62,6 @@ docker-compose.yml
 flyway.conf
 JinVa-PRD.pdf
 .claude/
-/uploads
+# Ignore uploaded files but keep the folder structure via .gitkeep
+/uploads/**/*
+!/uploads/**/.gitkeep

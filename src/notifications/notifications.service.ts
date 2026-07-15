@@ -25,6 +25,12 @@ import type {
   MessageReceivedPayload,
   ReviewReceivedPayload,
   ArtisanProfileVerifiedPayload,
+  ArtisanVerificationRejectedPayload,
+  BookingReceivedPayload,
+  BookingConfirmedPayload,
+  BookingDeclinedPayload,
+  BookingCancelledPayload,
+  BookingCompletedPayload,
   SecurityAlertPayload,
 } from '@common/events/app.events';
 
@@ -42,7 +48,9 @@ const CUSTOMER_PREF_KEY: Partial<Record<NotificationType, keyof NotificationPref
   [NotificationType.JOB_STARTED]:              'jobStatusUpdates',
   [NotificationType.JOB_COMPLETION_REQUESTED]: 'jobStatusUpdates',
   [NotificationType.JOB_EXPIRED]:              'jobExpired',
-  [NotificationType.MESSAGE_RECEIVED]:          'messageReceived',
+  [NotificationType.BOOKING_CONFIRMED]:        'bookingConfirmed',
+  [NotificationType.BOOKING_DECLINED]:         'bookingDeclined',
+  [NotificationType.MESSAGE_RECEIVED]:         'messageReceived',
 };
 
 const ARTISAN_PREF_KEY: Partial<Record<NotificationType, keyof NotificationPreferences>> = {
@@ -52,21 +60,27 @@ const ARTISAN_PREF_KEY: Partial<Record<NotificationType, keyof NotificationPrefe
   [NotificationType.JOB_COMPLETED]:             'paymentReleased',
   [NotificationType.JOB_EXPIRED]:               'appliedJobExpired',
   [NotificationType.REVIEW_RECEIVED]:           'reviewsAndRatings',
-  [NotificationType.ARTISAN_PROFILE_VERIFIED]:  'profileVerified',
-  [NotificationType.MESSAGE_RECEIVED]:           'messageReceived',
+  [NotificationType.ARTISAN_PROFILE_VERIFIED]:       'profileVerified',
+  [NotificationType.ARTISAN_VERIFICATION_REJECTED]:  'verificationRejected',
+  [NotificationType.BOOKING_RECEIVED]:               'bookingReceived',
+  [NotificationType.BOOKING_CANCELLED]:              'bookingCancelled',
+  [NotificationType.BOOKING_COMPLETED]:              'bookingCompletedArtisan',
+  [NotificationType.MESSAGE_RECEIVED]:               'messageReceived',
 };
 
 // Fields each role is allowed to update — prevents artisans from setting customer flags
 const CUSTOMER_UPDATABLE = new Set<keyof NotificationPreferences>([
   'bookingConfirmations', 'jobStatusUpdates', 'paymentReceipts',
   'promotionalOffers', 'serviceReminders', 'reviewRequests',
-  'jobExpired', 'messageReceived', 'emailEnabled', 'smsEnabled', 'pushEnabled',
+  'jobExpired', 'bookingConfirmed', 'bookingDeclined',
+  'messageReceived', 'emailEnabled', 'smsEnabled', 'pushEnabled',
 ]);
 
 const ARTISAN_UPDATABLE = new Set<keyof NotificationPreferences>([
   'newJobOpportunities', 'applicationUpdates', 'artisanJobUpdates',
   'paymentReleased', 'reviewsAndRatings', 'artisanPromotions',
-  'applicationRejected', 'appliedJobExpired', 'profileVerified',
+  'applicationRejected', 'appliedJobExpired', 'profileVerified', 'verificationRejected',
+  'bookingReceived', 'bookingCancelled', 'bookingCompletedArtisan',
   'messageReceived', 'emailEnabled', 'smsEnabled', 'pushEnabled',
 ]);
 
@@ -211,6 +225,71 @@ export class NotificationsService {
       NotificationType.ARTISAN_PROFILE_VERIFIED,
       'Profile Verified',
       'Your artisan profile has been verified. You now have full access to the platform.',
+    );
+  }
+
+  @OnEvent(APP_EVENTS.BOOKING_RECEIVED)
+  async handleBookingReceived(payload: BookingReceivedPayload) {
+    await this.persist(
+      payload.artisanUserId,
+      NotificationType.BOOKING_RECEIVED,
+      'New Booking Request',
+      `${payload.customerName} has requested a booking on ${payload.scheduledDate}.`,
+      { bookingId: payload.bookingId },
+    );
+  }
+
+  @OnEvent(APP_EVENTS.BOOKING_CONFIRMED)
+  async handleBookingConfirmed(payload: BookingConfirmedPayload) {
+    await this.persist(
+      payload.customerId,
+      NotificationType.BOOKING_CONFIRMED,
+      'Booking Confirmed',
+      `Your booking on ${payload.scheduledDate} has been confirmed by ${payload.artisanName}.`,
+      { bookingId: payload.bookingId },
+    );
+  }
+
+  @OnEvent(APP_EVENTS.BOOKING_DECLINED)
+  async handleBookingDeclined(payload: BookingDeclinedPayload) {
+    await this.persist(
+      payload.customerId,
+      NotificationType.BOOKING_DECLINED,
+      'Booking Declined',
+      `Your booking request on ${payload.scheduledDate} was declined by ${payload.artisanName}.`,
+      { bookingId: payload.bookingId },
+    );
+  }
+
+  @OnEvent(APP_EVENTS.BOOKING_CANCELLED)
+  async handleBookingCancelled(payload: BookingCancelledPayload) {
+    await this.persist(
+      payload.artisanUserId,
+      NotificationType.BOOKING_CANCELLED,
+      'Booking Cancelled',
+      `${payload.customerName} cancelled the booking on ${payload.scheduledDate}.`,
+      { bookingId: payload.bookingId },
+    );
+  }
+
+  @OnEvent(APP_EVENTS.BOOKING_COMPLETED)
+  async handleBookingCompleted(payload: BookingCompletedPayload) {
+    await this.persist(
+      payload.artisanUserId,
+      NotificationType.BOOKING_COMPLETED,
+      'Booking Marked Complete',
+      `The booking on ${payload.scheduledDate} was marked as completed by the customer.`,
+      { bookingId: payload.bookingId },
+    );
+  }
+
+  @OnEvent(APP_EVENTS.ARTISAN_VERIFICATION_REJECTED)
+  async handleVerificationRejected(payload: ArtisanVerificationRejectedPayload) {
+    await this.persist(
+      payload.artisanUserId,
+      NotificationType.ARTISAN_VERIFICATION_REJECTED,
+      'Verification Submission Rejected',
+      `Your identity verification was not approved. Reason: ${payload.reason}. Please resubmit with correct documents.`,
     );
   }
 

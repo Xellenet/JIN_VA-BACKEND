@@ -9,7 +9,7 @@ export class MailTemplateService {
   private readonly cache = new Map<string, Handlebars.TemplateDelegate>();
 
   renderTemplate(eventType: string, data: Record<string, any>) {
-    const name = eventType.replace('.', '-'); // e.g. user.registered → user-registered
+    const name = eventType.replace(/\./g, '-'); // e.g. artisan.profile.verified → artisan-profile-verified
     const templatePath =
     fs.existsSync(path.join(__dirname, 'templates', `${name}.hbs`))
         ? path.join(__dirname, 'templates', `${name}.hbs`)
@@ -49,6 +49,20 @@ export class MailTemplateService {
         return 'Your Password Has Been Reset';
       case 'user.password-changed':
         return 'Your Password Has Been Changed';
+      case 'artisan.profile.verified':
+        return 'Your Identity Has Been Verified';
+      case 'artisan.verification.rejected':
+        return 'Verification Submission Update';
+      case 'booking.received':
+        return 'New Booking Request';
+      case 'booking.confirmed':
+        return 'Booking Confirmed';
+      case 'booking.declined':
+        return 'Booking Declined';
+      case 'booking.cancelled':
+        return 'Booking Cancelled';
+      case 'booking.completed':
+        return 'Booking Marked as Completed';
       default:
         return 'Notification from JinVa';
     }

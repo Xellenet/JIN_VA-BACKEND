@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, UnauthorizedException } from "@nestjs/common";
 import { PassportStrategy } from "@nestjs/passport";
 import { UsersService } from "@users/users.service";
 import { ExtractJwt, Strategy } from "passport-jwt";
@@ -19,6 +19,9 @@ export class JwtStrategy extends PassportStrategy(Strategy){
 
     async validate(payload: any) {
       const user = await this.userService.findUserByEmail(payload.email);
+      if (user?.isBanned) {
+        throw new UnauthorizedException('Your account has been suspended. Contact support for assistance.');
+      }
       return user;
     }
 }
