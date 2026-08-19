@@ -29,7 +29,7 @@ export class User {
   // here is also the G10 signal that this account has no usable password and
   // must never reach `bcrypt.compare`; it stops being null the moment the
   // user sets a real password (change-password, or forgot/reset-password).
-  @Column({ select: false, nullable: true })
+  @Column({ type: 'varchar', select: false, nullable: true })
   @Exclude()
   password: string | null;
 
