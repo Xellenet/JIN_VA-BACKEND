@@ -32,7 +32,10 @@ export class Booking {
   @RelationId((b: Booking) => b.artisanProfile)
   artisanProfileId!: number;
 
-  @ManyToOne(() => ArtisanAvailability, { nullable: true, onDelete: 'SET NULL' })
+  @ManyToOne(() => ArtisanAvailability, {
+    nullable: true,
+    onDelete: 'SET NULL',
+  })
   @JoinColumn({ name: 'availability_slot_id' })
   availabilitySlot?: ArtisanAvailability;
 
@@ -61,7 +64,13 @@ export class Booking {
   artisanNotes?: string;
 
   /** Agreed service price quoted at booking time */
-  @Column({ name: 'agreed_price', type: 'decimal', precision: 10, scale: 2, nullable: true })
+  @Column({
+    name: 'agreed_price',
+    type: 'decimal',
+    precision: 10,
+    scale: 2,
+    nullable: true,
+  })
   agreedPrice?: number;
 
   /** ISO 4217 currency code for agreedPrice */

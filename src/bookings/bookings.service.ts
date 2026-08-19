@@ -25,7 +25,12 @@ import type {
   BookingReceivedPayload,
 } from '@common/events/app.events';
 
-type Pagination = { total: number; page: number; limit: number; totalPages: number };
+type Pagination = {
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+};
 
 @Injectable()
 export class BookingsService {
@@ -49,9 +54,14 @@ export class BookingsService {
     let slot: ArtisanAvailability | undefined;
     if (dto.availabilitySlotId) {
       const found = await this.slotRepo.findOne({
-        where: { id: dto.availabilitySlotId, artisanProfileId: dto.artisanProfileId, isActive: true },
+        where: {
+          id: dto.availabilitySlotId,
+          artisanProfileId: dto.artisanProfileId,
+          isActive: true,
+        },
       });
-      if (!found) throw new NotFoundException('Availability slot not found or inactive.');
+      if (!found)
+        throw new NotFoundException('Availability slot not found or inactive.');
       slot = found;
     }
 
@@ -60,17 +70,17 @@ export class BookingsService {
     }
 
     const booking = this.repo.create({
-      customer:          { id: customerId } as any,
-      artisanProfile:    profile,
-      artisanProfileId:  profile.id,
-      availabilitySlot:  slot,
+      customer: { id: customerId } as any,
+      artisanProfile: profile,
+      artisanProfileId: profile.id,
+      availabilitySlot: slot,
       availabilitySlotId: slot?.id,
-      scheduledDate:     dto.scheduledDate,
-      startTime:         dto.startTime,
-      endTime:           dto.endTime,
-      notes:             dto.notes,
-      agreedPrice:       dto.agreedPrice,
-      currency:          dto.currency ?? 'GHS',
+      scheduledDate: dto.scheduledDate,
+      startTime: dto.startTime,
+      endTime: dto.endTime,
+      notes: dto.notes,
+      agreedPrice: dto.agreedPrice,
+      currency: dto.currency ?? 'GHS',
     });
 
     const saved = await this.repo.save(booking);
@@ -78,14 +88,16 @@ export class BookingsService {
 
     this.eventEmitter.emit(APP_EVENTS.BOOKING_RECEIVED, {
       artisanUserId: profile.user.id,
-      customerName:  `${loaded.customer.firstname} ${loaded.customer.lastname}`,
+      customerName: `${loaded.customer.firstname} ${loaded.customer.lastname}`,
       scheduledDate: dto.scheduledDate,
-      bookingId:     saved.id,
+      bookingId: saved.id,
     } as BookingReceivedPayload);
 
     return {
       message: 'Booking request sent. Awaiting artisan confirmation.',
-      data: plainToInstance(BookingResponseDto, loaded, { excludeExtraneousValues: true }),
+      data: plainToInstance(BookingResponseDto, loaded, {
+        excludeExtraneousValues: true,
+      }),
     };
   }
 
@@ -94,7 +106,9 @@ export class BookingsService {
   }
 
   async getArtisanBookings(artisanUserId: number, query: GetBookingsQueryDto) {
-    const profile = await this.profileRepo.findOne({ where: { user: { id: artisanUserId } } });
+    const profile = await this.profileRepo.findOne({
+      where: { user: { id: artisanUserId } },
+    });
     if (!profile) throw new NotFoundException('Artisan profile not found.');
     return this.list({ artisanProfileId: profile.id }, query);
   }
@@ -102,63 +116,97 @@ export class BookingsService {
   async findOne(bookingId: number, requestUserId: number) {
     const booking = await this.loadOrFail(bookingId);
     const isCustomer = booking.customerId === requestUserId;
-    const isArtisan  = booking.artisanProfile?.user?.id === requestUserId;
-    if (!isCustomer && !isArtisan) throw new ForbiddenException('Access denied.');
+    const isArtisan = booking.artisanProfile?.user?.id === requestUserId;
+    if (!isCustomer && !isArtisan)
+      throw new ForbiddenException('Access denied.');
     return {
       message: 'Booking retrieved.',
-      data: plainToInstance(BookingResponseDto, booking, { excludeExtraneousValues: true }),
+      data: plainToInstance(BookingResponseDto, booking, {
+        excludeExtraneousValues: true,
+      }),
     };
   }
 
-  async confirm(artisanUserId: number, bookingId: number, dto: RespondBookingDto) {
-    const booking = await this.loadOrFail(bookingId, ['artisanProfile', 'artisanProfile.user', 'customer']);
+  async confirm(
+    artisanUserId: number,
+    bookingId: number,
+    dto: RespondBookingDto,
+  ) {
+    const booking = await this.loadOrFail(bookingId, [
+      'artisanProfile',
+      'artisanProfile.user',
+      'customer',
+    ]);
     this.assertArtisanOwner(booking, artisanUserId);
     if (booking.status !== BookingStatus.PENDING) {
-      throw new BadRequestException(`Cannot confirm a booking with status ${booking.status}.`);
+      throw new BadRequestException(
+        `Cannot confirm a booking with status ${booking.status}.`,
+      );
     }
-    booking.status      = BookingStatus.CONFIRMED;
+    booking.status = BookingStatus.CONFIRMED;
     booking.artisanNotes = dto.artisanNotes;
     await this.repo.save(booking);
 
     this.eventEmitter.emit(APP_EVENTS.BOOKING_CONFIRMED, {
-      customerId:    booking.customerId,
-      artisanName:   booking.artisanProfile.businessName ?? `${booking.artisanProfile.user.firstname} ${booking.artisanProfile.user.lastname}`,
+      customerId: booking.customerId,
+      artisanName:
+        booking.artisanProfile.businessName ??
+        `${booking.artisanProfile.user.firstname} ${booking.artisanProfile.user.lastname}`,
       scheduledDate: booking.scheduledDate,
-      bookingId:     booking.id,
+      bookingId: booking.id,
     } as BookingConfirmedPayload);
 
     return { message: 'Booking confirmed.' };
   }
 
-  async decline(artisanUserId: number, bookingId: number, dto: RespondBookingDto) {
-    const booking = await this.loadOrFail(bookingId, ['artisanProfile', 'artisanProfile.user', 'customer']);
+  async decline(
+    artisanUserId: number,
+    bookingId: number,
+    dto: RespondBookingDto,
+  ) {
+    const booking = await this.loadOrFail(bookingId, [
+      'artisanProfile',
+      'artisanProfile.user',
+      'customer',
+    ]);
     this.assertArtisanOwner(booking, artisanUserId);
     if (booking.status !== BookingStatus.PENDING) {
-      throw new BadRequestException(`Cannot decline a booking with status ${booking.status}.`);
+      throw new BadRequestException(
+        `Cannot decline a booking with status ${booking.status}.`,
+      );
     }
-    booking.status       = BookingStatus.DECLINED;
+    booking.status = BookingStatus.DECLINED;
     booking.artisanNotes = dto.artisanNotes;
     await this.repo.save(booking);
 
     this.eventEmitter.emit(APP_EVENTS.BOOKING_DECLINED, {
-      customerId:    booking.customerId,
-      artisanName:   booking.artisanProfile.businessName ?? `${booking.artisanProfile.user.firstname} ${booking.artisanProfile.user.lastname}`,
+      customerId: booking.customerId,
+      artisanName:
+        booking.artisanProfile.businessName ??
+        `${booking.artisanProfile.user.firstname} ${booking.artisanProfile.user.lastname}`,
       scheduledDate: booking.scheduledDate,
-      bookingId:     booking.id,
+      bookingId: booking.id,
     } as BookingDeclinedPayload);
 
     return { message: 'Booking declined.' };
   }
 
   async cancel(customerId: number, bookingId: number) {
-    const booking = await this.loadOrFail(bookingId, ['artisanProfile', 'artisanProfile.user', 'customer']);
-    if (booking.customerId !== customerId) throw new ForbiddenException('Access denied.');
+    const booking = await this.loadOrFail(bookingId, [
+      'artisanProfile',
+      'artisanProfile.user',
+      'customer',
+    ]);
+    if (booking.customerId !== customerId)
+      throw new ForbiddenException('Access denied.');
     if (
       booking.status === BookingStatus.COMPLETED ||
       booking.status === BookingStatus.CANCELLED ||
       booking.status === BookingStatus.DECLINED
     ) {
-      throw new BadRequestException(`Cannot cancel a booking with status ${booking.status}.`);
+      throw new BadRequestException(
+        `Cannot cancel a booking with status ${booking.status}.`,
+      );
     }
     const wasConfirmed = booking.status === BookingStatus.CONFIRMED;
     booking.status = BookingStatus.CANCELLED;
@@ -167,9 +215,9 @@ export class BookingsService {
     if (wasConfirmed) {
       this.eventEmitter.emit(APP_EVENTS.BOOKING_CANCELLED, {
         artisanUserId: booking.artisanProfile.user.id,
-        customerName:  `${booking.customer.firstname} ${booking.customer.lastname}`,
+        customerName: `${booking.customer.firstname} ${booking.customer.lastname}`,
         scheduledDate: booking.scheduledDate,
-        bookingId:     booking.id,
+        bookingId: booking.id,
       } as BookingCancelledPayload);
     }
 
@@ -177,10 +225,16 @@ export class BookingsService {
   }
 
   async complete(customerId: number, bookingId: number) {
-    const booking = await this.loadOrFail(bookingId, ['artisanProfile', 'artisanProfile.user']);
-    if (booking.customerId !== customerId) throw new ForbiddenException('Access denied.');
+    const booking = await this.loadOrFail(bookingId, [
+      'artisanProfile',
+      'artisanProfile.user',
+    ]);
+    if (booking.customerId !== customerId)
+      throw new ForbiddenException('Access denied.');
     if (booking.status !== BookingStatus.CONFIRMED) {
-      throw new BadRequestException('Only CONFIRMED bookings can be marked as completed.');
+      throw new BadRequestException(
+        'Only CONFIRMED bookings can be marked as completed.',
+      );
     }
     booking.status = BookingStatus.COMPLETED;
     await this.repo.save(booking);
@@ -188,7 +242,7 @@ export class BookingsService {
     this.eventEmitter.emit(APP_EVENTS.BOOKING_COMPLETED, {
       artisanUserId: booking.artisanProfile.user.id,
       scheduledDate: booking.scheduledDate,
-      bookingId:     booking.id,
+      bookingId: booking.id,
     } as BookingCompletedPayload);
 
     return { message: 'Booking marked as completed.' };
@@ -198,7 +252,7 @@ export class BookingsService {
     filter: { customerId?: number; artisanProfileId?: number },
     query: GetBookingsQueryDto,
   ) {
-    const page  = query.page  ?? 1;
+    const page = query.page ?? 1;
     const limit = query.limit ?? 20;
 
     const qb = this.repo
@@ -209,20 +263,41 @@ export class BookingsService {
       .leftJoinAndSelect('b.availabilitySlot', 'availabilitySlot')
       .orderBy('b.scheduledDate', 'DESC');
 
-    if (filter.customerId)      qb.andWhere('b.customerId = :id',          { id: filter.customerId });
-    if (filter.artisanProfileId) qb.andWhere('b.artisanProfileId = :id',   { id: filter.artisanProfileId });
-    if (query.status)            qb.andWhere('b.status = :status',          { status: query.status });
+    if (filter.customerId)
+      qb.andWhere('b.customerId = :id', { id: filter.customerId });
+    if (filter.artisanProfileId)
+      qb.andWhere('b.artisanProfileId = :id', { id: filter.artisanProfileId });
+    if (query.status)
+      qb.andWhere('b.status = :status', { status: query.status });
 
-    const [records, total] = await qb.skip((page - 1) * limit).take(limit).getManyAndCount();
+    const [records, total] = await qb
+      .skip((page - 1) * limit)
+      .take(limit)
+      .getManyAndCount();
 
     return {
       message: 'Bookings retrieved.',
-      data:    plainToInstance(BookingResponseDto, records, { excludeExtraneousValues: true }),
-      pagination: { total, page, limit, totalPages: Math.ceil(total / limit) } as Pagination,
+      data: plainToInstance(BookingResponseDto, records, {
+        excludeExtraneousValues: true,
+      }),
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      } as Pagination,
     };
   }
 
-  private async loadOrFail(id: number, relations: string[] = ['customer', 'artisanProfile', 'artisanProfile.user', 'availabilitySlot']): Promise<Booking> {
+  private async loadOrFail(
+    id: number,
+    relations: string[] = [
+      'customer',
+      'artisanProfile',
+      'artisanProfile.user',
+      'availabilitySlot',
+    ],
+  ): Promise<Booking> {
     const booking = await this.repo.findOne({ where: { id }, relations });
     if (!booking) throw new NotFoundException('Booking not found.');
     return booking;

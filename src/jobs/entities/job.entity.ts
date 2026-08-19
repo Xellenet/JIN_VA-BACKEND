@@ -42,10 +42,22 @@ export class Job {
   @Column()
   location!: string;
 
-  @Column({ name: 'budget_min', type: 'decimal', precision: 10, scale: 2, nullable: true })
+  @Column({
+    name: 'budget_min',
+    type: 'decimal',
+    precision: 10,
+    scale: 2,
+    nullable: true,
+  })
   budgetMin?: number;
 
-  @Column({ name: 'budget_max', type: 'decimal', precision: 10, scale: 2, nullable: true })
+  @Column({
+    name: 'budget_max',
+    type: 'decimal',
+    precision: 10,
+    scale: 2,
+    nullable: true,
+  })
   budgetMax?: number;
 
   /** ISO 4217 currency code for budgetMin / budgetMax (e.g. "GHS", "USD", "EUR"). */
@@ -78,7 +90,11 @@ export class Job {
   deadline?: Date;
 
   /** Set when the accepted artisan signals the work is done and awaits customer confirmation. */
-  @Column({ name: 'completion_requested_at', type: 'timestamp', nullable: true })
+  @Column({
+    name: 'completion_requested_at',
+    type: 'timestamp',
+    nullable: true,
+  })
   completionRequestedAt?: Date;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamp' })

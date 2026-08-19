@@ -1,11 +1,15 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class UpdateNotificationPreferences1782400000000 implements MigrationInterface {
+export class UpdateNotificationPreferences1782400000000
+  implements MigrationInterface
+{
   name = 'UpdateNotificationPreferences1782400000000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     // Drop the old table created by the previous migration (no production data yet)
-    await queryRunner.query(`ALTER TABLE "notification_preferences" DROP CONSTRAINT IF EXISTS "FK_notification_preferences_user"`);
+    await queryRunner.query(
+      `ALTER TABLE "notification_preferences" DROP CONSTRAINT IF EXISTS "FK_notification_preferences_user"`,
+    );
     await queryRunner.query(`DROP TABLE IF EXISTS "notification_preferences"`);
 
     await queryRunner.query(`
@@ -46,7 +50,9 @@ export class UpdateNotificationPreferences1782400000000 implements MigrationInte
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(`ALTER TABLE "notification_preferences" DROP CONSTRAINT "FK_notification_preferences_user"`);
+    await queryRunner.query(
+      `ALTER TABLE "notification_preferences" DROP CONSTRAINT "FK_notification_preferences_user"`,
+    );
     await queryRunner.query(`DROP TABLE "notification_preferences"`);
   }
 }

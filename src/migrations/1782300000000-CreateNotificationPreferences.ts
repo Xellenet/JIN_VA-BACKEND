@@ -1,6 +1,8 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class CreateNotificationPreferences1782300000000 implements MigrationInterface {
+export class CreateNotificationPreferences1782300000000
+  implements MigrationInterface
+{
   name = 'CreateNotificationPreferences1782300000000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
@@ -46,7 +48,9 @@ export class CreateNotificationPreferences1782300000000 implements MigrationInte
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(`ALTER TABLE "notification_preferences" DROP CONSTRAINT "FK_notification_preferences_user"`);
+    await queryRunner.query(
+      `ALTER TABLE "notification_preferences" DROP CONSTRAINT "FK_notification_preferences_user"`,
+    );
     await queryRunner.query(`DROP TABLE "notification_preferences"`);
   }
 }

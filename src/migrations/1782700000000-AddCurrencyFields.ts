@@ -18,7 +18,11 @@ export class AddCurrencyFields1782700000000 implements MigrationInterface {
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(`ALTER TABLE "artisan_profiles" DROP COLUMN IF EXISTS "currency"`);
-    await queryRunner.query(`ALTER TABLE "jobs" DROP COLUMN IF EXISTS "currency"`);
+    await queryRunner.query(
+      `ALTER TABLE "artisan_profiles" DROP COLUMN IF EXISTS "currency"`,
+    );
+    await queryRunner.query(
+      `ALTER TABLE "jobs" DROP COLUMN IF EXISTS "currency"`,
+    );
   }
 }

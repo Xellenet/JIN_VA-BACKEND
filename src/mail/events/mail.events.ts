@@ -26,8 +26,6 @@ export interface WelcomeUserPayload {
   firstname: string;
 }
 
-
-
 export interface PasswordResetPayload {
   email: string;
   firstname: string;

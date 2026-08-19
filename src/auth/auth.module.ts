@@ -16,46 +16,44 @@ import { OAuthStateService } from './oauth-state.service';
 function loadKey(envVar: string, filePath: string): string {
   if (process.env[envVar]) {
     // Render stores env vars as-is; handle both real newlines and escaped \n
-    return process.env[envVar]!.replace(/\\n/g, '\n');
+    return process.env[envVar].replace(/\\n/g, '\n');
   }
   return readFileSync(resolve(process.cwd(), filePath), 'utf8');
 }
 
 const privateKey = loadKey('JWT_PRIVATE_KEY', 'keys/private.key');
-const publicKey  = loadKey('JWT_PUBLIC_KEY',  'keys/public.key');
+const publicKey = loadKey('JWT_PUBLIC_KEY', 'keys/public.key');
 
 @Module({
+  imports: [
+    UsersModule,
+    MailModule,
+    PassportModule,
 
-    imports:[
-        UsersModule,
-        MailModule,
-        PassportModule,
+    JwtModule.register({
+      global: true,
+      privateKey,
+      publicKey,
 
-        JwtModule.register({
-            global: true,
-            privateKey,
-            publicKey,
-            
-            signOptions: {
-                algorithm: 'RS256',
-            },
-        }),
-        HttpModule
-    ],
-    controllers: [AuthController],
-    providers: [
-        AuthService, 
-        JwtStrategy,
-        OAuthStateService,
-        SocialAuthStrategyFactory,
-        GoogleAuthStrategy,
-
-    ],
-    exports: [
-        AuthService, 
-        JwtModule, 
-        SocialAuthStrategyFactory, 
-        OAuthStateService
-    ],
+      signOptions: {
+        algorithm: 'RS256',
+      },
+    }),
+    HttpModule,
+  ],
+  controllers: [AuthController],
+  providers: [
+    AuthService,
+    JwtStrategy,
+    OAuthStateService,
+    SocialAuthStrategyFactory,
+    GoogleAuthStrategy,
+  ],
+  exports: [
+    AuthService,
+    JwtModule,
+    SocialAuthStrategyFactory,
+    OAuthStateService,
+  ],
 })
 export class AuthModule {}

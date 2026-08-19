@@ -45,9 +45,11 @@ export const SUCCESS_MESSAGES = {
     DELETED: 'Job deleted successfully',
     APPLICATION_SUBMITTED: 'Application submitted successfully.',
     APPLICATIONS_RETRIEVED: 'Applications retrieved successfully.',
-    APPLICATION_ACCEPTED: 'Application accepted. Job is now pending artisan start.',
+    APPLICATION_ACCEPTED:
+      'Application accepted. Job is now pending artisan start.',
     STARTED: 'Job started. Work is now in progress.',
-    COMPLETION_REQUESTED: 'Completion request submitted. Awaiting customer confirmation.',
+    COMPLETION_REQUESTED:
+      'Completion request submitted. Awaiting customer confirmation.',
     CONFIRMED: 'Job confirmed as complete. Payment has been released.',
     CANCELLED: 'Job cancelled successfully.',
   },
@@ -72,11 +74,11 @@ export const SUCCESS_MESSAGES = {
     UPDATED: 'Notification preferences updated.',
   },
   AVAILABILITY: {
-    RETRIEVED:      'Availability retrieved successfully.',
+    RETRIEVED: 'Availability retrieved successfully.',
     STATUS_UPDATED: 'Availability status updated.',
-    SLOT_ADDED:     'Availability slot added.',
-    SLOT_UPDATED:   'Availability slot updated.',
-    SLOT_REMOVED:   'Availability slot removed.',
+    SLOT_ADDED: 'Availability slot added.',
+    SLOT_UPDATED: 'Availability slot updated.',
+    SLOT_REMOVED: 'Availability slot removed.',
   },
   DISPUTE: {
     RAISED: 'Dispute raised successfully.',
@@ -90,9 +92,14 @@ export const SUCCESS_MESSAGES = {
     USER_REGISTERED: 'User registered successfully',
     USER_LOGGED_IN: 'User logged in successfully',
     EMAIL_VERIFIED: 'Email verified successfully',
-    PASSWORD_RESET_EMAIL_SENT: 'Password reset link sent to your email',
+    PASSWORD_RESET_EMAIL_SENT:
+      'If an account with that email exists, a password reset link has been sent.',
     PASSWORD_RESET_SUCCESS: 'Password reset successfully',
     TOKENS_REFRESHED: 'Tokens refreshed successfully',
     PASSWORD_CHANGED: 'Password changed successfully',
+    VERIFICATION_EMAIL_RESENT:
+      'If an account with that email exists and is not yet verified, a new verification link has been sent.',
+    ACCOUNT_RESTORED: 'Account restored successfully. You can now log in.',
+    LOGGED_OUT: 'User logged out successfully',
   },
 };

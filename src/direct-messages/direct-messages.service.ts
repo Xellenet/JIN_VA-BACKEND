@@ -48,7 +48,11 @@ export class DirectMessagesService {
       Array.from(seen.entries()).map(async ([contactId, dm]) => {
         const contact = dm.sender.id === userId ? dm.receiver : dm.sender;
         const unreadCount = await this.dmRepo.count({
-          where: { sender: { id: contactId }, receiver: { id: userId }, isRead: false },
+          where: {
+            sender: { id: contactId },
+            receiver: { id: userId },
+            isRead: false,
+          },
         });
         return {
           contact: {
@@ -68,7 +72,12 @@ export class DirectMessagesService {
     return conversations;
   }
 
-  async getMessages(currentUserId: number, otherUserId: number, page = 1, limit = 30) {
+  async getMessages(
+    currentUserId: number,
+    otherUserId: number,
+    page = 1,
+    limit = 30,
+  ) {
     const other = await this.userRepo.findOne({ where: { id: otherUserId } });
     if (!other) throw new NotFoundException('User not found');
 
@@ -97,7 +106,11 @@ export class DirectMessagesService {
     return { items, total, page, limit };
   }
 
-  async sendMessage(senderId: number, receiverId: number, dto: SendDirectMessageDto) {
+  async sendMessage(
+    senderId: number,
+    receiverId: number,
+    dto: SendDirectMessageDto,
+  ) {
     const [sender, receiver] = await Promise.all([
       this.userRepo.findOne({ where: { id: senderId } }),
       this.userRepo.findOne({ where: { id: receiverId } }),
@@ -106,7 +119,11 @@ export class DirectMessagesService {
     if (!sender) throw new NotFoundException('Sender not found');
 
     // Use ID references so create() resolves the single-entity overload correctly
-    const dm = this.dmRepo.create({ sender: { id: senderId }, receiver: { id: receiverId }, content: dto.content });
+    const dm = this.dmRepo.create({
+      sender: { id: senderId },
+      receiver: { id: receiverId },
+      content: dto.content,
+    });
     const saved = await this.dmRepo.save(dm);
 
     return {

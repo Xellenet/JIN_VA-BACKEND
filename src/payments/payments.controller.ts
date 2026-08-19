@@ -35,7 +35,10 @@ export class PaymentsController {
   @ApiOperation({ summary: 'Paystack webhook receiver — do not call directly' })
   webhook(@Headers('x-paystack-signature') signature: string, @Req() req: any) {
     const rawBody: Buffer = req.rawBody;
-    return this.paymentsService.processWebhook(rawBody?.toString() ?? '', signature ?? '');
+    return this.paymentsService.processWebhook(
+      rawBody?.toString() ?? '',
+      signature ?? '',
+    );
   }
 
   // ─── Customer routes ──────────────────────────────────────────────────────────
@@ -64,7 +67,9 @@ export class PaymentsController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ARTISAN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Register or update mobile money / bank account for payouts' })
+  @ApiOperation({
+    summary: 'Register or update mobile money / bank account for payouts',
+  })
   setupPayout(@Req() req: any, @Body() dto: SetupPayoutMethodDto) {
     return this.paymentsService.setupPayoutMethod(req.user.id, dto);
   }
@@ -73,7 +78,9 @@ export class PaymentsController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ARTISAN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Retry a payout that was blocked by missing payout method' })
+  @ApiOperation({
+    summary: 'Retry a payout that was blocked by missing payout method',
+  })
   retryTransfer(@Param('jobId', ParseIntPipe) jobId: number) {
     return this.paymentsService.retryPendingTransfer(jobId);
   }
@@ -96,7 +103,9 @@ export class PaymentsController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Admin: issue a (partial) refund on any HELD payment' })
+  @ApiOperation({
+    summary: 'Admin: issue a (partial) refund on any HELD payment',
+  })
   adminRefund(
     @Param('paymentId', ParseIntPipe) paymentId: number,
     @Body() dto: AdminRefundDto,

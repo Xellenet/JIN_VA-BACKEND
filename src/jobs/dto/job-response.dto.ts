@@ -39,7 +39,9 @@ export class JobResponseDto {
   @Expose()
   title!: string;
 
-  @ApiPropertyOptional({ example: 'The kitchen faucet has been leaking for two days.' })
+  @ApiPropertyOptional({
+    example: 'The kitchen faucet has been leaking for two days.',
+  })
   @Expose()
   description?: string;
 
@@ -65,7 +67,10 @@ export class JobResponseDto {
   @Expose()
   budgetMax?: number;
 
-  @ApiProperty({ example: 'GHS', description: 'ISO 4217 currency code for budget amounts' })
+  @ApiProperty({
+    example: 'GHS',
+    description: 'ISO 4217 currency code for budget amounts',
+  })
   @Expose()
   currency!: string;
 
@@ -81,7 +86,9 @@ export class JobResponseDto {
   @Expose()
   status!: Status;
 
-  @ApiPropertyOptional({ description: 'Auto-expire deadline (set by the customer at creation)' })
+  @ApiPropertyOptional({
+    description: 'Auto-expire deadline (set by the customer at creation)',
+  })
   @Expose()
   deadline?: Date;
 

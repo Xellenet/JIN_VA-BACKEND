@@ -20,7 +20,12 @@ import { SUCCESS_MESSAGES } from '@common/constants/success-messages.constants';
 import { ERROR_MESSAGES } from '@common/constants/error-messages.constants';
 import { APP_EVENTS, ReviewReceivedPayload } from '@common/events/app.events';
 
-type Pagination = { total: number; page: number; limit: number; totalPages: number };
+type Pagination = {
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+};
 type ReviewList = { message: string; data: Review[]; pagination: Pagination };
 type ReviewItem = { message: string; data: Review };
 
@@ -91,28 +96,36 @@ export class ReviewsService {
       throw new NotFoundException('Artisan profile not found.');
     }
 
-    const reviewer = await this.usersRepository.findOne({ where: { id: customerId } });
+    const reviewer = await this.usersRepository.findOne({
+      where: { id: customerId },
+    });
 
     const review = this.reviewsRepository.create({
       job,
       artisanProfile,
       reviewerUser: reviewer ?? undefined,
       reviewedUser: job.acceptedArtisan,
-      reviewerName: reviewer ? `${reviewer.firstname} ${reviewer.lastname}` : undefined,
+      reviewerName: reviewer
+        ? `${reviewer.firstname} ${reviewer.lastname}`
+        : undefined,
       rating: dto.rating,
       review: dto.review,
     });
 
     const savedReview = await this.reviewsRepository.save(review);
     await this.refreshArtisanRatings(artisanProfile.id);
-    this.logger.log(`Review submitted for job ${dto.jobId} by customer ${customerId}`);
+    this.logger.log(
+      `Review submitted for job ${dto.jobId} by customer ${customerId}`,
+    );
 
     this.eventEmitter.emit(APP_EVENTS.REVIEW_RECEIVED, {
-      artisanUserId: job.acceptedArtisan!.id,
-      jobTitle:      job.title ?? `Job #${job.id}`,
-      jobId:         job.id,
-      rating:        dto.rating,
-      reviewerName:  reviewer ? `${reviewer.firstname} ${reviewer.lastname}` : 'A customer',
+      artisanUserId: job.acceptedArtisan.id,
+      jobTitle: job.title ?? `Job #${job.id}`,
+      jobId: job.id,
+      rating: dto.rating,
+      reviewerName: reviewer
+        ? `${reviewer.firstname} ${reviewer.lastname}`
+        : 'A customer',
     } as ReviewReceivedPayload);
 
     const populated = await this.reviewsRepository.findOne({
@@ -205,7 +218,9 @@ export class ReviewsService {
     query: GetReviewsQueryDto,
   ): void {
     if (query.minRating !== undefined) {
-      qb.andWhere('review.rating >= :minRating', { minRating: query.minRating });
+      qb.andWhere('review.rating >= :minRating', {
+        minRating: query.minRating,
+      });
     }
   }
 
@@ -213,9 +228,9 @@ export class ReviewsService {
     qb: SelectQueryBuilder<Review>,
     query: GetReviewsQueryDto,
   ): Promise<ReviewList> {
-    const page  = query.page  ?? 1;
+    const page = query.page ?? 1;
     const limit = query.limit ?? 10;
-    const skip  = (page - 1) * limit;
+    const skip = (page - 1) * limit;
 
     const [reviews, total] = await qb
       .orderBy('review.createdAt', 'DESC')
@@ -235,11 +250,17 @@ export class ReviewsService {
       .createQueryBuilder('review')
       .select('COALESCE(AVG(review.rating), 0)', 'averageRating')
       .addSelect('COUNT(review.id)', 'totalReviews')
-      .where('review.artisan_profile_id = :artisanProfileId', { artisanProfileId })
+      .where('review.artisan_profile_id = :artisanProfileId', {
+        artisanProfileId,
+      })
       .getRawOne<{ averageRating: string; totalReviews: string }>();
 
-    const averageRating = rawStats?.averageRating ? Number(rawStats.averageRating) : 0;
-    const totalReviews  = rawStats?.totalReviews  ? Number(rawStats.totalReviews)  : 0;
+    const averageRating = rawStats?.averageRating
+      ? Number(rawStats.averageRating)
+      : 0;
+    const totalReviews = rawStats?.totalReviews
+      ? Number(rawStats.totalReviews)
+      : 0;
 
     await this.artisanProfileRepository.update(artisanProfileId, {
       averageRating: Number(averageRating.toFixed(2)),

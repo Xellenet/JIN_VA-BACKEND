@@ -11,7 +11,10 @@ import { Repository } from 'typeorm';
 import { ArtisanVerification } from './entities/artisan-verification.entity';
 import { VerificationProviderFactory } from './providers/verification-provider.factory';
 import { SubmitVerificationDto } from './dto/submit-verification.dto';
-import { ApproveVerificationDto, RejectVerificationDto } from './dto/review-verification.dto';
+import {
+  ApproveVerificationDto,
+  RejectVerificationDto,
+} from './dto/review-verification.dto';
 import { GetVerificationsQueryDto } from './dto/get-verifications-query.dto';
 import { VerificationResponseDto } from './dto/verification-response.dto';
 import { VerificationStatus } from '@common/types/enums';
@@ -49,7 +52,10 @@ export class VerificationService {
     const active = await this.repo.findOne({
       where: [
         { artisanProfileId: profile.id, status: VerificationStatus.PENDING },
-        { artisanProfileId: profile.id, status: VerificationStatus.UNDER_REVIEW },
+        {
+          artisanProfileId: profile.id,
+          status: VerificationStatus.UNDER_REVIEW,
+        },
       ],
     });
     if (active) {
@@ -89,11 +95,14 @@ export class VerificationService {
       });
 
       saved.status = result.initialStatus;
-      if (result.providerReference) saved.providerReference = result.providerReference;
+      if (result.providerReference)
+        saved.providerReference = result.providerReference;
       if (result.rawResponse) saved.providerRawResponse = result.rawResponse;
       await this.repo.save(saved);
     } catch (err) {
-      this.logger.error(`Provider initiate failed for verification ${saved.id}: ${(err as Error).message}`);
+      this.logger.error(
+        `Provider initiate failed for verification ${saved.id}: ${(err as Error).message}`,
+      );
     }
 
     this.eventEmitter.emit(APP_EVENTS.ARTISAN_VERIFICATION_SUBMITTED, {
@@ -103,13 +112,18 @@ export class VerificationService {
     } as ArtisanVerificationSubmittedPayload);
 
     return {
-      message: 'Verification submitted successfully. You will be notified of the outcome.',
-      data: plainToInstance(VerificationResponseDto, saved, { excludeExtraneousValues: true }),
+      message:
+        'Verification submitted successfully. You will be notified of the outcome.',
+      data: plainToInstance(VerificationResponseDto, saved, {
+        excludeExtraneousValues: true,
+      }),
     };
   }
 
   async getMyVerification(userId: number) {
-    const profile = await this.profileRepo.findOne({ where: { user: { id: userId } } });
+    const profile = await this.profileRepo.findOne({
+      where: { user: { id: userId } },
+    });
     if (!profile) throw new NotFoundException('Artisan profile not found.');
 
     const verification = await this.repo.findOne({
@@ -117,16 +131,19 @@ export class VerificationService {
       relations: ['artisanProfile', 'reviewedBy'],
       order: { createdAt: 'DESC' },
     });
-    if (!verification) throw new NotFoundException('No verification submission found.');
+    if (!verification)
+      throw new NotFoundException('No verification submission found.');
 
     return {
       message: 'Verification record retrieved.',
-      data: plainToInstance(VerificationResponseDto, verification, { excludeExtraneousValues: true }),
+      data: plainToInstance(VerificationResponseDto, verification, {
+        excludeExtraneousValues: true,
+      }),
     };
   }
 
   async findAll(query: GetVerificationsQueryDto) {
-    const page  = query.page  ?? 1;
+    const page = query.page ?? 1;
     const limit = query.limit ?? 20;
 
     const qb = this.repo
@@ -146,7 +163,9 @@ export class VerificationService {
 
     return {
       message: 'Verifications retrieved.',
-      data:    plainToInstance(VerificationResponseDto, records, { excludeExtraneousValues: true }),
+      data: plainToInstance(VerificationResponseDto, records, {
+        excludeExtraneousValues: true,
+      }),
       pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
   }
@@ -156,19 +175,24 @@ export class VerificationService {
       where: { id },
       relations: ['artisanProfile', 'artisanProfile.user', 'reviewedBy'],
     });
-    if (!verification) throw new NotFoundException('Verification record not found.');
+    if (!verification)
+      throw new NotFoundException('Verification record not found.');
     return {
       message: 'Verification record retrieved.',
-      data: plainToInstance(VerificationResponseDto, verification, { excludeExtraneousValues: true }),
+      data: plainToInstance(VerificationResponseDto, verification, {
+        excludeExtraneousValues: true,
+      }),
     };
   }
 
   async startReview(adminUserId: number, id: number) {
     const verification = await this.loadOrFail(id);
     if (verification.status !== VerificationStatus.PENDING) {
-      throw new BadRequestException(`Cannot start review — current status is ${verification.status}.`);
+      throw new BadRequestException(
+        `Cannot start review — current status is ${verification.status}.`,
+      );
     }
-    verification.status     = VerificationStatus.UNDER_REVIEW;
+    verification.status = VerificationStatus.UNDER_REVIEW;
     verification.reviewedBy = { id: adminUserId } as any;
     verification.reviewedById = adminUserId;
     await this.repo.save(verification);
@@ -176,7 +200,10 @@ export class VerificationService {
   }
 
   async approve(adminUserId: number, id: number, dto: ApproveVerificationDto) {
-    const verification = await this.loadOrFail(id, ['artisanProfile', 'artisanProfile.user']);
+    const verification = await this.loadOrFail(id, [
+      'artisanProfile',
+      'artisanProfile.user',
+    ]);
     if (verification.status === VerificationStatus.APPROVED) {
       throw new BadRequestException('This submission is already approved.');
     }
@@ -184,13 +211,15 @@ export class VerificationService {
       verification.status !== VerificationStatus.PENDING &&
       verification.status !== VerificationStatus.UNDER_REVIEW
     ) {
-      throw new BadRequestException(`Cannot approve a submission with status ${verification.status}.`);
+      throw new BadRequestException(
+        `Cannot approve a submission with status ${verification.status}.`,
+      );
     }
 
-    verification.status      = VerificationStatus.APPROVED;
+    verification.status = VerificationStatus.APPROVED;
     verification.reviewedById = adminUserId;
-    verification.reviewedBy   = { id: adminUserId } as any;
-    verification.reviewedAt   = new Date();
+    verification.reviewedBy = { id: adminUserId } as any;
+    verification.reviewedAt = new Date();
     if (dto.notes) verification.adminNotes = dto.notes;
 
     await this.repo.save(verification);
@@ -203,23 +232,30 @@ export class VerificationService {
       artisanUserId: verification.artisanProfile.user.id,
     } as ArtisanProfileVerifiedPayload);
 
-    return { message: 'Verification approved. Artisan profile is now verified.' };
+    return {
+      message: 'Verification approved. Artisan profile is now verified.',
+    };
   }
 
   async reject(adminUserId: number, id: number, dto: RejectVerificationDto) {
-    const verification = await this.loadOrFail(id, ['artisanProfile', 'artisanProfile.user']);
+    const verification = await this.loadOrFail(id, [
+      'artisanProfile',
+      'artisanProfile.user',
+    ]);
     if (verification.status === VerificationStatus.REJECTED) {
       throw new BadRequestException('This submission is already rejected.');
     }
     if (verification.status === VerificationStatus.APPROVED) {
-      throw new BadRequestException('Cannot reject an already approved submission.');
+      throw new BadRequestException(
+        'Cannot reject an already approved submission.',
+      );
     }
 
-    verification.status          = VerificationStatus.REJECTED;
+    verification.status = VerificationStatus.REJECTED;
     verification.rejectionReason = dto.reason;
-    verification.reviewedById    = adminUserId;
-    verification.reviewedBy      = { id: adminUserId } as any;
-    verification.reviewedAt      = new Date();
+    verification.reviewedById = adminUserId;
+    verification.reviewedBy = { id: adminUserId } as any;
+    verification.reviewedAt = new Date();
     if (dto.notes) verification.adminNotes = dto.notes;
 
     await this.repo.save(verification);
@@ -232,9 +268,13 @@ export class VerificationService {
     return { message: 'Verification rejected. Artisan has been notified.' };
   }
 
-  private async loadOrFail(id: number, relations: string[] = []): Promise<ArtisanVerification> {
+  private async loadOrFail(
+    id: number,
+    relations: string[] = [],
+  ): Promise<ArtisanVerification> {
     const verification = await this.repo.findOne({ where: { id }, relations });
-    if (!verification) throw new NotFoundException('Verification record not found.');
+    if (!verification)
+      throw new NotFoundException('Verification record not found.');
     return verification;
   }
 }
