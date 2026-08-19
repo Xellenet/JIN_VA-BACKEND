@@ -8,7 +8,10 @@ import { DomainMailListener } from './listeners/domain-mail.listener';
 import { User } from '../users/entities/user.entity';
 
 @Module({
-  imports: [ConfigModule, TypeOrmModule.forFeature([User])],
+  imports: [
+    ConfigModule,
+    TypeOrmModule.forFeature([User]),
+  ],
   providers: [
     MailService,
     MailTemplateService,

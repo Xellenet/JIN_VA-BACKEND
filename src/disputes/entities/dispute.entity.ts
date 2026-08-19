@@ -33,12 +33,7 @@ export class Dispute {
   @Column({ type: 'text' })
   reason!: string;
 
-  @Column({
-    name: 'status',
-    type: 'varchar',
-    length: 20,
-    default: DisputeStatus.OPEN,
-  })
+  @Column({ name: 'status', type: 'varchar', length: 20, default: DisputeStatus.OPEN })
   status!: DisputeStatus;
 
   @Column({ name: 'admin_notes', type: 'text', nullable: true })

@@ -15,12 +15,7 @@ import { JobsService } from '@jobs/jobs.service';
 import { AdminUsersQueryDto, AdminJobsQueryDto } from './dto/admin-query.dto';
 import { VerificationStatus } from '@common/types/enums';
 
-type Pagination = {
-  total: number;
-  page: number;
-  limit: number;
-  totalPages: number;
-};
+type Pagination = { total: number; page: number; limit: number; totalPages: number };
 
 @Injectable()
 export class AdminService {
@@ -43,25 +38,21 @@ export class AdminService {
   // ─── Users ───────────────────────────────────────────────────────────────────
 
   async listUsers(query: AdminUsersQueryDto) {
-    const page = query.page ?? 1;
+    const page  = query.page  ?? 1;
     const limit = query.limit ?? 20;
 
     const qb = this.usersRepo
       .createQueryBuilder('u')
       .orderBy('u.createdAt', 'DESC');
 
-    if (query.role) qb.andWhere('u.role = :role', { role: query.role });
-    if (query.isBanned !== undefined)
-      qb.andWhere('u.isBanned = :isBanned', { isBanned: query.isBanned });
+    if (query.role)                    qb.andWhere('u.role = :role', { role: query.role });
+    if (query.isBanned !== undefined)  qb.andWhere('u.isBanned = :isBanned', { isBanned: query.isBanned });
 
-    const [users, total] = await qb
-      .skip((page - 1) * limit)
-      .take(limit)
-      .getManyAndCount();
+    const [users, total] = await qb.skip((page - 1) * limit).take(limit).getManyAndCount();
 
     return {
       message: 'Users retrieved.',
-      data: users.map((u) => this.sanitizeUser(u)),
+      data: users.map(u => this.sanitizeUser(u)),
       pagination: this.paginate(total, page, limit),
     };
   }
@@ -76,8 +67,7 @@ export class AdminService {
   }
 
   async banUser(adminId: number, userId: number) {
-    if (adminId === userId)
-      throw new BadRequestException('You cannot ban yourself.');
+    if (adminId === userId) throw new BadRequestException('You cannot ban yourself.');
     const user = await this.loadUserOrFail(userId);
     if (user.isBanned) throw new BadRequestException('User is already banned.');
     user.isBanned = true;
@@ -88,8 +78,7 @@ export class AdminService {
 
   async unbanUser(userId: number) {
     const user = await this.loadUserOrFail(userId);
-    if (!user.isBanned)
-      throw new BadRequestException('User is not currently banned.');
+    if (!user.isBanned) throw new BadRequestException('User is not currently banned.');
     user.isBanned = false;
     user.bannedAt = undefined;
     await this.usersRepo.save(user);
@@ -99,7 +88,7 @@ export class AdminService {
   // ─── Jobs ────────────────────────────────────────────────────────────────────
 
   async listJobs(query: AdminJobsQueryDto) {
-    const page = query.page ?? 1;
+    const page  = query.page  ?? 1;
     const limit = query.limit ?? 20;
 
     const qb = this.jobsRepo
@@ -109,13 +98,9 @@ export class AdminService {
       .leftJoinAndSelect('j.service', 'service')
       .orderBy('j.createdAt', 'DESC');
 
-    if (query.status)
-      qb.andWhere('j.status = :status', { status: query.status });
+    if (query.status) qb.andWhere('j.status = :status', { status: query.status });
 
-    const [jobs, total] = await qb
-      .skip((page - 1) * limit)
-      .take(limit)
-      .getManyAndCount();
+    const [jobs, total] = await qb.skip((page - 1) * limit).take(limit).getManyAndCount();
 
     return {
       message: 'Jobs retrieved.',
@@ -138,10 +123,7 @@ export class AdminService {
       .leftJoinAndSelect('ap.services', 'services')
       .orderBy('ap.createdAt', 'DESC');
 
-    const [profiles, total] = await qb
-      .skip((page - 1) * limit)
-      .take(limit)
-      .getManyAndCount();
+    const [profiles, total] = await qb.skip((page - 1) * limit).take(limit).getManyAndCount();
 
     return {
       message: 'Artisans retrieved.',
@@ -171,12 +153,8 @@ export class AdminService {
       this.usersRepo.count({ where: { isBanned: true } }),
       this.jobsRepo.count(),
       this.jobsRepo.count({ where: { status: 'OPEN' as any } }),
-      this.verificationsRepo.count({
-        where: { status: VerificationStatus.PENDING },
-      }),
-      this.verificationsRepo.count({
-        where: { status: VerificationStatus.APPROVED },
-      }),
+      this.verificationsRepo.count({ where: { status: VerificationStatus.PENDING } }),
+      this.verificationsRepo.count({ where: { status: VerificationStatus.APPROVED } }),
       this.bookingsRepo.count(),
       this.bookingsRepo.count({ where: { status: 'CONFIRMED' as any } }),
     ]);
@@ -184,17 +162,9 @@ export class AdminService {
     return {
       message: 'Platform statistics retrieved.',
       data: {
-        users: {
-          total: totalUsers,
-          artisans: totalArtisans,
-          customers: totalCustomers,
-          banned: bannedUsers,
-        },
-        jobs: { total: totalJobs, open: openJobs },
-        verifications: {
-          pending: pendingVerifications,
-          approved: approvedVerifications,
-        },
+        users: { total: totalUsers, artisans: totalArtisans, customers: totalCustomers, banned: bannedUsers },
+        jobs:  { total: totalJobs, open: openJobs },
+        verifications: { pending: pendingVerifications, approved: approvedVerifications },
         bookings: { total: totalBookings, confirmed: confirmedBookings },
       },
     };

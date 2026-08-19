@@ -72,22 +72,14 @@ export class CreateMessages1782100000000 implements MigrationInterface {
   public async down(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`DROP INDEX "IDX_messages_sender_id"`);
     await queryRunner.query(`DROP INDEX "IDX_messages_conversation_id"`);
-    await queryRunner.query(
-      `ALTER TABLE "messages" DROP CONSTRAINT "FK_messages_sender_id"`,
-    );
-    await queryRunner.query(
-      `ALTER TABLE "messages" DROP CONSTRAINT "FK_messages_conversation_id"`,
-    );
+    await queryRunner.query(`ALTER TABLE "messages" DROP CONSTRAINT "FK_messages_sender_id"`);
+    await queryRunner.query(`ALTER TABLE "messages" DROP CONSTRAINT "FK_messages_conversation_id"`);
     await queryRunner.query(`DROP TABLE "messages"`);
 
     await queryRunner.query(`DROP INDEX "IDX_conversations_participant_b"`);
     await queryRunner.query(`DROP INDEX "IDX_conversations_participant_a"`);
-    await queryRunner.query(
-      `ALTER TABLE "conversations" DROP CONSTRAINT "FK_conversations_participant_b"`,
-    );
-    await queryRunner.query(
-      `ALTER TABLE "conversations" DROP CONSTRAINT "FK_conversations_participant_a"`,
-    );
+    await queryRunner.query(`ALTER TABLE "conversations" DROP CONSTRAINT "FK_conversations_participant_b"`);
+    await queryRunner.query(`ALTER TABLE "conversations" DROP CONSTRAINT "FK_conversations_participant_a"`);
     await queryRunner.query(`DROP TABLE "conversations"`);
   }
 }

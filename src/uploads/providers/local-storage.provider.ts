@@ -3,12 +3,7 @@ import { writeFile, unlink, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, extname } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type {
-  IStorageProvider,
-  UploadFolder,
-  UploadOptions,
-  UploadResult,
-} from './storage-provider.interface';
+import type { IStorageProvider, UploadFolder, UploadOptions, UploadResult } from './storage-provider.interface';
 
 @Injectable()
 export class LocalStorageProvider implements IStorageProvider {
@@ -22,21 +17,17 @@ export class LocalStorageProvider implements IStorageProvider {
       await mkdir(folderPath, { recursive: true });
     }
 
-    const ext =
-      extname(options.originalName).toLowerCase() ||
-      this.mimeToExt(options.mimetype);
+    const ext      = extname(options.originalName).toLowerCase() || this.mimeToExt(options.mimetype);
     const filename = `${randomUUID()}${ext}`;
     const filePath = join(folderPath, filename);
 
     await writeFile(filePath, buffer);
-    this.logger.log(
-      `Saved ${options.folder}/${filename} (${buffer.length} bytes)`,
-    );
+    this.logger.log(`Saved ${options.folder}/${filename} (${buffer.length} bytes)`);
 
     return {
-      url: `/uploads/${options.folder}/${filename}`,
+      url:       `/uploads/${options.folder}/${filename}`,
       filename,
-      folder: options.folder,
+      folder:    options.folder,
       sizeBytes: buffer.length,
     };
   }
@@ -52,11 +43,11 @@ export class LocalStorageProvider implements IStorageProvider {
 
   private mimeToExt(mimetype: string): string {
     const map: Record<string, string> = {
-      'image/jpeg': '.jpg',
-      'image/png': '.png',
-      'image/webp': '.webp',
-      'image/gif': '.gif',
-      'application/pdf': '.pdf',
+      'image/jpeg':       '.jpg',
+      'image/png':        '.png',
+      'image/webp':       '.webp',
+      'image/gif':        '.gif',
+      'application/pdf':  '.pdf',
     };
     return map[mimetype] ?? '.bin';
   }

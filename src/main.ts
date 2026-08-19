@@ -8,7 +8,6 @@ import { ResponseInterceptor } from './common/interceptors/response.interceptor'
 import { setupSwagger } from './config/swagger.config';
 import { ValidationPipe } from '@nestjs/common';
 import { join } from 'path';
-import cookieParser from 'cookie-parser';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
@@ -18,19 +17,16 @@ async function bootstrap() {
   const logger = app.get(WINSTON_MODULE_NEST_PROVIDER);
 
   app.useLogger(logger);
-  app.useGlobalFilters(new AllExceptionsFilter(logger), new TypeOrmFilter());
+  app.useGlobalFilters(
+    new AllExceptionsFilter(logger),
+    new TypeOrmFilter(),
+  );
   app.enableCors({
     origin: process.env.ALLOWED_ORIGINS?.split(','),
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     preflightContinue: false,
     optionsSuccessStatus: 204,
-    // Required for the browser to send/receive the HttpOnly refresh + session
-    // cookies (S1/S2) cross-origin between the frontend and API domains.
-    credentials: true,
   });
-
-  // Required for reading the HttpOnly refresh-token / session cookies (S1/S2).
-  app.use(cookieParser());
 
   app.useGlobalInterceptors(new ResponseInterceptor());
   app.useGlobalPipes(

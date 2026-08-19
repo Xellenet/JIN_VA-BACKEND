@@ -12,25 +12,16 @@ export class ApplicationResponseDto {
   @Expose()
   id!: number;
 
-  @ApiProperty({
-    example: 3,
-    description: 'ID of the job this application belongs to',
-  })
+  @ApiProperty({ example: 3, description: 'ID of the job this application belongs to' })
   @Expose()
   jobId!: number;
 
-  @ApiProperty({
-    type: () => UserResponseDto,
-    description: 'Artisan who applied',
-  })
+  @ApiProperty({ type: () => UserResponseDto, description: 'Artisan who applied' })
   @Expose()
   @Type(() => UserResponseDto)
   artisan!: UserResponseDto;
 
-  @ApiPropertyOptional({
-    example: 250,
-    description: 'Bid price proposed by the artisan',
-  })
+  @ApiPropertyOptional({ example: 250, description: 'Bid price proposed by the artisan' })
   @Expose()
   quotePrice?: number;
 
@@ -49,9 +40,7 @@ export class ApplicationResponseDto {
   @Expose()
   status!: ApplicationStatus;
 
-  @ApiProperty({
-    description: 'ISO timestamp when the application was submitted',
-  })
+  @ApiProperty({ description: 'ISO timestamp when the application was submitted' })
   @Expose()
   createdAt!: Date;
 }

@@ -14,12 +14,7 @@ import { ServiceResponseDto } from './dto/service-response.dto';
 import { plainToInstance } from 'class-transformer';
 import { SUCCESS_MESSAGES } from '@common/constants/success-messages.constants';
 
-type Pagination = {
-  total: number;
-  page: number;
-  limit: number;
-  totalPages: number;
-};
+type Pagination = { total: number; page: number; limit: number; totalPages: number };
 
 @Injectable()
 export class ServicesService {
@@ -37,9 +32,7 @@ export class ServicesService {
    * @returns The created service wrapped in a `{ message, data }` response payload.
    * @throws {BadRequestException} When a service with the same name already exists.
    */
-  async create(
-    createServiceDto: CreateServiceDto,
-  ): Promise<{ message: string; data: ServiceResponseDto }> {
+  async create(createServiceDto: CreateServiceDto): Promise<{ message: string; data: ServiceResponseDto }> {
     const existing = await this.servicesRepository.findOne({
       where: { name: createServiceDto.name },
     });
@@ -56,9 +49,7 @@ export class ServicesService {
 
     return {
       message: SUCCESS_MESSAGES.SERVICE.CREATED,
-      data: plainToInstance(ServiceResponseDto, saved, {
-        excludeExtraneousValues: true,
-      }),
+      data: plainToInstance(ServiceResponseDto, saved, { excludeExtraneousValues: true }),
     };
   }
 
@@ -68,14 +59,12 @@ export class ServicesService {
    * @param query - Optional `search` (name substring), `page`, and `limit`.
    * @returns `{ message, data, pagination }` response payload.
    */
-  async findAll(query: GetServicesQueryDto): Promise<{
-    message: string;
-    data: ServiceResponseDto[];
-    pagination: Pagination;
-  }> {
-    const page = query.page ?? 1;
+  async findAll(
+    query: GetServicesQueryDto,
+  ): Promise<{ message: string; data: ServiceResponseDto[]; pagination: Pagination }> {
+    const page  = query.page  ?? 1;
     const limit = query.limit ?? 100;
-    const skip = (page - 1) * limit;
+    const skip  = (page - 1) * limit;
 
     const where = query.search ? { name: ILike(`%${query.search}%`) } : {};
 
@@ -88,9 +77,7 @@ export class ServicesService {
 
     return {
       message: SUCCESS_MESSAGES.SERVICE.ALL_RETRIEVED,
-      data: plainToInstance(ServiceResponseDto, services, {
-        excludeExtraneousValues: true,
-      }),
+      data: plainToInstance(ServiceResponseDto, services, { excludeExtraneousValues: true }),
       pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
   }
@@ -102,9 +89,7 @@ export class ServicesService {
    * @returns The matching service wrapped in a `{ message, data }` response payload.
    * @throws {NotFoundException} When no service with the given ID exists.
    */
-  async findOne(
-    id: number,
-  ): Promise<{ message: string; data: ServiceResponseDto }> {
+  async findOne(id: number): Promise<{ message: string; data: ServiceResponseDto }> {
     const service = await this.servicesRepository.findOne({ where: { id } });
 
     if (!service) {
@@ -113,9 +98,7 @@ export class ServicesService {
 
     return {
       message: SUCCESS_MESSAGES.SERVICE.RETRIEVED,
-      data: plainToInstance(ServiceResponseDto, service, {
-        excludeExtraneousValues: true,
-      }),
+      data: plainToInstance(ServiceResponseDto, service, { excludeExtraneousValues: true }),
     };
   }
 
@@ -129,10 +112,7 @@ export class ServicesService {
    * @throws {NotFoundException} When no service with the given ID exists.
    * @throws {BadRequestException} When the new name is already taken by another service.
    */
-  async update(
-    id: number,
-    updateServiceDto: UpdateServiceDto,
-  ): Promise<{ message: string; data: ServiceResponseDto }> {
+  async update(id: number, updateServiceDto: UpdateServiceDto): Promise<{ message: string; data: ServiceResponseDto }> {
     const service = await this.servicesRepository.findOne({ where: { id } });
 
     if (!service) {
@@ -157,9 +137,7 @@ export class ServicesService {
 
     return {
       message: SUCCESS_MESSAGES.SERVICE.UPDATED,
-      data: plainToInstance(ServiceResponseDto, saved, {
-        excludeExtraneousValues: true,
-      }),
+      data: plainToInstance(ServiceResponseDto, saved, { excludeExtraneousValues: true }),
     };
   }
 

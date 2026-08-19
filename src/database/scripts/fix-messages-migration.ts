@@ -20,9 +20,7 @@ async function fix() {
   console.log('✔  Connected');
 
   // Remove stale migration record so TypeORM will re-run it
-  await ds.query(
-    `DELETE FROM migrations WHERE name = 'CreateMessages1782100000000'`,
-  );
+  await ds.query(`DELETE FROM migrations WHERE name = 'CreateMessages1782100000000'`);
   console.log('✔  Removed stale migration record');
 
   // Re-create conversations table
@@ -55,12 +53,8 @@ async function fix() {
       ADD CONSTRAINT "FK_conversations_participant_b"
       FOREIGN KEY ("participant_b_id") REFERENCES "users"("id") ON DELETE CASCADE
   `);
-  await ds.query(
-    `CREATE INDEX IF NOT EXISTS "IDX_conversations_participant_a" ON "conversations" ("participant_a_id")`,
-  );
-  await ds.query(
-    `CREATE INDEX IF NOT EXISTS "IDX_conversations_participant_b" ON "conversations" ("participant_b_id")`,
-  );
+  await ds.query(`CREATE INDEX IF NOT EXISTS "IDX_conversations_participant_a" ON "conversations" ("participant_a_id")`);
+  await ds.query(`CREATE INDEX IF NOT EXISTS "IDX_conversations_participant_b" ON "conversations" ("participant_b_id")`);
   console.log('✔  Created conversations table');
 
   // Drop and recreate messages table (may exist with wrong schema from old sync)
@@ -86,12 +80,8 @@ async function fix() {
       ADD CONSTRAINT "FK_messages_sender_id"
       FOREIGN KEY ("sender_id") REFERENCES "users"("id") ON DELETE CASCADE
   `);
-  await ds.query(
-    `CREATE INDEX "IDX_messages_conversation_id" ON "messages" ("conversation_id")`,
-  );
-  await ds.query(
-    `CREATE INDEX "IDX_messages_sender_id" ON "messages" ("sender_id")`,
-  );
+  await ds.query(`CREATE INDEX "IDX_messages_conversation_id" ON "messages" ("conversation_id")`);
+  await ds.query(`CREATE INDEX "IDX_messages_sender_id" ON "messages" ("sender_id")`);
   console.log('✔  Recreated messages table with correct schema');
 
   // Record migration as applied
@@ -103,12 +93,7 @@ async function fix() {
   console.log('✔  Migration recorded');
 
   await ds.destroy();
-  console.log(
-    '\nDone. Now run: npx ts-node -r tsconfig-paths/register src/database/seeds/seed.ts --force',
-  );
+  console.log('\nDone. Now run: npx ts-node -r tsconfig-paths/register src/database/seeds/seed.ts --force');
 }
 
-fix().catch((err) => {
-  console.error('Fix failed:', err.message);
-  process.exit(1);
-});
+fix().catch(err => { console.error('Fix failed:', err.message); process.exit(1); });

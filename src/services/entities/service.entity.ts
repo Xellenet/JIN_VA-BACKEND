@@ -17,7 +17,7 @@ export class ServiceEntity {
   @Column({ type: 'text', nullable: true })
   description?: string;
 
-  @Column({ type: 'decimal', precision: 10, scale: 2, nullable: true })
+  @Column({type: 'decimal', precision: 10, scale: 2, nullable: true})
   price?: number;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamp' })

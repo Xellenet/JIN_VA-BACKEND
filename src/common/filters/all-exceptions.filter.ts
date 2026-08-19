@@ -42,7 +42,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       message = 'Internal server error';
       errorName = 'Error';
     }
-
+    
     this.logger.error(`${request.method} ${request.url}`, {
       status,
       message,

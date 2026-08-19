@@ -14,7 +14,9 @@ describe('UsersController', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [UsersController],
-      providers: [{ provide: UsersService, useValue: mockUsersService }],
+      providers: [
+        { provide: UsersService, useValue: mockUsersService },
+      ],
     }).compile();
 
     controller = module.get<UsersController>(UsersController);
@@ -29,10 +31,7 @@ describe('UsersController', () => {
 
   describe('createUser', () => {
     it('should call usersService.createUser with dto and return result', async () => {
-      const dto: CreateUserDto = {
-        email: 'test@example.com',
-        password: 'pass',
-      } as CreateUserDto;
+      const dto: CreateUserDto = { email: 'test@example.com', password: 'pass' } as CreateUserDto;
       const expected = { id: 1, email: dto.email };
       mockUsersService.createUser.mockResolvedValueOnce(expected);
 

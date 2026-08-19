@@ -1,13 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import {
-  IsBoolean,
-  IsEnum,
-  IsInt,
-  IsOptional,
-  Max,
-  Min,
-} from 'class-validator';
+import { IsBoolean, IsEnum, IsInt, IsOptional, Max, Min } from 'class-validator';
 import { Role, Status } from '@common/types/enums';
 
 export class AdminUsersQueryDto {
@@ -16,10 +9,7 @@ export class AdminUsersQueryDto {
   @IsEnum(Role)
   role?: Role;
 
-  @ApiPropertyOptional({
-    example: false,
-    description: 'Filter by banned status',
-  })
+  @ApiPropertyOptional({ example: false, description: 'Filter by banned status' })
   @IsOptional()
   @IsBoolean()
   isBanned?: boolean;
@@ -27,16 +17,13 @@ export class AdminUsersQueryDto {
   @ApiPropertyOptional({ example: 1 })
   @IsOptional()
   @Type(() => Number)
-  @IsInt()
-  @Min(1)
+  @IsInt() @Min(1)
   page?: number = 1;
 
   @ApiPropertyOptional({ example: 20 })
   @IsOptional()
   @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(100)
+  @IsInt() @Min(1) @Max(100)
   limit?: number = 20;
 }
 
@@ -49,15 +36,12 @@ export class AdminJobsQueryDto {
   @ApiPropertyOptional({ example: 1 })
   @IsOptional()
   @Type(() => Number)
-  @IsInt()
-  @Min(1)
+  @IsInt() @Min(1)
   page?: number = 1;
 
   @ApiPropertyOptional({ example: 20 })
   @IsOptional()
   @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(100)
+  @IsInt() @Min(1) @Max(100)
   limit?: number = 20;
 }

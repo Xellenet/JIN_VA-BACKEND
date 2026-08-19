@@ -64,13 +64,8 @@ export class ServicesController {
       'Service names are case-sensitive and must be unique. ' +
       'Artisans can later associate their profiles with entries from this catalogue.',
   })
-  @ApiCreatedResponse({
-    description: 'Service created successfully',
-    type: ServiceResponseDto,
-  })
-  @ApiBadRequestResponse({
-    description: 'Validation failed or a service with this name already exists',
-  })
+  @ApiCreatedResponse({ description: 'Service created successfully', type: ServiceResponseDto })
+  @ApiBadRequestResponse({ description: 'Validation failed or a service with this name already exists' })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT' })
   @ApiForbiddenResponse({ description: 'Caller does not have the ADMIN role' })
   create(@Body() createServiceDto: CreateServiceDto) {
@@ -95,10 +90,7 @@ export class ServicesController {
       'Use the optional `search` param for a case-insensitive name substring match. ' +
       'Default limit is 100 (max 200) — enough to load the full catalogue in one call.',
   })
-  @ApiOkResponse({
-    description: 'Services retrieved successfully',
-    type: [ServiceResponseDto],
-  })
+  @ApiOkResponse({ description: 'Services retrieved successfully', type: [ServiceResponseDto] })
   findAll(@Query() query: GetServicesQueryDto) {
     return this.servicesService.findAll(query);
   }
@@ -112,13 +104,9 @@ export class ServicesController {
   @Get(':id')
   @ApiOperation({
     summary: 'Get a single service category by ID — public',
-    description:
-      'Looks up a service by its primary key. Used by clients when resolving a stored `serviceId` to its full details.',
+    description: 'Looks up a service by its primary key. Used by clients when resolving a stored `serviceId` to its full details.',
   })
-  @ApiOkResponse({
-    description: 'Service retrieved successfully',
-    type: ServiceResponseDto,
-  })
+  @ApiOkResponse({ description: 'Service retrieved successfully', type: ServiceResponseDto })
   @ApiNotFoundResponse({ description: 'No service found with the given ID' })
   findOne(@Param('id', ParseIntPipe) id: number) {
     return this.servicesService.findOne(id);
@@ -144,20 +132,12 @@ export class ServicesController {
       'If a new `name` is provided, it is checked for uniqueness against other services. ' +
       'Passing the same name the record already has is safe and will not raise a conflict.',
   })
-  @ApiOkResponse({
-    description: 'Service updated successfully',
-    type: ServiceResponseDto,
-  })
+  @ApiOkResponse({ description: 'Service updated successfully', type: ServiceResponseDto })
   @ApiNotFoundResponse({ description: 'No service found with the given ID' })
-  @ApiBadRequestResponse({
-    description: 'New name is already used by a different service',
-  })
+  @ApiBadRequestResponse({ description: 'New name is already used by a different service' })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT' })
   @ApiForbiddenResponse({ description: 'Caller does not have the ADMIN role' })
-  update(
-    @Param('id', ParseIntPipe) id: number,
-    @Body() updateServiceDto: UpdateServiceDto,
-  ) {
+  update(@Param('id', ParseIntPipe) id: number, @Body() updateServiceDto: UpdateServiceDto) {
     return this.servicesService.update(id, updateServiceDto);
   }
 

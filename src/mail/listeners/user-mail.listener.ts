@@ -3,12 +3,7 @@ import { OnEvent } from '@nestjs/event-emitter';
 import { MailEvent } from '../events/mail.events';
 import { MailService } from '../mail.service';
 import { ConfigService } from '@nestjs/config';
-import type {
-  PasswordResetPayload,
-  PasswordResetSuccessPayload,
-  UserRegisteredPayload,
-  WelcomeUserPayload,
-} from '../events/mail.events';
+import type { PasswordResetPayload, PasswordResetSuccessPayload, UserRegisteredPayload, WelcomeUserPayload } from '../events/mail.events';
 
 @Injectable()
 export class UserMailListener {
@@ -41,7 +36,7 @@ export class UserMailListener {
 
   @OnEvent(MailEvent.PASSWORD_RESET, { async: true })
   async handlePasswordReset(payload: PasswordResetPayload) {
-    const resetLink = `${this.config.get('FRONTEND_URL')}/reset-password?token=${payload.resetToken}`;
+    const resetLink = `${this.config.get('FRONTEND_URL')}/reset-password?token=${payload.resetToken}`;  
     await this.mailService.sendMail(payload.email, MailEvent.PASSWORD_RESET, {
       firstname: payload.firstname,
       resetLink,
@@ -53,16 +48,12 @@ export class UserMailListener {
   }
   @OnEvent(MailEvent.PASSWORD_RESET_SUCCESS, { async: true })
   async handlePasswordResetSuccess(payload: PasswordResetSuccessPayload) {
-    await this.mailService.sendMail(
-      payload.email,
-      MailEvent.PASSWORD_RESET_SUCCESS,
-      {
-        firstname: payload.firstname,
-        appName: this.config.get('APP_NAME'),
-        year: new Date().getFullYear(),
-        supportEmail: this.config.get('SUPPORT_EMAIL'),
-      },
-    );
+    await this.mailService.sendMail(payload.email, MailEvent.PASSWORD_RESET_SUCCESS, {
+      firstname: payload.firstname,
+      appName: this.config.get('APP_NAME'),
+      year: new Date().getFullYear(),
+      supportEmail: this.config.get('SUPPORT_EMAIL'),
+    });
   }
 
   @OnEvent(MailEvent.PASSWORD_CHANGED, { async: true })
@@ -74,4 +65,5 @@ export class UserMailListener {
       supportEmail: this.config.get('SUPPORT_EMAIL'),
     });
   }
+
 }

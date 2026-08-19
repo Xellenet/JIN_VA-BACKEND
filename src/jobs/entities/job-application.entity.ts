@@ -37,24 +37,14 @@ export class JobApplication {
   artisanId!: number;
 
   /** Optional bid price proposed by the artisan. */
-  @Column({
-    name: 'quote_price',
-    type: 'decimal',
-    precision: 10,
-    scale: 2,
-    nullable: true,
-  })
+  @Column({ name: 'quote_price', type: 'decimal', precision: 10, scale: 2, nullable: true })
   quotePrice?: number;
 
   /** Optional cover message from the artisan. */
   @Column({ type: 'text', nullable: true })
   message?: string;
 
-  @Column({
-    type: 'enum',
-    enum: ApplicationStatus,
-    default: ApplicationStatus.PENDING,
-  })
+  @Column({ type: 'enum', enum: ApplicationStatus, default: ApplicationStatus.PENDING })
   status!: ApplicationStatus;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamp' })

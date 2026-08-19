@@ -13,12 +13,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
-import {
-  ApiBearerAuth,
-  ApiOperation,
-  ApiParam,
-  ApiTags,
-} from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger';
 import { BookingsService } from './bookings.service';
 import { CreateBookingDto } from './dto/create-booking.dto';
 import { GetBookingsQueryDto } from './dto/get-bookings-query.dto';
@@ -77,9 +72,7 @@ export class BookingsController {
   @Get('artisan')
   @UseGuards(RolesGuard)
   @Roles(Role.ARTISAN)
-  @ApiOperation({
-    summary: 'List bookings for my artisan profile (artisan only)',
-  })
+  @ApiOperation({ summary: 'List bookings for my artisan profile (artisan only)' })
   getArtisanBookings(@Req() req: any, @Query() query: GetBookingsQueryDto) {
     return this.bookingsService.getArtisanBookings(req.user.id, query);
   }
@@ -89,11 +82,7 @@ export class BookingsController {
   @Roles(Role.ARTISAN)
   @ApiOperation({ summary: 'Confirm a booking request (artisan only)' })
   @ApiParam({ name: 'id', type: Number })
-  confirm(
-    @Req() req: any,
-    @Param('id', ParseIntPipe) id: number,
-    @Body() dto: RespondBookingDto,
-  ) {
+  confirm(@Req() req: any, @Param('id', ParseIntPipe) id: number, @Body() dto: RespondBookingDto) {
     return this.bookingsService.confirm(req.user.id, id, dto);
   }
 
@@ -102,20 +91,14 @@ export class BookingsController {
   @Roles(Role.ARTISAN)
   @ApiOperation({ summary: 'Decline a booking request (artisan only)' })
   @ApiParam({ name: 'id', type: Number })
-  decline(
-    @Req() req: any,
-    @Param('id', ParseIntPipe) id: number,
-    @Body() dto: RespondBookingDto,
-  ) {
+  decline(@Req() req: any, @Param('id', ParseIntPipe) id: number, @Body() dto: RespondBookingDto) {
     return this.bookingsService.decline(req.user.id, id, dto);
   }
 
   // ─── Shared ────────────────────────────────────────────────────────────────────
 
   @Get(':id')
-  @ApiOperation({
-    summary: 'Get a single booking (customer or artisan who owns it)',
-  })
+  @ApiOperation({ summary: 'Get a single booking (customer or artisan who owns it)' })
   @ApiParam({ name: 'id', type: Number })
   findOne(@Req() req: any, @Param('id', ParseIntPipe) id: number) {
     return this.bookingsService.findOne(id, req.user.id);

@@ -1,10 +1,7 @@
 // src/config/swagger.config.ts
-import {
-  DocumentBuilder,
-  SwaggerModule,
-  SwaggerDocumentOptions,
-} from '@nestjs/swagger';
+import { DocumentBuilder, SwaggerModule,SwaggerDocumentOptions } from '@nestjs/swagger';
 import { INestApplication } from '@nestjs/common';
+
 
 export function setupSwagger(app: INestApplication) {
   const config = new DocumentBuilder()

@@ -21,23 +21,10 @@ import { SUCCESS_MESSAGES } from '@common/constants/success-messages.constants';
 import { APP_EVENTS } from '@common/events/app.events';
 import type { MessageReceivedPayload } from '@common/events/app.events';
 
-type Pagination = {
-  total: number;
-  page: number;
-  limit: number;
-  totalPages: number;
-};
-type MessageItem = { message: string; data: MessageResponseDto };
-type MessageList = {
-  message: string;
-  data: MessageResponseDto[];
-  pagination: Pagination;
-};
-type ConversationList = {
-  message: string;
-  data: ConversationResponseDto[];
-  pagination: Pagination;
-};
+type Pagination        = { total: number; page: number; limit: number; totalPages: number };
+type MessageItem       = { message: string; data: MessageResponseDto };
+type MessageList       = { message: string; data: MessageResponseDto[]; pagination: Pagination };
+type ConversationList  = { message: string; data: ConversationResponseDto[]; pagination: Pagination };
 
 @Injectable()
 export class MessagesService {
@@ -85,10 +72,9 @@ export class MessagesService {
     }
 
     // Stable ordering: lower ID is always participantA — enforces uniqueness on the pair
-    const [aId, bId] =
-      senderId < recipientId
-        ? [senderId, recipientId]
-        : [recipientId, senderId];
+    const [aId, bId] = senderId < recipientId
+      ? [senderId, recipientId]
+      : [recipientId, senderId];
 
     let conversation = await this.conversationsRepository.findOne({
       where: { participantA: { id: aId }, participantB: { id: bId } },
@@ -103,9 +89,7 @@ export class MessagesService {
         }),
       );
     } else {
-      await this.conversationsRepository.update(conversation.id, {
-        lastMessageAt: new Date(),
-      });
+      await this.conversationsRepository.update(conversation.id, { lastMessageAt: new Date() });
     }
 
     const saved = await this.messagesRepository.save(
@@ -118,14 +102,12 @@ export class MessagesService {
 
     this.eventEmitter.emit(APP_EVENTS.MESSAGE_RECEIVED, {
       recipientId,
-      senderName: `${sender!.firstname} ${sender!.lastname}`,
-      preview: content.length > 100 ? `${content.substring(0, 100)}…` : content,
+      senderName:     `${sender!.firstname} ${sender!.lastname}`,
+      preview:        content.length > 100 ? `${content.substring(0, 100)}…` : content,
       conversationId: conversation.id,
     } as MessageReceivedPayload);
 
-    this.logger.log(
-      `Message ${saved.id} sent by user ${senderId} to user ${recipientId}`,
-    );
+    this.logger.log(`Message ${saved.id} sent by user ${senderId} to user ${recipientId}`);
 
     const populated = await this.messagesRepository.findOne({
       where: { id: saved.id },
@@ -134,9 +116,7 @@ export class MessagesService {
 
     return {
       message: SUCCESS_MESSAGES.MESSAGE.SENT,
-      data: plainToInstance(MessageResponseDto, populated, {
-        excludeExtraneousValues: true,
-      }),
+      data:    plainToInstance(MessageResponseDto, populated, { excludeExtraneousValues: true }),
     };
   }
 
@@ -146,11 +126,8 @@ export class MessagesService {
    * @param userId - Authenticated user's ID.
    * @param query  - Pagination options.
    */
-  async getConversations(
-    userId: number,
-    query: GetMessagesQueryDto,
-  ): Promise<ConversationList> {
-    const page = query.page ?? 1;
+  async getConversations(userId: number, query: GetMessagesQueryDto): Promise<ConversationList> {
+    const page  = query.page  ?? 1;
     const limit = query.limit ?? 20;
 
     const [conversations, total] = await this.conversationsRepository
@@ -165,9 +142,7 @@ export class MessagesService {
 
     return {
       message: SUCCESS_MESSAGES.MESSAGE.CONVERSATIONS_RETRIEVED,
-      data: plainToInstance(ConversationResponseDto, conversations, {
-        excludeExtraneousValues: true,
-      }),
+      data:    plainToInstance(ConversationResponseDto, conversations, { excludeExtraneousValues: true }),
       pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
   }
@@ -180,30 +155,24 @@ export class MessagesService {
    * @param conversationId - The conversation to retrieve.
    * @param query          - Pagination options.
    */
-  async getMessages(
-    userId: number,
-    conversationId: number,
-    query: GetMessagesQueryDto,
-  ): Promise<MessageList> {
+  async getMessages(userId: number, conversationId: number, query: GetMessagesQueryDto): Promise<MessageList> {
     const conversation = await this.loadConversationOrFail(conversationId);
     this.assertParticipant(conversation, userId);
 
-    const page = query.page ?? 1;
+    const page  = query.page  ?? 1;
     const limit = query.limit ?? 20;
 
     const [messages, total] = await this.messagesRepository.findAndCount({
-      where: { conversation: { id: conversationId } },
+      where:     { conversation: { id: conversationId } },
       relations: ['sender'],
-      order: { createdAt: 'ASC' },
-      skip: (page - 1) * limit,
-      take: limit,
+      order:     { createdAt: 'ASC' },
+      skip:      (page - 1) * limit,
+      take:      limit,
     });
 
     return {
       message: SUCCESS_MESSAGES.MESSAGE.THREAD_RETRIEVED,
-      data: plainToInstance(MessageResponseDto, messages, {
-        excludeExtraneousValues: true,
-      }),
+      data:    plainToInstance(MessageResponseDto, messages, { excludeExtraneousValues: true }),
       pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
   }
@@ -214,10 +183,7 @@ export class MessagesService {
    * @param userId         - Authenticated user's ID.
    * @param conversationId - The conversation to mark as read.
    */
-  async markRead(
-    userId: number,
-    conversationId: number,
-  ): Promise<{ message: string }> {
+  async markRead(userId: number, conversationId: number): Promise<{ message: string }> {
     const conversation = await this.loadConversationOrFail(conversationId);
     this.assertParticipant(conversation, userId);
 
@@ -236,11 +202,9 @@ export class MessagesService {
 
   // ─── Private helpers ────────────────────────────────────────────────────────
 
-  private async loadConversationOrFail(
-    conversationId: number,
-  ): Promise<Conversation> {
+  private async loadConversationOrFail(conversationId: number): Promise<Conversation> {
     const conversation = await this.conversationsRepository.findOne({
-      where: { id: conversationId },
+      where:     { id: conversationId },
       relations: ['participantA', 'participantB'],
     });
     if (!conversation) throw new NotFoundException('Conversation not found.');
@@ -252,9 +216,7 @@ export class MessagesService {
       conversation.participantA.id === userId ||
       conversation.participantB.id === userId;
     if (!isParticipant) {
-      throw new ForbiddenException(
-        'You are not a participant in this conversation.',
-      );
+      throw new ForbiddenException('You are not a participant in this conversation.');
     }
   }
 }

@@ -12,7 +12,7 @@ import { JwtService } from '@nestjs/jwt';
 
 @Injectable()
 export class UserTokenService {
-  private readonly logger = new Logger(UserTokenService.name);
+    private readonly logger = new Logger(UserTokenService.name);
   constructor(
     @InjectRepository(UserToken)
     private readonly tokenRepo: Repository<UserToken>,
@@ -24,6 +24,7 @@ export class UserTokenService {
     type: Token,
     expiresInMinutes: number,
   ): Promise<UserToken> {
+
     await this.tokenRepo.delete({ user: { id: user.id }, type });
 
     const token = crypto.randomBytes(32).toString('hex');
@@ -42,10 +43,7 @@ export class UserTokenService {
   }
 
   /**
-   * Validate a user token (email-verification / password-reset tokens).
-   * Refresh tokens use {@link consumeRefreshToken} instead, which atomically
-   * revokes the token as part of validation (S5) — do not route Token.REFRESH
-   * through this method.
+   * Validate a user token
    * @param token - The token to validate
    * @param type - The type of token
    * @returns The user associated with the token or null if invalid
@@ -55,87 +53,30 @@ export class UserTokenService {
       where: { token, type },
       relations: ['user'],
     });
-    this.logger.log(
-      `Validating ${type} token for user with id: ${userToken?.user.id}`,
-    );
+    this.logger.log(`Validating ${type} token for user with id: ${userToken?.user.id}`);
 
+    if(userToken && userToken.type === Token.REFRESH) {
+      try {
+        this.jwtService.verify(token, { ignoreExpiration: true }); 
+        this.logger.log(`JWT token verified for user with id: ${userToken.user.id}`);
+      } catch (error) {
+        this.logger.warn(`JWT token verification failed: ${error.message}`);
+        throw new BadRequestException("Invalid or expired token");
+      }
+      return userToken.user;
+    }
     if (!userToken || userToken.expiresAt < new Date()) {
-      throw new BadRequestException('Invalid or expired token');
+        throw new BadRequestException("Invalid or expired token");
     }
 
     this.logger.log(`Token validated for user with id: ${userToken.user.id}`);
 
+
     return userToken.user;
-  }
-
-  /**
-   * S5: atomically consumes (deletes) a refresh token as part of validating it,
-   * so it can never be redeemed twice — the delete's affected-row count is the
-   * race-safe "did I win the race to use this token" check. Concurrent replays
-   * of the same refresh token: exactly one caller gets the user back, every
-   * other caller (including a legitimately-rotated stale token presented later)
-   * gets `null`.
-   *
-   * @param token - The refresh token to validate and revoke.
-   * @returns The associated user, or `null` if the token is unknown, already
-   *   consumed/revoked, DB-expired, or fails JWT signature/expiry verification.
-   */
-  async consumeRefreshToken(token: string): Promise<User | null> {
-    const userToken = await this.tokenRepo.findOne({
-      where: { token, type: Token.REFRESH },
-      relations: ['user'],
-    });
-    if (!userToken) {
-      this.logger.warn('Refresh token not found');
-      return null;
-    }
-
-    // Delete first: whichever concurrent request's delete actually removes the
-    // row "wins" the race. Anyone else (a genuine replay, or a second request
-    // racing the same token) gets affected === 0 and is rejected below.
-    const result = await this.tokenRepo.delete({ id: userToken.id });
-    if (!result.affected) {
-      this.logger.warn(
-        `Refresh token for user ${userToken.user.id} was already consumed (lost the race)`,
-      );
-      return null;
-    }
-
-    if (userToken.expiresAt < new Date()) {
-      this.logger.warn(
-        `Refresh token for user ${userToken.user.id} had already expired`,
-      );
-      return null;
-    }
-
-    try {
-      this.jwtService.verify(token);
-    } catch (error) {
-      this.logger.warn(
-        `Refresh token JWT verification failed: ${error.message}`,
-      );
-      return null;
-    }
-
-    this.logger.log(
-      `Refresh token consumed for user with id: ${userToken.user.id}`,
-    );
-    return userToken.user;
-  }
-
-  /**
-   * F1: fetches the most recently issued token of the given type for a user,
-   * used by `AuthService.resendVerification` to enforce a resend cooldown
-   * without needing a dedicated "last sent at" column.
-   */
-  async getRecentToken(userId: number, type: Token): Promise<UserToken | null> {
-    return this.tokenRepo.findOne({
-      where: { user: { id: userId }, type },
-      order: { createdAt: 'DESC' },
-    });
   }
 
   async revokeToken(token: string): Promise<void> {
+
     this.logger.log(`Revoking token`);
     await this.tokenRepo.delete({ token });
   }
@@ -165,7 +106,7 @@ export class UserTokenService {
   }
 
   async createOrReusePasswordResetToken(userId: number): Promise<UserToken> {
-    const token = await this.getValidPasswordResetToken(userId);
+    let token = await this.getValidPasswordResetToken(userId);
     if (token) {
       return token;
     }
@@ -174,45 +115,31 @@ export class UserTokenService {
       user: { id: userId },
       type: Token.PASSWORD_RESET,
       token: crypto.randomBytes(32).toString('hex'),
-      expiresAt: subMinutes(
-        new Date(),
-        -VARIABLES.PASSWORD_RESET_TOKEN_EXPIRES_IN_MINUTES,
-      ), // valid for `ttlMinutes`
+      expiresAt: subMinutes(new Date(), -VARIABLES.PASSWORD_RESET_TOKEN_EXPIRES_IN_MINUTES), // valid for `ttlMinutes`
     });
 
     return this.tokenRepo.save(newToken);
   }
 
-  async createJWTTokens(user: User): Promise<{
-    access_token: string;
-    refresh_token: string;
-    expires_at: Date;
-  }> {
+async createJWTTokens(user: User): Promise<{ access_token: string; refresh_token: string; expires_at: Date }> {
     const payload = { sub: user.id, email: user.email, role: user.role };
-
+    
     // Debug: Log env vars
     const accessExpiresIn = process.env.JWT_ACCESS_EXPIRES_IN || '15m';
     const refreshExpiresIn = process.env.JWT_REFRESH_EXPIRES_IN || '7d';
-    this.logger.log(
-      `Access expiresIn: ${accessExpiresIn}, Refresh expiresIn: ${refreshExpiresIn}`,
-    );
-
+    this.logger.log(`Access expiresIn: ${accessExpiresIn}, Refresh expiresIn: ${refreshExpiresIn}`);
+    
     // Use the JwtService configuration provided by AuthModule and only set expiresIn here.
     // Accessing internal module internals can be undefined and cause runtime errors.
     const accessOptions = { expiresIn: accessExpiresIn };
-    this.logger.log(
-      `Final access options: expiresIn=${accessOptions.expiresIn}`,
-    );
+    this.logger.log(`Final access options: expiresIn=${accessOptions.expiresIn}`);
 
     let access_token: string;
     try {
       access_token = this.jwtService.sign(payload, accessOptions);
       this.logger.log('Access token signed successfully');
     } catch (signError) {
-      this.logger.error(
-        `Access sign error: ${signError.message}`,
-        signError.stack,
-      );
+      this.logger.error(`Access sign error: ${signError.message}`, signError.stack);
       throw signError;
     }
 
@@ -222,13 +149,10 @@ export class UserTokenService {
       refresh_token = this.jwtService.sign(payload, refreshOptions);
       this.logger.log('Refresh token signed successfully');
     } catch (signError) {
-      this.logger.error(
-        `Refresh sign error: ${signError.message}`,
-        signError.stack,
-      );
+      this.logger.error(`Refresh sign error: ${signError.message}`, signError.stack);
       throw signError;
     }
-
+    
     this.logger.log(`Created JWT tokens for user with id: ${user.id}`);
 
     // Persist the refresh token in DB
@@ -236,15 +160,12 @@ export class UserTokenService {
       token: refresh_token,
       user: { id: user.id },
       type: Token.REFRESH,
-      expiresAt: subMinutes(
-        new Date(),
-        -VARIABLES.REFRESH_TOKEN_EXPIRES_IN_DAYS * 24 * 60,
-      ),
+      expiresAt: subMinutes(new Date(), -VARIABLES.REFRESH_TOKEN_EXPIRES_IN_DAYS * 24 * 60),
     });
 
     await this.tokenRepo.save(refreshEntity);
 
-    const { exp } = this.jwtService.decode(access_token);
+    const { exp } = this.jwtService.decode(access_token) as { exp: number };
     const expires_at = new Date(exp * 1000);
 
     return { access_token, refresh_token, expires_at };
@@ -254,4 +175,5 @@ export class UserTokenService {
     this.logger.log(`Revoking refresh tokens for user with id: ${userId}`);
     await this.tokenRepo.delete({ user: { id: userId }, type: Token.REFRESH });
   }
+    
 }

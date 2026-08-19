@@ -17,8 +17,6 @@ export class AddJobDeadline1782820000000 implements MigrationInterface {
 
   public async down(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`DROP INDEX IF EXISTS "idx_jobs_status_deadline"`);
-    await queryRunner.query(
-      `ALTER TABLE "jobs" DROP COLUMN IF EXISTS "deadline"`,
-    );
+    await queryRunner.query(`ALTER TABLE "jobs" DROP COLUMN IF EXISTS "deadline"`);
   }
 }

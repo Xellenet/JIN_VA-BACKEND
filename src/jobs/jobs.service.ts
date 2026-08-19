@@ -35,26 +35,13 @@ import {
   JobStartedPayload,
 } from '@common/events/app.events';
 
-const IMMUTABLE_STATUSES = new Set([
-  Status.COMPLETED,
-  Status.CANCELLED,
-  Status.EXPIRED,
-]);
+const IMMUTABLE_STATUSES = new Set([Status.COMPLETED, Status.CANCELLED, Status.EXPIRED]);
 
-type Pagination = {
-  total: number;
-  page: number;
-  limit: number;
-  totalPages: number;
-};
-type JobList = {
-  message: string;
-  data: JobResponseDto[];
-  pagination: Pagination;
-};
-type JobItem = { message: string; data: JobResponseDto };
-type AppItem = { message: string; data: ApplicationResponseDto };
-type AppList = { message: string; data: ApplicationResponseDto[] };
+type Pagination = { total: number; page: number; limit: number; totalPages: number };
+type JobList    = { message: string; data: JobResponseDto[]; pagination: Pagination };
+type JobItem    = { message: string; data: JobResponseDto };
+type AppItem    = { message: string; data: ApplicationResponseDto };
+type AppList    = { message: string; data: ApplicationResponseDto[] };
 
 @Injectable()
 export class JobsService {
@@ -95,19 +82,11 @@ export class JobsService {
 
     this.assertBudget(createJobDto.budgetMin, createJobDto.budgetMax);
 
-    const customer = await this.usersRepository.findOne({
-      where: { id: requestUser.id },
-    });
-    if (!customer)
-      throw new NotFoundException('Authenticated customer not found.');
+    const customer = await this.usersRepository.findOne({ where: { id: requestUser.id } });
+    if (!customer) throw new NotFoundException('Authenticated customer not found.');
 
-    const service = await this.servicesRepository.findOne({
-      where: { id: createJobDto.serviceId },
-    });
-    if (!service)
-      throw new NotFoundException(
-        `Service with id ${createJobDto.serviceId} not found.`,
-      );
+    const service = await this.servicesRepository.findOne({ where: { id: createJobDto.serviceId } });
+    if (!service) throw new NotFoundException(`Service with id ${createJobDto.serviceId} not found.`);
 
     const { serviceId: _sid, ...payload } = createJobDto;
     const saved = await this.jobsRepository.save(
@@ -115,10 +94,7 @@ export class JobsService {
     );
 
     this.logger.log(`Job ${saved.id} created by customer ${customer.id}`);
-    return {
-      message: SUCCESS_MESSAGES.JOB.CREATED,
-      data: await this.loadJobDto(saved.id),
-    };
+    return { message: SUCCESS_MESSAGES.JOB.CREATED, data: await this.loadJobDto(saved.id) };
   }
 
   /**
@@ -134,27 +110,20 @@ export class JobsService {
    * @throws {ForbiddenException}  When the caller is not the job owner.
    * @throws {BadRequestException} When the job is in an immutable state, or budget is invalid.
    */
-  async update(
-    id: number,
-    updateJobDto: UpdateJobDto,
-    requestUserId: number,
-  ): Promise<JobItem> {
+  async update(id: number, updateJobDto: UpdateJobDto, requestUserId: number): Promise<JobItem> {
     const job = await this.loadJobOrFail(id);
     this.assertOwner(job, requestUserId);
     this.assertMutable(job);
 
-    const nextMin = updateJobDto.budgetMin ?? job.budgetMin;
-    const nextMax = updateJobDto.budgetMax ?? job.budgetMax;
+    const nextMin = updateJobDto.budgetMin ?? (job.budgetMin as number | undefined);
+    const nextMax = updateJobDto.budgetMax ?? (job.budgetMax as number | undefined);
     this.assertBudget(nextMin, nextMax);
 
     Object.assign(job, updateJobDto);
     await this.jobsRepository.save(job);
 
     this.logger.log(`Job ${id} updated by customer ${requestUserId}`);
-    return {
-      message: SUCCESS_MESSAGES.JOB.UPDATED,
-      data: await this.loadJobDto(id),
-    };
+    return { message: SUCCESS_MESSAGES.JOB.UPDATED, data: await this.loadJobDto(id) };
   }
 
   /**
@@ -167,10 +136,7 @@ export class JobsService {
    * @throws {ForbiddenException}  When the caller is not the job owner.
    * @throws {BadRequestException} When the job is not OPEN.
    */
-  async remove(
-    id: number,
-    requestUserId: number,
-  ): Promise<{ message: string }> {
+  async remove(id: number, requestUserId: number): Promise<{ message: string }> {
     const job = await this.loadJobOrFail(id);
     this.assertOwner(job, requestUserId);
 
@@ -199,16 +165,11 @@ export class JobsService {
     this.applyJobFilters(qb, query);
 
     const total = await qb.getCount();
-    const jobs = await qb
-      .skip((page - 1) * limit)
-      .take(limit)
-      .getMany();
+    const jobs  = await qb.skip((page - 1) * limit).take(limit).getMany();
 
     return {
-      message: SUCCESS_MESSAGES.JOB.ALL_RETRIEVED,
-      data: plainToInstance(JobResponseDto, jobs, {
-        excludeExtraneousValues: true,
-      }),
+      message:    SUCCESS_MESSAGES.JOB.ALL_RETRIEVED,
+      data:       plainToInstance(JobResponseDto, jobs, { excludeExtraneousValues: true }),
       pagination: this.paginate(total, page, limit),
     };
   }
@@ -228,16 +189,11 @@ export class JobsService {
     this.applyJobFilters(qb, query);
 
     const total = await qb.getCount();
-    const jobs = await qb
-      .skip((page - 1) * limit)
-      .take(limit)
-      .getMany();
+    const jobs  = await qb.skip((page - 1) * limit).take(limit).getMany();
 
     return {
-      message: SUCCESS_MESSAGES.JOB.ALL_RETRIEVED,
-      data: plainToInstance(JobResponseDto, jobs, {
-        excludeExtraneousValues: true,
-      }),
+      message:    SUCCESS_MESSAGES.JOB.ALL_RETRIEVED,
+      data:       plainToInstance(JobResponseDto, jobs, { excludeExtraneousValues: true }),
       pagination: this.paginate(total, page, limit),
     };
   }
@@ -251,7 +207,7 @@ export class JobsService {
   async findOne(id: number): Promise<JobItem> {
     return {
       message: SUCCESS_MESSAGES.JOB.RETRIEVED,
-      data: await this.loadJobDto(id),
+      data:    await this.loadJobDto(id),
     };
   }
 
@@ -289,25 +245,20 @@ export class JobsService {
       throw new ConflictException('You have already applied to this job.');
     }
 
-    const artisan = await this.usersRepository.findOne({
-      where: { id: artisanId },
-    });
-    if (!artisan)
-      throw new NotFoundException('Authenticated artisan not found.');
+    const artisan = await this.usersRepository.findOne({ where: { id: artisanId } });
+    if (!artisan) throw new NotFoundException('Authenticated artisan not found.');
 
     const application = await this.applicationsRepository.save(
       this.applicationsRepository.create({ job, artisan, ...dto }),
     );
 
-    this.logger.log(
-      `Artisan ${artisanId} applied to job ${jobId} (application ${application.id})`,
-    );
+    this.logger.log(`Artisan ${artisanId} applied to job ${jobId} (application ${application.id})`);
 
     this.eventEmitter.emit(APP_EVENTS.JOB_APPLICATION_RECEIVED, {
-      customerId: job.customer.id,
+      customerId:  job.customer.id,
       artisanName: `${artisan.firstname} ${artisan.lastname}`,
-      jobTitle: job.title ?? `Job #${job.id}`,
-      jobId: job.id,
+      jobTitle:    job.title ?? `Job #${job.id}`,
+      jobId:       job.id,
     } as JobApplicationReceivedPayload);
 
     const populated = await this.applicationsRepository.findOne({
@@ -317,9 +268,7 @@ export class JobsService {
 
     return {
       message: SUCCESS_MESSAGES.JOB.APPLICATION_SUBMITTED,
-      data: plainToInstance(ApplicationResponseDto, populated, {
-        excludeExtraneousValues: true,
-      }),
+      data:    plainToInstance(ApplicationResponseDto, populated, { excludeExtraneousValues: true }),
     };
   }
 
@@ -343,9 +292,7 @@ export class JobsService {
 
     return {
       message: SUCCESS_MESSAGES.JOB.APPLICATIONS_RETRIEVED,
-      data: plainToInstance(ApplicationResponseDto, applications, {
-        excludeExtraneousValues: true,
-      }),
+      data:    plainToInstance(ApplicationResponseDto, applications, { excludeExtraneousValues: true }),
     };
   }
 
@@ -361,11 +308,7 @@ export class JobsService {
    * @throws {ForbiddenException}  When the caller does not own the job.
    * @throws {BadRequestException} When the job is not OPEN, or the application is not PENDING.
    */
-  async acceptApplication(
-    jobId: number,
-    appId: number,
-    customerId: number,
-  ): Promise<JobItem> {
+  async acceptApplication(jobId: number, appId: number, customerId: number): Promise<JobItem> {
     const job = await this.loadJobOrFail(jobId);
     this.assertOwner(job, customerId);
 
@@ -380,9 +323,7 @@ export class JobsService {
       relations: ['artisan'],
     });
     if (!application) {
-      throw new NotFoundException(
-        `Application ${appId} not found for job ${jobId}.`,
-      );
+      throw new NotFoundException(`Application ${appId} not found for job ${jobId}.`);
     }
     if (application.status !== ApplicationStatus.PENDING) {
       throw new BadRequestException(
@@ -392,7 +333,7 @@ export class JobsService {
 
     // Load other pending applicants before bulk-rejecting so we can notify them.
     const pendingApplications = await this.applicationsRepository.find({
-      where: { job: { id: jobId }, status: ApplicationStatus.PENDING },
+      where:     { job: { id: jobId }, status: ApplicationStatus.PENDING },
       relations: ['artisan'],
     });
 
@@ -400,7 +341,7 @@ export class JobsService {
     const intentId = await this.paymentsService.holdPayment(
       jobId,
       customerId,
-      application.quotePrice,
+      application.quotePrice as number | undefined,
     );
 
     // Accept the chosen application.
@@ -420,9 +361,9 @@ export class JobsService {
       .execute();
 
     // Advance job to PENDING with the accepted artisan and payment intent stored.
-    job.status = Status.PENDING;
-    job.acceptedArtisan = application.artisan;
-    job.paymentIntentId = intentId;
+    job.status             = Status.PENDING;
+    job.acceptedArtisan    = application.artisan;
+    job.paymentIntentId    = intentId;
     await this.jobsRepository.save(job);
 
     this.logger.log(
@@ -431,23 +372,20 @@ export class JobsService {
 
     this.eventEmitter.emit(APP_EVENTS.JOB_APPLICATION_ACCEPTED, {
       artisanId: application.artisan.id,
-      jobTitle: job.title ?? `Job #${job.id}`,
-      jobId: job.id,
+      jobTitle:  job.title ?? `Job #${job.id}`,
+      jobId:     job.id,
     } as JobApplicationAcceptedPayload);
 
     // Notify each rejected applicant.
-    for (const rejected of pendingApplications.filter((a) => a.id !== appId)) {
+    for (const rejected of pendingApplications.filter(a => a.id !== appId)) {
       this.eventEmitter.emit(APP_EVENTS.JOB_APPLICATION_REJECTED, {
         artisanId: rejected.artisan.id,
-        jobTitle: job.title ?? `Job #${job.id}`,
-        jobId: job.id,
+        jobTitle:  job.title ?? `Job #${job.id}`,
+        jobId:     job.id,
       } as JobApplicationRejectedPayload);
     }
 
-    return {
-      message: SUCCESS_MESSAGES.JOB.APPLICATION_ACCEPTED,
-      data: await this.loadJobDto(jobId),
-    };
+    return { message: SUCCESS_MESSAGES.JOB.APPLICATION_ACCEPTED, data: await this.loadJobDto(jobId) };
   }
 
   // ─── State transitions ───────────────────────────────────────────────────────
@@ -480,14 +418,11 @@ export class JobsService {
 
     this.eventEmitter.emit(APP_EVENTS.JOB_STARTED, {
       customerId: job.customer.id,
-      jobTitle: job.title ?? `Job #${job.id}`,
-      jobId: job.id,
+      jobTitle:   job.title ?? `Job #${job.id}`,
+      jobId:      job.id,
     } as JobStartedPayload);
 
-    return {
-      message: SUCCESS_MESSAGES.JOB.STARTED,
-      data: await this.loadJobDto(jobId),
-    };
+    return { message: SUCCESS_MESSAGES.JOB.STARTED, data: await this.loadJobDto(jobId) };
   }
 
   /**
@@ -514,28 +449,21 @@ export class JobsService {
     this.assertAcceptedArtisan(job, artisanId);
 
     if (job.completionRequestedAt) {
-      throw new BadRequestException(
-        'Completion has already been requested for this job.',
-      );
+      throw new BadRequestException('Completion has already been requested for this job.');
     }
 
     job.completionRequestedAt = new Date();
     await this.jobsRepository.save(job);
 
-    this.logger.log(
-      `Job ${jobId} — completion requested by artisan ${artisanId}`,
-    );
+    this.logger.log(`Job ${jobId} — completion requested by artisan ${artisanId}`);
 
     this.eventEmitter.emit(APP_EVENTS.JOB_COMPLETION_REQUESTED, {
       customerId: job.customer.id,
-      jobTitle: job.title ?? `Job #${job.id}`,
-      jobId: job.id,
+      jobTitle:   job.title ?? `Job #${job.id}`,
+      jobId:      job.id,
     } as JobCompletionRequestedPayload);
 
-    return {
-      message: SUCCESS_MESSAGES.JOB.COMPLETION_REQUESTED,
-      data: await this.loadJobDto(jobId),
-    };
+    return { message: SUCCESS_MESSAGES.JOB.COMPLETION_REQUESTED, data: await this.loadJobDto(jobId) };
   }
 
   /**
@@ -573,22 +501,17 @@ export class JobsService {
     job.status = Status.COMPLETED;
     await this.jobsRepository.save(job);
 
-    this.logger.log(
-      `Job ${jobId} → COMPLETED. Payment captured. Customer ${customerId}`,
-    );
+    this.logger.log(`Job ${jobId} → COMPLETED. Payment captured. Customer ${customerId}`);
 
     if (job.acceptedArtisanId) {
       this.eventEmitter.emit(APP_EVENTS.JOB_COMPLETED, {
         artisanId: job.acceptedArtisanId,
-        jobTitle: job.title ?? `Job #${job.id}`,
-        jobId: job.id,
+        jobTitle:  job.title ?? `Job #${job.id}`,
+        jobId:     job.id,
       } as JobCompletedPayload);
     }
 
-    return {
-      message: SUCCESS_MESSAGES.JOB.CONFIRMED,
-      data: await this.loadJobDto(jobId),
-    };
+    return { message: SUCCESS_MESSAGES.JOB.CONFIRMED, data: await this.loadJobDto(jobId) };
   }
 
   /**
@@ -603,15 +526,14 @@ export class JobsService {
    * @throws {ForbiddenException}  When the caller does not own the job.
    * @throws {BadRequestException} When the job cannot be cancelled.
    */
-  async cancelJob(
-    jobId: number,
-    customerId: number,
-  ): Promise<{ message: string }> {
+  async cancelJob(jobId: number, customerId: number): Promise<{ message: string }> {
     const job = await this.loadJobOrFail(jobId);
     this.assertOwner(job, customerId);
 
     if (job.status === Status.COMPLETED || job.status === Status.CANCELLED) {
-      throw new BadRequestException(`A ${job.status} job cannot be cancelled.`);
+      throw new BadRequestException(
+        `A ${job.status} job cannot be cancelled.`,
+      );
     }
 
     if (job.status === Status.EXPIRED) {
@@ -632,8 +554,8 @@ export class JobsService {
     if (job.acceptedArtisanId) {
       this.eventEmitter.emit(APP_EVENTS.JOB_CANCELLED, {
         artisanId: job.acceptedArtisanId,
-        jobTitle: job.title ?? `Job #${job.id}`,
-        jobId: job.id,
+        jobTitle:  job.title ?? `Job #${job.id}`,
+        jobId:     job.id,
       } as JobCancelledPayload);
     }
 
@@ -656,7 +578,7 @@ export class JobsService {
 
     // Load pending applicants before marking them rejected so we can notify them.
     const pendingApplications = await this.applicationsRepository.find({
-      where: { job: { id: jobId }, status: ApplicationStatus.PENDING },
+      where:     { job: { id: jobId }, status: ApplicationStatus.PENDING },
       relations: ['artisan'],
     });
 
@@ -665,10 +587,7 @@ export class JobsService {
         .createQueryBuilder()
         .update(JobApplication)
         .set({ status: ApplicationStatus.REJECTED })
-        .where('job_id = :jobId AND status = :status', {
-          jobId,
-          status: ApplicationStatus.PENDING,
-        })
+        .where('job_id = :jobId AND status = :status', { jobId, status: ApplicationStatus.PENDING })
         .execute();
     }
 
@@ -680,10 +599,10 @@ export class JobsService {
     );
 
     this.eventEmitter.emit(APP_EVENTS.JOB_EXPIRED, {
-      customerId: job.customer.id,
-      jobTitle: job.title ?? `Job #${job.id}`,
-      jobId: job.id,
-      pendingArtisanIds: pendingApplications.map((a) => a.artisan.id),
+      customerId:       job.customer.id,
+      jobTitle:         job.title ?? `Job #${job.id}`,
+      jobId:            job.id,
+      pendingArtisanIds: pendingApplications.map(a => a.artisan.id),
     } as JobExpiredPayload);
   }
 
@@ -697,18 +616,11 @@ export class JobsService {
       .orderBy('job.createdAt', 'DESC');
   }
 
-  private applyJobFilters(
-    qb: ReturnType<typeof this.buildJobsQb>,
-    query: GetJobsQueryDto,
-  ) {
-    if (query.status)
-      qb.andWhere('job.status = :status', { status: query.status });
-    if (query.serviceId)
-      qb.andWhere('job.service = :serviceId', { serviceId: query.serviceId });
+  private applyJobFilters(qb: ReturnType<typeof this.buildJobsQb>, query: GetJobsQueryDto) {
+    if (query.status)    qb.andWhere('job.status = :status',        { status: query.status });
+    if (query.serviceId) qb.andWhere('job.service = :serviceId',   { serviceId: query.serviceId });
     if (query.location) {
-      qb.andWhere('LOWER(job.location) LIKE :loc', {
-        loc: `%${query.location.toLowerCase()}%`,
-      });
+      qb.andWhere('LOWER(job.location) LIKE :loc', { loc: `%${query.location.toLowerCase()}%` });
     }
   }
 
@@ -723,9 +635,7 @@ export class JobsService {
 
   private async loadJobDto(id: number): Promise<JobResponseDto> {
     const job = await this.loadJobOrFail(id);
-    return plainToInstance(JobResponseDto, job, {
-      excludeExtraneousValues: true,
-    });
+    return plainToInstance(JobResponseDto, job, { excludeExtraneousValues: true });
   }
 
   private paginate(total: number, page: number, limit: number): Pagination {
@@ -734,9 +644,7 @@ export class JobsService {
 
   private assertOwner(job: Job, requestUserId: number): void {
     if (job.customerId !== requestUserId) {
-      throw new ForbiddenException(
-        'You do not have permission to perform this action on this job.',
-      );
+      throw new ForbiddenException('You do not have permission to perform this action on this job.');
     }
   }
 
@@ -750,17 +658,13 @@ export class JobsService {
 
   private assertMutable(job: Job): void {
     if (IMMUTABLE_STATUSES.has(job.status)) {
-      throw new BadRequestException(
-        `Jobs with status ${job.status} cannot be edited.`,
-      );
+      throw new BadRequestException(`Jobs with status ${job.status} cannot be edited.`);
     }
   }
 
   private assertBudget(min?: number, max?: number): void {
     if (min !== undefined && max !== undefined && Number(max) < Number(min)) {
-      throw new BadRequestException(
-        'budgetMax must be greater than or equal to budgetMin.',
-      );
+      throw new BadRequestException('budgetMax must be greater than or equal to budgetMin.');
     }
   }
 }

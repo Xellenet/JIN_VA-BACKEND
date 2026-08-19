@@ -36,9 +36,7 @@ export class VerificationResponseDto {
 
   @Expose() @ApiPropertyOptional() additionalNotes?: string;
 
-  @Expose()
-  @ApiProperty({ enum: VerificationStatus })
-  status!: VerificationStatus;
+  @Expose() @ApiProperty({ enum: VerificationStatus }) status!: VerificationStatus;
 
   @Expose() @ApiProperty() provider!: string;
 

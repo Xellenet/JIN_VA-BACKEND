@@ -3,10 +3,7 @@ import { IsEnum, IsNotEmpty, IsString } from 'class-validator';
 import { DevicePlatform } from '@common/types/enums';
 
 export class RegisterDeviceDto {
-  @ApiProperty({
-    example: 'fcm-token-abc123',
-    description: 'FCM or APNS device registration token',
-  })
+  @ApiProperty({ example: 'fcm-token-abc123', description: 'FCM or APNS device registration token' })
   @IsString()
   @IsNotEmpty()
   token!: string;
