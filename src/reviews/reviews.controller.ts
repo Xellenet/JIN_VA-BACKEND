@@ -52,17 +52,10 @@ export class ReviewsController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.CUSTOMER)
   @ApiBearerAuth()
-  @ApiOperation({
-    summary: 'Submit a review for a completed job (customer only)',
-  })
-  @ApiCreatedResponse({
-    description: 'Review submitted successfully.',
-    type: Review,
-  })
+  @ApiOperation({ summary: 'Submit a review for a completed job (customer only)' })
+  @ApiCreatedResponse({ description: 'Review submitted successfully.', type: Review })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
-  @ApiForbiddenResponse({
-    description: 'Caller does not have the CUSTOMER role',
-  })
+  @ApiForbiddenResponse({ description: 'Caller does not have the CUSTOMER role' })
   create(@Req() req: any, @Body() createReviewDto: CreateReviewDto) {
     return this.reviewsService.create(req.user.id, createReviewDto);
   }
@@ -90,10 +83,7 @@ export class ReviewsController {
    */
   @Get('artisan-profile/:artisanProfileId')
   @ApiOperation({ summary: 'Get paginated reviews for an artisan profile' })
-  @ApiOkResponse({
-    description: 'Returns reviews for one artisan profile.',
-    type: [Review],
-  })
+  @ApiOkResponse({ description: 'Returns reviews for one artisan profile.', type: [Review] })
   findByArtisanProfile(
     @Param('artisanProfileId', ParseIntPipe) artisanProfileId: number,
     @Query() query: GetReviewsQueryDto,
@@ -110,10 +100,7 @@ export class ReviewsController {
    */
   @Get('users/:reviewedUserId')
   @ApiOperation({ summary: 'Get paginated reviews received by a user' })
-  @ApiOkResponse({
-    description: 'Returns reviews for one user receiving reviews.',
-    type: [Review],
-  })
+  @ApiOkResponse({ description: 'Returns reviews for one user receiving reviews.', type: [Review] })
   findByReviewedUser(
     @Param('reviewedUserId', ParseIntPipe) reviewedUserId: number,
     @Query() query: GetReviewsQueryDto,

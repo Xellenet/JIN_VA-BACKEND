@@ -1,5 +1,5 @@
-import { ConfigModule, ConfigService } from '@nestjs/config';
-import { TypeOrmModuleAsyncOptions } from '@nestjs/typeorm';
+import { ConfigModule, ConfigService } from "@nestjs/config";
+import { TypeOrmModuleAsyncOptions } from "@nestjs/typeorm";
 
 export const typeOrmConfigAsync: TypeOrmModuleAsyncOptions = {
   imports: [ConfigModule],
@@ -15,9 +15,6 @@ export const typeOrmConfigAsync: TypeOrmModuleAsyncOptions = {
     synchronize: false,
     migrations: [__dirname + '/../migrations/*{.ts,.js}'],
     migrationsRun: true,
-    logging:
-      config.get('NODE_ENV') !== 'production'
-        ? ['error', 'warn', 'schema']
-        : false,
+    logging: config.get('NODE_ENV') !== 'production' ? ['error', 'warn', 'schema'] : false,
   }),
 };

@@ -8,12 +8,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
-import {
-  ApiBearerAuth,
-  ApiOperation,
-  ApiParam,
-  ApiTags,
-} from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger';
 import { DisputesService } from './disputes.service';
 import { CreateDisputeDto } from './dto/create-dispute.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -30,9 +25,7 @@ export class DisputesController {
   constructor(private readonly disputesService: DisputesService) {}
 
   @Post()
-  @ApiOperation({
-    summary: 'Raise a dispute on a booking (customer or artisan)',
-  })
+  @ApiOperation({ summary: 'Raise a dispute on a booking (customer or artisan)' })
   raise(@Req() req: any, @Body() dto: CreateDisputeDto) {
     return this.disputesService.raise(req.user.id, dto);
   }

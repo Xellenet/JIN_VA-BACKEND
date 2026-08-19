@@ -1,9 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import type {
-  IPushProvider,
-  PushPayload,
-  PushSendResult,
-} from './push-provider.interface';
+import type { IPushProvider, PushPayload, PushSendResult } from './push-provider.interface';
 
 /**
  * No-op provider used in local development. Logs the notification to console

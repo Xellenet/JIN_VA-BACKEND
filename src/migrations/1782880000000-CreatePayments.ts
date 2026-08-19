@@ -36,18 +36,10 @@ export class CreatePayments1782880000000 implements MigrationInterface {
       )
     `);
 
-    await queryRunner.query(
-      `CREATE INDEX "idx_payments_job_id"      ON "payments" ("job_id")`,
-    );
-    await queryRunner.query(
-      `CREATE INDEX "idx_payments_customer_id" ON "payments" ("customer_id")`,
-    );
-    await queryRunner.query(
-      `CREATE INDEX "idx_payments_status"      ON "payments" ("status")`,
-    );
-    await queryRunner.query(
-      `CREATE INDEX "idx_payments_reference"   ON "payments" ("reference")`,
-    );
+    await queryRunner.query(`CREATE INDEX "idx_payments_job_id"      ON "payments" ("job_id")`);
+    await queryRunner.query(`CREATE INDEX "idx_payments_customer_id" ON "payments" ("customer_id")`);
+    await queryRunner.query(`CREATE INDEX "idx_payments_status"      ON "payments" ("status")`);
+    await queryRunner.query(`CREATE INDEX "idx_payments_reference"   ON "payments" ("reference")`);
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {

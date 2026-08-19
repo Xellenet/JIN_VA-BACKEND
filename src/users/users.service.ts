@@ -1,9 +1,4 @@
-import {
-  BadRequestException,
-  Injectable,
-  Logger,
-  NotFoundException,
-} from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UpdateMeDto } from './dto/update-me.dto';
@@ -30,6 +25,7 @@ import { ArtisanProfileResponseDto } from './dto/artisan-profile-response.dto';
 import { CustomerProfileResponseDto } from './dto/customer-profile-response.dto';
 import { ServiceEntity } from '@services/entities/service.entity';
 import { UserTokenService } from './token.service';
+
 
 @Injectable()
 export class UsersService {
@@ -58,9 +54,7 @@ export class UsersService {
    * @throws {BadRequestException} When no email is provided.
    * @throws {UserAlreadyExists} When a user with the same email already exists.
    */
-  async createUser(
-    createUserDto: CreateUserDto,
-  ): Promise<{ message: string; data: User }> {
+  async createUser(createUserDto: CreateUserDto): Promise<{ message: string; data: User }> {
     let user;
     const email = createUserDto.email;
     if (!email) {
@@ -69,21 +63,10 @@ export class UsersService {
 
     user = await this.findUserByEmail(email);
     if (user) {
-      throw new UserAlreadyExists(
-        ERROR_MESSAGES.USER.EMAIL_ALREADY_EXISTS(email),
-      );
+      throw new UserAlreadyExists(ERROR_MESSAGES.USER.EMAIL_ALREADY_EXISTS(email));
     }
-    // G5: social signups (AuthService.registerSocialUser) call this with no
-    // `password` — leave it null rather than hashing `undefined` (which
-    // bcrypt rejects). Regular self-registration always supplies a password
-    // (enforced by CreateUserDto's validators on the public register route).
-    const hashedPassword = createUserDto.password
-      ? await bcrypt.hash(createUserDto.password, VARIABLES.SALT_OR_ROUNDS)
-      : null;
-    user = this.usersRepository.create({
-      ...createUserDto,
-      password: hashedPassword,
-    });
+    const hashedPassword = await bcrypt.hash(createUserDto.password, VARIABLES.SALT_OR_ROUNDS);
+    user = this.usersRepository.create({ ...createUserDto, password: hashedPassword });
 
     this.logger.log(`Created user with id: ${user.id}`);
 
@@ -125,9 +108,7 @@ export class UsersService {
    * @returns `{ message, data: UserResponseDto }` with addresses populated.
    * @throws {NotFoundException} When no user with the given ID exists.
    */
-  async findMe(
-    userId: number,
-  ): Promise<{ message: string; data: UserResponseDto }> {
+  async findMe(userId: number): Promise<{ message: string; data: UserResponseDto }> {
     const user = await this.usersRepository.findOne({
       where: { id: userId },
       relations: ['addresses'],
@@ -139,9 +120,7 @@ export class UsersService {
 
     return {
       message: SUCCESS_MESSAGES.USER.RETRIEVED,
-      data: plainToInstance(UserResponseDto, user, {
-        excludeExtraneousValues: true,
-      }),
+      data: plainToInstance(UserResponseDto, user, { excludeExtraneousValues: true }),
     };
   }
 
@@ -155,10 +134,7 @@ export class UsersService {
    * @returns `{ message, data: UserResponseDto }` reflecting the saved state.
    * @throws {NotFoundException} When no user with the given ID exists.
    */
-  async updateMe(
-    userId: number,
-    updateMeDto: UpdateMeDto,
-  ): Promise<{ message: string; data: UserResponseDto }> {
+  async updateMe(userId: number, updateMeDto: UpdateMeDto): Promise<{ message: string; data: UserResponseDto }> {
     const user = await this.usersRepository.findOne({
       where: { id: userId },
       relations: ['addresses'],
@@ -174,9 +150,7 @@ export class UsersService {
 
     return {
       message: SUCCESS_MESSAGES.USER.UPDATED,
-      data: plainToInstance(UserResponseDto, saved, {
-        excludeExtraneousValues: true,
-      }),
+      data: plainToInstance(UserResponseDto, saved, { excludeExtraneousValues: true }),
     };
   }
 
@@ -208,10 +182,7 @@ export class UsersService {
    * @returns `{ message, data: UserResponseDto }` with the updated profile picture URL.
    * @throws {NotFoundException} When no user with the given ID exists.
    */
-  async updateAvatar(
-    userId: number,
-    url: string,
-  ): Promise<{ message: string; data: UserResponseDto }> {
+  async updateAvatar(userId: number, url: string): Promise<{ message: string; data: UserResponseDto }> {
     const user = await this.usersRepository.findOne({
       where: { id: userId },
       relations: ['addresses'],
@@ -224,9 +195,7 @@ export class UsersService {
     this.logger.log(`User ${userId} updated their avatar`);
     return {
       message: SUCCESS_MESSAGES.USER.AVATAR_UPLOADED,
-      data: plainToInstance(UserResponseDto, saved, {
-        excludeExtraneousValues: true,
-      }),
+      data: plainToInstance(UserResponseDto, saved, { excludeExtraneousValues: true }),
     };
   }
 
@@ -254,61 +223,11 @@ export class UsersService {
     if (!user) {
       throw new NotFoundException(`User with ID ${userId} not found`);
     }
-    // G5/G10: social-only accounts have a null password — never a valid
-    // match, and never pass a null hash into bcrypt.compare (it throws).
-    if (!user.password) {
-      return false;
-    }
     return bcrypt.compare(password, user.password);
   }
 
-  /**
-   * G10: reports whether the account has a usable (non-null) password hash,
-   * without ever loading or comparing it. Kept as a standalone helper for any
-   * caller that only needs this one fact; `AuthService.loginUser()` uses
-   * `getPasswordCheckResult()` instead so a single login attempt only pays
-   * for one query (see below).
-   */
-  async hasUsablePassword(userId: number): Promise<boolean> {
-    const user = await this.usersRepository.findOne({
-      where: { id: userId },
-      select: ['password'],
-    });
-    return !!user?.password;
-  }
-
-  /**
-   * G10 efficiency fix: `AuthService.loginUser()` used to call
-   * `hasUsablePassword()` and then, if that returned true, `validatePassword()`
-   * — two independent `SELECT ... WHERE id = ?` queries for the same
-   * password column on every single login attempt (not just Google ones).
-   * This does both checks off one fetch instead. Never passes a null hash
-   * into `bcrypt.compare` (mirrors `validatePassword()`'s own guard).
-   *
-   * @returns `hasPassword` — false for a social-only account (no usable
-   *   password hash at all); `isValid` — true only when `hasPassword` is true
-   *   AND the supplied password matches.
-   */
-  async getPasswordCheckResult(
-    password: string,
-    userId: number,
-  ): Promise<{ hasPassword: boolean; isValid: boolean }> {
-    const user = await this.usersRepository.findOne({
-      where: { id: userId },
-      select: ['password'],
-    });
-    if (!user?.password) {
-      return { hasPassword: false, isValid: false };
-    }
-    const isValid = await bcrypt.compare(password, user.password);
-    return { hasPassword: true, isValid };
-  }
-
   async findOne(id: number) {
-    return this.usersRepository.findOne({
-      where: { id },
-      select: ['password'],
-    });
+    return this.usersRepository.findOne({ where: { id }, select: ['password'] });
   }
 
   async updateUser(id: number, updateUserDto: UpdateUserDto) {
@@ -335,18 +254,14 @@ export class UsersService {
    * @returns `{ message, data: ArtisanProfileResponseDto }`.
    * @throws {NotFoundException} When no artisan profile exists for the user.
    */
-  async findArtisanProfileByUserId(
-    userId: number,
-  ): Promise<{ message: string; data: ArtisanProfileResponseDto }> {
+  async findArtisanProfileByUserId(userId: number): Promise<{ message: string; data: ArtisanProfileResponseDto }> {
     const profile = await this.artisanProfilesRepository.findOne({
       where: { user: { id: userId } },
       relations: ['user', 'user.addresses', 'services'],
     });
 
     if (!profile) {
-      throw new NotFoundException(
-        `Artisan profile for user id ${userId} not found`,
-      );
+      throw new NotFoundException(`Artisan profile for user id ${userId} not found`);
     }
 
     return {
@@ -376,18 +291,14 @@ export class UsersService {
     });
 
     if (!profile) {
-      throw new NotFoundException(
-        `Artisan profile for user id ${userId} not found`,
-      );
+      throw new NotFoundException(`Artisan profile for user id ${userId} not found`);
     }
 
     if (serviceIds !== undefined) {
       if (serviceIds.length === 0) {
         profile.services = [];
       } else {
-        const services = await this.servicesRepository.findBy({
-          id: In(serviceIds),
-        });
+        const services = await this.servicesRepository.findBy({ id: In(serviceIds) });
         if (services.length !== serviceIds.length) {
           throw new NotFoundException('One or more services were not found.');
         }
@@ -417,18 +328,14 @@ export class UsersService {
    * @returns `{ message, data: CustomerProfileResponseDto }`.
    * @throws {NotFoundException} When no customer profile exists for the user.
    */
-  async findCustomerProfileByUserId(
-    userId: number,
-  ): Promise<{ message: string; data: CustomerProfileResponseDto }> {
+  async findCustomerProfileByUserId(userId: number): Promise<{ message: string; data: CustomerProfileResponseDto }> {
     const profile = await this.customerProfilesRepository.findOne({
       where: { user: { id: userId } },
       relations: ['user', 'user.addresses', 'preferredServices'],
     });
 
     if (!profile) {
-      throw new NotFoundException(
-        `Customer profile for user id ${userId} not found`,
-      );
+      throw new NotFoundException(`Customer profile for user id ${userId} not found`);
     }
 
     return {
@@ -460,9 +367,7 @@ export class UsersService {
     });
 
     if (!profile) {
-      throw new NotFoundException(
-        `Customer profile for user id ${userId} not found`,
-      );
+      throw new NotFoundException(`Customer profile for user id ${userId} not found`);
     }
 
     const nextBudgetMin =
@@ -479,22 +384,16 @@ export class UsersService {
       nextBudgetMax !== undefined &&
       Number(nextBudgetMax) < Number(nextBudgetMin)
     ) {
-      throw new BadRequestException(
-        'budgetMax must be greater than or equal to budgetMin.',
-      );
+      throw new BadRequestException('budgetMax must be greater than or equal to budgetMin.');
     }
 
     if (preferredServiceIds !== undefined) {
       if (preferredServiceIds.length === 0) {
         profile.preferredServices = [];
       } else {
-        const preferredServices = await this.servicesRepository.findBy({
-          id: In(preferredServiceIds),
-        });
+        const preferredServices = await this.servicesRepository.findBy({ id: In(preferredServiceIds) });
         if (preferredServices.length !== preferredServiceIds.length) {
-          throw new NotFoundException(
-            'One or more preferred services were not found.',
-          );
+          throw new NotFoundException('One or more preferred services were not found.');
         }
         profile.preferredServices = preferredServices;
       }
@@ -526,9 +425,7 @@ export class UsersService {
     this.logger.log(`User ${userId} added address ${saved.id}`);
     return {
       message: SUCCESS_MESSAGES.USER.ADDRESS_ADDED,
-      data: plainToInstance(AddressResponseDto, saved, {
-        excludeExtraneousValues: true,
-      }),
+      data: plainToInstance(AddressResponseDto, saved, { excludeExtraneousValues: true }),
     };
   }
 
@@ -547,16 +444,11 @@ export class UsersService {
     this.logger.log(`User ${userId} updated address ${addressId}`);
     return {
       message: SUCCESS_MESSAGES.USER.ADDRESS_UPDATED,
-      data: plainToInstance(AddressResponseDto, saved, {
-        excludeExtraneousValues: true,
-      }),
+      data: plainToInstance(AddressResponseDto, saved, { excludeExtraneousValues: true }),
     };
   }
 
-  async removeAddress(
-    userId: number,
-    addressId: number,
-  ): Promise<{ message: string }> {
+  async removeAddress(userId: number, addressId: number): Promise<{ message: string }> {
     const address = await this.addressesRepository.findOne({
       where: { id: addressId, user: { id: userId } },
     });
@@ -567,17 +459,13 @@ export class UsersService {
     return { message: SUCCESS_MESSAGES.USER.ADDRESS_REMOVED };
   }
 
-  private toArtisanProfileResponse(
-    profile: ArtisanProfile,
-  ): ArtisanProfileResponseDto {
+  private toArtisanProfileResponse(profile: ArtisanProfile): ArtisanProfileResponseDto {
     return plainToInstance(ArtisanProfileResponseDto, profile, {
       excludeExtraneousValues: true,
     });
   }
 
-  private toCustomerProfileResponse(
-    profile: CustomerProfile,
-  ): CustomerProfileResponseDto {
+  private toCustomerProfileResponse(profile: CustomerProfile): CustomerProfileResponseDto {
     return plainToInstance(CustomerProfileResponseDto, profile, {
       excludeExtraneousValues: true,
     });

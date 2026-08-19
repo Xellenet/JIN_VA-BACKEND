@@ -18,10 +18,7 @@ import {
 } from '@nestjs/swagger';
 import { VerificationService } from './verification.service';
 import { SubmitVerificationDto } from './dto/submit-verification.dto';
-import {
-  ApproveVerificationDto,
-  RejectVerificationDto,
-} from './dto/review-verification.dto';
+import { ApproveVerificationDto, RejectVerificationDto } from './dto/review-verification.dto';
 import { GetVerificationsQueryDto } from './dto/get-verifications-query.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -40,9 +37,7 @@ export class VerificationController {
   @Post()
   @UseGuards(RolesGuard)
   @Roles(Role.ARTISAN)
-  @ApiOperation({
-    summary: 'Submit identity verification documents (artisan only)',
-  })
+  @ApiOperation({ summary: 'Submit identity verification documents (artisan only)' })
   submit(@Req() req: any, @Body() dto: SubmitVerificationDto) {
     return this.verificationService.submit(req.user.id, dto);
   }
@@ -50,9 +45,7 @@ export class VerificationController {
   @Get('me')
   @UseGuards(RolesGuard)
   @Roles(Role.ARTISAN)
-  @ApiOperation({
-    summary: 'Get my latest verification submission (artisan only)',
-  })
+  @ApiOperation({ summary: 'Get my latest verification submission (artisan only)' })
   getMyVerification(@Req() req: any) {
     return this.verificationService.getMyVerification(req.user.id);
   }
@@ -88,9 +81,7 @@ export class VerificationController {
   @Patch(':id/approve')
   @UseGuards(RolesGuard)
   @Roles(Role.ADMIN)
-  @ApiOperation({
-    summary: 'Approve a verification and mark artisan as verified (admin only)',
-  })
+  @ApiOperation({ summary: 'Approve a verification and mark artisan as verified (admin only)' })
   @ApiParam({ name: 'id', type: Number })
   approve(
     @Req() req: any,

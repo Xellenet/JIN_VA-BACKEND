@@ -10,11 +10,7 @@ import { ArtisanProfile } from '@users/entities/artisan-profile.entity';
 @Module({
   imports: [TypeOrmModule.forFeature([ArtisanVerification, ArtisanProfile])],
   controllers: [VerificationController],
-  providers: [
-    VerificationService,
-    ManualVerificationProvider,
-    VerificationProviderFactory,
-  ],
+  providers: [VerificationService, ManualVerificationProvider, VerificationProviderFactory],
   exports: [VerificationService],
 })
 export class VerificationModule {}

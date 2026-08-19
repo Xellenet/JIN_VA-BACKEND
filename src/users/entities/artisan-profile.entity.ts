@@ -1,14 +1,14 @@
 import {
-  Check,
-  Column,
-  CreateDateColumn,
-  Entity,
-  JoinColumn,
-  JoinTable,
-  ManyToMany,
-  OneToOne,
-  PrimaryGeneratedColumn,
-  UpdateDateColumn,
+	Check,
+	Column,
+	CreateDateColumn,
+	Entity,
+	JoinColumn,
+	JoinTable,
+	ManyToMany,
+	OneToOne,
+	PrimaryGeneratedColumn,
+	UpdateDateColumn,
 } from 'typeorm';
 import { User } from './user.entity';
 import { ServiceEntity } from '@services/entities/service.entity';
@@ -19,118 +19,81 @@ import { PayoutType } from '@common/types/enums';
 @Check(`"hourly_rate" IS NULL OR "hourly_rate" > 0`)
 @Check(`"bio" IS NULL OR char_length("bio") <= 1000`)
 export class ArtisanProfile {
-  @PrimaryGeneratedColumn()
-  id!: number;
+	@PrimaryGeneratedColumn()
+	id!: number;
 
-  @OneToOne(() => User, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'user_id' })
-  user!: User;
+	@OneToOne(() => User, { onDelete: 'CASCADE' })
+	@JoinColumn({ name: 'user_id' })
+	user!: User;
 
-  @Column({ type: 'text', nullable: true })
-  bio?: string;
+	@Column({ type: 'text', nullable: true })
+	bio?: string;
 
-  @Column({ name: 'experience_years', type: 'int', nullable: true })
-  experienceYears?: number;
+	@Column({ name: 'experience_years', type: 'int', nullable: true })
+	experienceYears?: number;
 
-  @Column({
-    name: 'hourly_rate',
-    type: 'decimal',
-    precision: 10,
-    scale: 2,
-    nullable: true,
-  })
-  hourlyRate?: number;
+	@Column({ name: 'hourly_rate', type: 'decimal', precision: 10, scale: 2, nullable: true })
+	hourlyRate?: number;
 
-  /** ISO 4217 currency code for hourlyRate (e.g. "GHS", "USD", "EUR"). */
-  @Column({ name: 'currency', type: 'varchar', length: 3, default: 'GHS' })
-  currency!: string;
+	/** ISO 4217 currency code for hourlyRate (e.g. "GHS", "USD", "EUR"). */
+	@Column({ name: 'currency', type: 'varchar', length: 3, default: 'GHS' })
+	currency!: string;
 
-  @Column({ name: 'business_name', nullable: true })
-  businessName?: string;
+	@Column({ name: 'business_name', nullable: true })
+	businessName?: string;
 
-  @Column({
-    name: 'average_rating',
-    type: 'decimal',
-    precision: 3,
-    scale: 2,
-    default: 0,
-  })
-  averageRating!: number;
+	@Column({ name: 'average_rating', type: 'decimal', precision: 3, scale: 2, default: 0 })
+	averageRating!: number;
 
-  @Column({ name: 'total_reviews', type: 'int', default: 0 })
-  totalReviews!: number;
+	@Column({ name: 'total_reviews', type: 'int', default: 0 })
+	totalReviews!: number;
 
-  @Column({ name: 'availability_status', default: 'AVAILABLE' })
-  availabilityStatus!: string;
+	@Column({ name: 'availability_status', default: 'AVAILABLE' })
+	availabilityStatus!: string;
 
-  @Column({ name: 'is_verified', type: 'boolean', default: false })
-  isVerified!: boolean;
+	@Column({ name: 'is_verified', type: 'boolean', default: false })
+	isVerified!: boolean;
 
-  @Column({ type: 'varchar', nullable: true })
-  location?: string;
+	@Column({ type: 'varchar', nullable: true })
+	location?: string;
 
-  /**
-   * F7: how far (in kilometres) from `location` the artisan is willing to travel
-   * for work. Not currently used to filter/rank search results (tracked
-   * separately under the PRD 5.2 search-filter gaps) — capture-and-persist only.
-   */
-  @Column({ name: 'service_radius_km', type: 'int', nullable: true })
-  serviceRadiusKm?: number;
+	@ManyToMany(() => ServiceEntity)
+	@JoinTable({
+		name: 'artisan_profile_services',
+		joinColumn: { name: 'artisan_profile_id', referencedColumnName: 'id' },
+		inverseJoinColumn: { name: 'service_id', referencedColumnName: 'id' },
+	})
+	services!: ServiceEntity[];
 
-  /**
-   * F6: free-text cancellation policy the artisan sets for customers to read
-   * before booking. Null/empty means no policy has been set yet.
-   */
-  @Column({ name: 'cancellation_policy', type: 'text', nullable: true })
-  cancellationPolicy?: string;
+	// ─── Paystack payout details ─────────────────────────────────────────────────
 
-  /**
-   * F3: whether this profile currently satisfies the platform's minimum
-   * "complete enough to be searchable" bar (see
-   * `ArtisansService.computeProfileCompleteness`). Recomputed and persisted on
-   * every profile/service mutation and used to gate visibility in `GET /artisans`
-   * search results — incomplete profiles are excluded from search entirely.
-   */
-  @Column({ name: 'is_profile_complete', type: 'boolean', default: false })
-  isProfileComplete!: boolean;
+	/** 'mobile_money' | 'bank' — set when artisan registers a payout method */
+	@Column({ name: 'payout_type', type: 'varchar', length: 20, nullable: true })
+	payoutType?: PayoutType;
 
-  @ManyToMany(() => ServiceEntity)
-  @JoinTable({
-    name: 'artisan_profile_services',
-    joinColumn: { name: 'artisan_profile_id', referencedColumnName: 'id' },
-    inverseJoinColumn: { name: 'service_id', referencedColumnName: 'id' },
-  })
-  services!: ServiceEntity[];
+	/** Paystack transfer recipient code — generated when artisan sets up payout */
+	@Column({ name: 'paystack_recipient_code', nullable: true })
+	paystackRecipientCode?: string;
 
-  // ─── Paystack payout details ─────────────────────────────────────────────────
+	/** Display name for the payout account */
+	@Column({ name: 'payout_account_name', nullable: true })
+	payoutAccountName?: string;
 
-  /** 'mobile_money' | 'bank' — set when artisan registers a payout method */
-  @Column({ name: 'payout_type', type: 'varchar', length: 20, nullable: true })
-  payoutType?: PayoutType;
+	/** Phone number (mobile money) or account number (bank) */
+	@Column({ name: 'payout_account_number', nullable: true })
+	payoutAccountNumber?: string;
 
-  /** Paystack transfer recipient code — generated when artisan sets up payout */
-  @Column({ name: 'paystack_recipient_code', nullable: true })
-  paystackRecipientCode?: string;
+	/**
+	 * Bank/provider code sent to Paystack.
+	 * Mobile money: 'MTN' | 'VOD' | 'ATL'
+	 * Bank: Paystack bank code (e.g. '030' for GCB)
+	 */
+	@Column({ name: 'payout_bank_code', nullable: true })
+	payoutBankCode?: string;
 
-  /** Display name for the payout account */
-  @Column({ name: 'payout_account_name', nullable: true })
-  payoutAccountName?: string;
+	@CreateDateColumn({ name: 'created_at', type: 'timestamp' })
+	createdAt!: Date;
 
-  /** Phone number (mobile money) or account number (bank) */
-  @Column({ name: 'payout_account_number', nullable: true })
-  payoutAccountNumber?: string;
-
-  /**
-   * Bank/provider code sent to Paystack.
-   * Mobile money: 'MTN' | 'VOD' | 'ATL'
-   * Bank: Paystack bank code (e.g. '030' for GCB)
-   */
-  @Column({ name: 'payout_bank_code', nullable: true })
-  payoutBankCode?: string;
-
-  @CreateDateColumn({ name: 'created_at', type: 'timestamp' })
-  createdAt!: Date;
-
-  @UpdateDateColumn({ name: 'updated_at', type: 'timestamp' })
-  updatedAt!: Date;
+	@UpdateDateColumn({ name: 'updated_at', type: 'timestamp' })
+	updatedAt!: Date;
 }

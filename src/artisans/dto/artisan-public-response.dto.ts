@@ -34,9 +34,7 @@ export class ArtisanPublicResponseDto {
   @Expose()
   id: number;
 
-  @ApiPropertyOptional({
-    example: 'Experienced master plumber with 8 years in residential work.',
-  })
+  @ApiPropertyOptional({ example: 'Experienced master plumber with 8 years in residential work.' })
   @Expose()
   bio?: string;
 
@@ -48,10 +46,7 @@ export class ArtisanPublicResponseDto {
   @Expose()
   hourlyRate?: number;
 
-  @ApiProperty({
-    example: 'GHS',
-    description: 'ISO 4217 currency code for the hourly rate',
-  })
+  @ApiProperty({ example: 'GHS', description: 'ISO 4217 currency code for the hourly rate' })
   @Expose()
   currency!: string;
 
@@ -67,32 +62,17 @@ export class ArtisanPublicResponseDto {
   @Expose()
   totalReviews: number;
 
-  @ApiProperty({
-    example: 'AVAILABLE',
-    description: 'AVAILABLE | BUSY | OFFLINE',
-  })
+  @ApiProperty({ example: 'AVAILABLE', description: 'AVAILABLE | BUSY | OFFLINE' })
   @Expose()
   availabilityStatus: string;
 
-  @ApiProperty({
-    example: false,
-    description: 'Platform-verified artisan badge',
-  })
+  @ApiProperty({ example: false, description: 'Platform-verified artisan badge' })
   @Expose()
   isVerified: boolean;
 
   @ApiPropertyOptional({ example: 'Accra, Ghana' })
   @Expose()
   location?: string;
-
-  @ApiPropertyOptional({
-    example:
-      'Free cancellation up to 24 hours before the scheduled job; 50% fee thereafter.',
-    description:
-      "Artisan's cancellation policy, visible to customers before they book (F6)",
-  })
-  @Expose()
-  cancellationPolicy?: string;
 
   @ApiProperty({ type: [ServiceResponseDto] })
   @Expose()

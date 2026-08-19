@@ -1,15 +1,9 @@
 import { applyDecorators, Type } from '@nestjs/common';
-import {
-  ApiOkResponse,
-  ApiBadRequestResponse,
-  ApiNotFoundResponse,
-  ApiInternalServerErrorResponse,
-  getSchemaPath,
-} from '@nestjs/swagger';
+import { ApiOkResponse, ApiBadRequestResponse, ApiNotFoundResponse, ApiInternalServerErrorResponse, getSchemaPath } from '@nestjs/swagger';
 
 interface ApiResponseOptions {
   message?: string;
-  model?: Type<any>; // DTO class
+  model?: Type<any>;   // DTO class
   isArray?: boolean;
   paginated?: boolean;
 }
@@ -18,12 +12,7 @@ interface ApiResponseOptions {
  * Standardized Swagger response decorator
  */
 export function ApiResponseSuccess(options: ApiResponseOptions) {
-  const {
-    message = 'Request successful',
-    model,
-    isArray = false,
-    paginated = false,
-  } = options;
+  const { message = 'Request successful', model, isArray = false, paginated = false } = options;
 
   const dataSchema = model
     ? {

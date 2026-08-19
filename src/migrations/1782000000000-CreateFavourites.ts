@@ -29,12 +29,8 @@ export class CreateFavourites1782000000000 implements MigrationInterface {
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(
-      `ALTER TABLE "favourites" DROP CONSTRAINT "FK_favourites_artisan_profile_id"`,
-    );
-    await queryRunner.query(
-      `ALTER TABLE "favourites" DROP CONSTRAINT "FK_favourites_customer_id"`,
-    );
+    await queryRunner.query(`ALTER TABLE "favourites" DROP CONSTRAINT "FK_favourites_artisan_profile_id"`);
+    await queryRunner.query(`ALTER TABLE "favourites" DROP CONSTRAINT "FK_favourites_customer_id"`);
     await queryRunner.query(`DROP TABLE "favourites"`);
   }
 }

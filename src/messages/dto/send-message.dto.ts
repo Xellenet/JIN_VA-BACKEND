@@ -1,11 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import {
-  IsInt,
-  IsPositive,
-  IsString,
-  MaxLength,
-  MinLength,
-} from 'class-validator';
+import { IsInt, IsPositive, IsString, MaxLength, MinLength } from 'class-validator';
 
 export class SendMessageDto {
   @ApiProperty({ description: 'The user ID of the recipient', example: 5 })

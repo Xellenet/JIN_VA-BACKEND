@@ -26,10 +26,7 @@ export class SubmitVerificationDto {
   @MaxLength(200)
   fullLegalName?: string;
 
-  @ApiPropertyOptional({
-    example: '1990-05-14',
-    description: 'ISO 8601 date string',
-  })
+  @ApiPropertyOptional({ example: '1990-05-14', description: 'ISO 8601 date string' })
   @IsOptional()
   @IsDateString()
   dateOfBirth?: string;

@@ -12,45 +12,14 @@ import { ArtisanProfile } from '@users/entities/artisan-profile.entity';
 import { User } from '@users/entities/user.entity';
 import { ServiceEntity } from '@services/entities/service.entity';
 import { ArtisanPublicResponseDto } from './dto/artisan-public-response.dto';
-import {
-  GetArtisansQueryDto,
-  ArtisanSortBy,
-} from './dto/get-artisans-query.dto';
+import { GetArtisansQueryDto, ArtisanSortBy } from './dto/get-artisans-query.dto';
 import { UpdateArtisanProfileDto } from '@users/dto/update-artisan-profile.dto';
 import { ArtisanProfileResponseDto } from '@users/dto/artisan-profile-response.dto';
 import { SUCCESS_MESSAGES } from '@common/constants/success-messages.constants';
-type Pagination = {
-  total: number;
-  page: number;
-  limit: number;
-  totalPages: number;
-};
-type PublicList = {
-  message: string;
-  data: ArtisanPublicResponseDto[];
-  pagination: Pagination;
-};
+type Pagination = { total: number; page: number; limit: number; totalPages: number };
+type PublicList = { message: string; data: ArtisanPublicResponseDto[]; pagination: Pagination };
 type PublicItem = { message: string; data: ArtisanPublicResponseDto };
 type PrivateItem = { message: string; data: ArtisanProfileResponseDto };
-
-/**
- * F3: fields an artisan profile must have to be considered "complete enough"
- * to appear in customer-facing search. Resolves requirements.md open question
- * #2 — bio, an hourly rate, a service area, and at least one offered service
- * are the minimum a customer needs to evaluate and book the artisan.
- */
-export function computeProfileCompleteness(
-  profile: Pick<ArtisanProfile, 'bio' | 'hourlyRate' | 'location' | 'services'>,
-): { isComplete: boolean; missingFields: string[] } {
-  const missingFields: string[] = [];
-  if (!profile.bio?.trim()) missingFields.push('bio');
-  if (profile.hourlyRate === null || profile.hourlyRate === undefined)
-    missingFields.push('hourlyRate');
-  if (!profile.location?.trim()) missingFields.push('location');
-  if (!profile.services || profile.services.length === 0)
-    missingFields.push('services');
-  return { isComplete: missingFields.length === 0, missingFields };
-}
 
 @Injectable()
 export class ArtisansService {
@@ -84,9 +53,9 @@ export class ArtisansService {
    * @returns `{ message, data, pagination }`.
    */
   async search(query: GetArtisansQueryDto): Promise<PublicList> {
-    const page = query.page ?? 1;
+    const page  = query.page  ?? 1;
     const limit = query.limit ?? 10;
-    const skip = (page - 1) * limit;
+    const skip  = (page - 1) * limit;
 
     const qb = this.buildSearchQb();
     this.applySearchFilters(qb, query);
@@ -96,7 +65,7 @@ export class ArtisansService {
 
     return {
       message: SUCCESS_MESSAGES.ARTISAN_PROFILE.ALL_RETRIEVED,
-      data: profiles.map((p) => this.toPublic(p)),
+      data: profiles.map(p => this.toPublic(p)),
       pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
   }
@@ -115,9 +84,7 @@ export class ArtisansService {
     });
 
     if (!profile) {
-      throw new NotFoundException(
-        `Artisan profile with id ${artisanProfileId} not found.`,
-      );
+      throw new NotFoundException(`Artisan profile with id ${artisanProfileId} not found.`);
     }
 
     return {
@@ -137,10 +104,7 @@ export class ArtisansService {
    * @returns `{ message, data: ArtisanProfileResponseDto }` with full profile.
    * @throws {NotFoundException} When the artisan profile or any requested service is not found.
    */
-  async updateMe(
-    userId: number,
-    dto: UpdateArtisanProfileDto,
-  ): Promise<PrivateItem> {
+  async updateMe(userId: number, dto: UpdateArtisanProfileDto): Promise<PrivateItem> {
     const { serviceIds, ...profileUpdates } = dto;
 
     const profile = await this.artisanProfileRepository.findOne({
@@ -149,18 +113,14 @@ export class ArtisansService {
     });
 
     if (!profile) {
-      throw new NotFoundException(
-        `Artisan profile for user ${userId} not found.`,
-      );
+      throw new NotFoundException(`Artisan profile for user ${userId} not found.`);
     }
 
     if (serviceIds !== undefined) {
       if (serviceIds.length === 0) {
         profile.services = [];
       } else {
-        const services = await this.servicesRepository.findBy({
-          id: In(serviceIds),
-        });
+        const services = await this.servicesRepository.findBy({ id: In(serviceIds) });
         if (services.length !== serviceIds.length) {
           throw new NotFoundException('One or more services were not found.');
         }
@@ -169,13 +129,6 @@ export class ArtisansService {
     }
 
     Object.assign(profile, profileUpdates);
-
-    // F3: recompute search-visibility eligibility on every profile edit — an
-    // artisan who edits themselves into an incomplete state must drop out of
-    // search immediately, not just be blocked from newly appearing.
-    const { isComplete, missingFields } = computeProfileCompleteness(profile);
-    profile.isProfileComplete = isComplete;
-
     await this.artisanProfileRepository.save(profile);
 
     const updated = await this.artisanProfileRepository.findOne({
@@ -187,7 +140,7 @@ export class ArtisansService {
 
     return {
       message: SUCCESS_MESSAGES.ARTISAN_PROFILE.UPDATED,
-      data: this.toPrivate(updated!, missingFields),
+      data: plainToInstance(ArtisanProfileResponseDto, updated, { excludeExtraneousValues: true }),
     };
   }
 
@@ -207,30 +160,20 @@ export class ArtisansService {
     });
 
     if (!profile) {
-      throw new NotFoundException(
-        `Artisan profile for user ${userId} not found.`,
-      );
+      throw new NotFoundException(`Artisan profile for user ${userId} not found.`);
     }
 
-    const service = await this.servicesRepository.findOne({
-      where: { id: serviceId },
-    });
+    const service = await this.servicesRepository.findOne({ where: { id: serviceId } });
     if (!service) {
       throw new NotFoundException(`Service with id ${serviceId} not found.`);
     }
 
-    const alreadyAdded = profile.services.some((s) => s.id === serviceId);
+    const alreadyAdded = profile.services.some(s => s.id === serviceId);
     if (alreadyAdded) {
-      throw new ConflictException(
-        `Service "${service.name}" is already on your profile.`,
-      );
+      throw new ConflictException(`Service "${service.name}" is already on your profile.`);
     }
 
     profile.services.push(service);
-
-    const { isComplete, missingFields } = computeProfileCompleteness(profile);
-    profile.isProfileComplete = isComplete;
-
     await this.artisanProfileRepository.save(profile);
 
     const updated = await this.artisanProfileRepository.findOne({
@@ -238,13 +181,11 @@ export class ArtisansService {
       relations: ['user', 'user.addresses', 'services'],
     });
 
-    this.logger.log(
-      `Artisan ${userId} added service ${serviceId} to their profile`,
-    );
+    this.logger.log(`Artisan ${userId} added service ${serviceId} to their profile`);
 
     return {
       message: SUCCESS_MESSAGES.ARTISAN_PROFILE.SERVICE_ADDED,
-      data: this.toPrivate(updated!, missingFields),
+      data: plainToInstance(ArtisanProfileResponseDto, updated, { excludeExtraneousValues: true }),
     };
   }
 
@@ -264,23 +205,15 @@ export class ArtisansService {
     });
 
     if (!profile) {
-      throw new NotFoundException(
-        `Artisan profile for user ${userId} not found.`,
-      );
+      throw new NotFoundException(`Artisan profile for user ${userId} not found.`);
     }
 
-    const index = profile.services.findIndex((s) => s.id === serviceId);
+    const index = profile.services.findIndex(s => s.id === serviceId);
     if (index === -1) {
-      throw new BadRequestException(
-        `Service with id ${serviceId} is not on your profile.`,
-      );
+      throw new BadRequestException(`Service with id ${serviceId} is not on your profile.`);
     }
 
     profile.services.splice(index, 1);
-
-    const { isComplete, missingFields } = computeProfileCompleteness(profile);
-    profile.isProfileComplete = isComplete;
-
     await this.artisanProfileRepository.save(profile);
 
     const updated = await this.artisanProfileRepository.findOne({
@@ -288,28 +221,22 @@ export class ArtisansService {
       relations: ['user', 'user.addresses', 'services'],
     });
 
-    this.logger.log(
-      `Artisan ${userId} removed service ${serviceId} from their profile`,
-    );
+    this.logger.log(`Artisan ${userId} removed service ${serviceId} from their profile`);
 
     return {
       message: SUCCESS_MESSAGES.ARTISAN_PROFILE.SERVICE_REMOVED,
-      data: this.toPrivate(updated!, missingFields),
+      data: plainToInstance(ArtisanProfileResponseDto, updated, { excludeExtraneousValues: true }),
     };
   }
 
   // ─── Private helpers ─────────────────────────────────────────────────────────
 
   private buildSearchQb(): SelectQueryBuilder<ArtisanProfile> {
-    return (
-      this.artisanProfileRepository
-        .createQueryBuilder('ap')
-        .innerJoinAndSelect('ap.user', 'user')
-        .leftJoinAndSelect('ap.services', 'services')
-        .where('user.deletedAt IS NULL')
-        // F3: profiles missing required fields never appear in customer-facing search.
-        .andWhere('ap.isProfileComplete = true')
-    );
+    return this.artisanProfileRepository
+      .createQueryBuilder('ap')
+      .innerJoinAndSelect('ap.user', 'user')
+      .leftJoinAndSelect('ap.services', 'services')
+      .where('user.deletedAt IS NULL');
   }
 
   private applySearchFilters(
@@ -346,9 +273,7 @@ export class ArtisansService {
     }
 
     if (query.minRating !== undefined) {
-      qb.andWhere('ap.averageRating >= :minRating', {
-        minRating: query.minRating,
-      });
+      qb.andWhere('ap.averageRating >= :minRating', { minRating: query.minRating });
     }
 
     if (query.availabilityStatus) {
@@ -358,9 +283,7 @@ export class ArtisansService {
     }
 
     if (query.isVerified !== undefined) {
-      qb.andWhere('ap.isVerified = :isVerified', {
-        isVerified: query.isVerified,
-      });
+      qb.andWhere('ap.isVerified = :isVerified', { isVerified: query.isVerified });
     }
   }
 
@@ -389,22 +312,5 @@ export class ArtisansService {
     return plainToInstance(ArtisanPublicResponseDto, profile, {
       excludeExtraneousValues: true,
     });
-  }
-
-  /**
-   * F3: builds the authenticated self-view DTO with `missingFields` attached.
-   * `missingFields` isn't a persisted column (only the derived `isProfileComplete`
-   * boolean is), so it's computed fresh and stitched onto the transformed DTO here
-   * rather than sourced from the entity by `plainToInstance`.
-   */
-  private toPrivate(
-    profile: ArtisanProfile,
-    missingFields: string[],
-  ): ArtisanProfileResponseDto {
-    const dto = plainToInstance(ArtisanProfileResponseDto, profile, {
-      excludeExtraneousValues: true,
-    });
-    dto.missingFields = missingFields;
-    return dto;
   }
 }

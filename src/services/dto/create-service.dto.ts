@@ -7,9 +7,7 @@ export class CreateServiceDto {
   @IsNotEmpty()
   name: string;
 
-  @ApiPropertyOptional({
-    example: 'Pipe repairs, drain cleaning, bathroom fittings.',
-  })
+  @ApiPropertyOptional({ example: 'Pipe repairs, drain cleaning, bathroom fittings.' })
   @IsOptional()
   @IsString()
   description?: string;

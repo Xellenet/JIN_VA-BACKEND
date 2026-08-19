@@ -1,12 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import {
-  IsNumber,
-  IsOptional,
-  IsString,
-  MaxLength,
-  Min,
-} from 'class-validator';
+import { IsNumber, IsOptional, IsString, MaxLength, Min } from 'class-validator';
 
 /**
  * Body sent by an artisan when applying to a job.
@@ -16,8 +10,7 @@ import {
 export class CreateApplicationDto {
   @ApiPropertyOptional({
     example: 250,
-    description:
-      'Proposed price for the job (>= 0). Helps the customer compare bids.',
+    description: 'Proposed price for the job (>= 0). Helps the customer compare bids.',
   })
   @IsOptional()
   @IsNumber()
