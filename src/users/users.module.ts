@@ -12,8 +12,15 @@ import { ServiceEntity } from '@services/entities/service.entity';
 import { UploadsModule } from '../uploads/uploads.module';
 
 @Module({
-  imports:[
-    TypeOrmModule.forFeature([User, Address, UserToken, ArtisanProfile, CustomerProfile, ServiceEntity]),
+  imports: [
+    TypeOrmModule.forFeature([
+      User,
+      Address,
+      UserToken,
+      ArtisanProfile,
+      CustomerProfile,
+      ServiceEntity,
+    ]),
     UploadsModule,
   ],
   controllers: [UsersController],

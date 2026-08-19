@@ -47,7 +47,7 @@ export class NotificationsController {
   @ApiOperation({
     summary: 'Get notification preferences',
     description:
-      'Returns the caller\'s notification preferences. ' +
+      "Returns the caller's notification preferences. " +
       'The shape differs by role — customers see booking/job/payment toggles; ' +
       'artisans see opportunity/application/payment-released toggles. ' +
       'Both roles see the channel toggles (email, SMS, push).',
@@ -56,8 +56,12 @@ export class NotificationsController {
     description: 'Preferences retrieved (shape varies by role)',
     schema: {
       oneOf: [
-        { $ref: '#/components/schemas/CustomerNotificationPreferencesResponseDto' },
-        { $ref: '#/components/schemas/ArtisanNotificationPreferencesResponseDto' },
+        {
+          $ref: '#/components/schemas/CustomerNotificationPreferencesResponseDto',
+        },
+        {
+          $ref: '#/components/schemas/ArtisanNotificationPreferencesResponseDto',
+        },
       ],
     },
   })
@@ -84,13 +88,20 @@ export class NotificationsController {
     description: 'Preferences updated (shape varies by role)',
     schema: {
       oneOf: [
-        { $ref: '#/components/schemas/CustomerNotificationPreferencesResponseDto' },
-        { $ref: '#/components/schemas/ArtisanNotificationPreferencesResponseDto' },
+        {
+          $ref: '#/components/schemas/CustomerNotificationPreferencesResponseDto',
+        },
+        {
+          $ref: '#/components/schemas/ArtisanNotificationPreferencesResponseDto',
+        },
       ],
     },
   })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
-  updatePreferences(@Req() req: any, @Body() dto: UpdateNotificationPreferencesDto) {
+  updatePreferences(
+    @Req() req: any,
+    @Body() dto: UpdateNotificationPreferencesDto,
+  ) {
     return this.notificationsService.updatePreferences(req.user.id, dto);
   }
 
@@ -101,7 +112,10 @@ export class NotificationsController {
    */
   @Get('unread-count')
   @ApiOperation({ summary: 'Get the number of unread notifications' })
-  @ApiOkResponse({ description: 'Unread count', schema: { properties: { count: { type: 'number' } } } })
+  @ApiOkResponse({
+    description: 'Unread count',
+    schema: { properties: { count: { type: 'number' } } },
+  })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
   getUnreadCount(@Req() req: any) {
     return this.notificationsService.getUnreadCount(req.user.id);
@@ -113,7 +127,10 @@ export class NotificationsController {
    */
   @Get()
   @ApiOperation({ summary: "Get the user's notifications (paginated)" })
-  @ApiOkResponse({ description: 'Notifications retrieved', type: [NotificationResponseDto] })
+  @ApiOkResponse({
+    description: 'Notifications retrieved',
+    type: [NotificationResponseDto],
+  })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
   findAll(@Req() req: any, @Query() query: GetNotificationsQueryDto) {
     return this.notificationsService.findAll(req.user.id, query);

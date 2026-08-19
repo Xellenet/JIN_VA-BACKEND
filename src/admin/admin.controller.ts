@@ -9,7 +9,12 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiParam,
+  ApiTags,
+} from '@nestjs/swagger';
 import { AdminService } from './admin.service';
 import { AdminJobsQueryDto, AdminUsersQueryDto } from './dto/admin-query.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -17,11 +22,17 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '@common/decorators/roles.decorator';
 import { Role } from '@common/types/enums';
 import { VerificationService } from '../verification/verification.service';
-import { ApproveVerificationDto, RejectVerificationDto } from '../verification/dto/review-verification.dto';
+import {
+  ApproveVerificationDto,
+  RejectVerificationDto,
+} from '../verification/dto/review-verification.dto';
 import { GetVerificationsQueryDto } from '../verification/dto/get-verifications-query.dto';
 import { DisputesService } from '../disputes/disputes.service';
 import { GetDisputesQueryDto } from '../disputes/dto/get-disputes-query.dto';
-import { ResolveDisputeDto, CloseDisputeDto } from '../disputes/dto/resolve-dispute.dto';
+import {
+  ResolveDisputeDto,
+  CloseDisputeDto,
+} from '../disputes/dto/resolve-dispute.dto';
 
 @ApiTags('Admin')
 @ApiBearerAuth()
@@ -101,13 +112,17 @@ export class AdminController {
   // ─── Verifications ────────────────────────────────────────────────────────────
 
   @Get('verifications')
-  @ApiOperation({ summary: 'List all verification submissions with optional status filter' })
+  @ApiOperation({
+    summary: 'List all verification submissions with optional status filter',
+  })
   listVerifications(@Query() query: GetVerificationsQueryDto) {
     return this.verificationService.findAll(query);
   }
 
   @Get('verifications/:id')
-  @ApiOperation({ summary: 'Get a single verification record with full artisan details' })
+  @ApiOperation({
+    summary: 'Get a single verification record with full artisan details',
+  })
   @ApiParam({ name: 'id', type: Number })
   getVerification(@Param('id', ParseIntPipe) id: number) {
     return this.verificationService.findOne(id);
@@ -116,12 +131,17 @@ export class AdminController {
   @Patch('verifications/:id/start-review')
   @ApiOperation({ summary: 'Move a verification submission to UNDER_REVIEW' })
   @ApiParam({ name: 'id', type: Number })
-  startVerificationReview(@Req() req: any, @Param('id', ParseIntPipe) id: number) {
+  startVerificationReview(
+    @Req() req: any,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
     return this.verificationService.startReview(req.user.id, id);
   }
 
   @Patch('verifications/:id/approve')
-  @ApiOperation({ summary: 'Approve a verification — marks artisan profile as verified' })
+  @ApiOperation({
+    summary: 'Approve a verification — marks artisan profile as verified',
+  })
   @ApiParam({ name: 'id', type: Number })
   approveVerification(
     @Req() req: any,
@@ -151,7 +171,9 @@ export class AdminController {
   }
 
   @Get('disputes/:id')
-  @ApiOperation({ summary: 'Get a single dispute with full booking and participant details' })
+  @ApiOperation({
+    summary: 'Get a single dispute with full booking and participant details',
+  })
   @ApiParam({ name: 'id', type: Number })
   getDispute(@Param('id', ParseIntPipe) id: number) {
     return this.disputesService.findOne(id);

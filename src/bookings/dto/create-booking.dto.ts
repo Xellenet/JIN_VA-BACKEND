@@ -20,14 +20,20 @@ export class CreateBookingDto {
   @Type(() => Number)
   artisanProfileId!: number;
 
-  @ApiPropertyOptional({ example: 3, description: 'Availability slot ID to reference (optional)' })
+  @ApiPropertyOptional({
+    example: 3,
+    description: 'Availability slot ID to reference (optional)',
+  })
   @IsOptional()
   @IsInt()
   @IsPositive()
   @Type(() => Number)
   availabilitySlotId?: number;
 
-  @ApiProperty({ example: '2026-07-15', description: 'Requested date (YYYY-MM-DD)' })
+  @ApiProperty({
+    example: '2026-07-15',
+    description: 'Requested date (YYYY-MM-DD)',
+  })
   @IsDateString()
   scheduledDate!: string;
 
@@ -39,19 +45,28 @@ export class CreateBookingDto {
   @Matches(/^\d{2}:\d{2}$/, { message: 'endTime must be HH:MM' })
   endTime!: string;
 
-  @ApiPropertyOptional({ example: 'Please bring your own tools.', description: 'Notes to the artisan' })
+  @ApiPropertyOptional({
+    example: 'Please bring your own tools.',
+    description: 'Notes to the artisan',
+  })
   @IsOptional()
   @IsString()
   @MaxLength(1000)
   notes?: string;
 
-  @ApiPropertyOptional({ example: 150.00, description: 'Agreed price for the service' })
+  @ApiPropertyOptional({
+    example: 150.0,
+    description: 'Agreed price for the service',
+  })
   @IsOptional()
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
   agreedPrice?: number;
 
-  @ApiPropertyOptional({ example: 'GHS', description: 'ISO 4217 currency code for agreedPrice' })
+  @ApiPropertyOptional({
+    example: 'GHS',
+    description: 'ISO 4217 currency code for agreedPrice',
+  })
   @IsOptional()
   @IsISO4217CurrencyCode()
   currency?: string;

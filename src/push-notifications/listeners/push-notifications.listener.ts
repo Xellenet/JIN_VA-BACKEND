@@ -21,7 +21,9 @@ export class PushNotificationsListener {
   constructor(private readonly pushService: PushNotificationsService) {}
 
   @OnEvent(APP_EVENTS.ARTISAN_PROFILE_VERIFIED, { async: true })
-  async onArtisanVerified(payload: ArtisanProfileVerifiedPayload): Promise<void> {
+  async onArtisanVerified(
+    payload: ArtisanProfileVerifiedPayload,
+  ): Promise<void> {
     await this.safe(payload.artisanUserId, {
       title: 'Identity Verified',
       body: 'Your artisan profile has been verified. You now have a verified badge.',
@@ -30,7 +32,9 @@ export class PushNotificationsListener {
   }
 
   @OnEvent(APP_EVENTS.ARTISAN_VERIFICATION_REJECTED, { async: true })
-  async onVerificationRejected(payload: ArtisanVerificationRejectedPayload): Promise<void> {
+  async onVerificationRejected(
+    payload: ArtisanVerificationRejectedPayload,
+  ): Promise<void> {
     await this.safe(payload.artisanUserId, {
       title: 'Verification Update',
       body: 'Your verification submission could not be approved. Tap to review the reason.',
@@ -122,11 +126,16 @@ export class PushNotificationsListener {
     });
   }
 
-  private async safe(userId: number, payload: Parameters<typeof this.pushService.sendToUser>[1]): Promise<void> {
+  private async safe(
+    userId: number,
+    payload: Parameters<typeof this.pushService.sendToUser>[1],
+  ): Promise<void> {
     try {
       await this.pushService.sendToUser(userId, payload);
     } catch (err) {
-      this.logger.error(`Push notification failed for user ${userId}: ${err.message}`);
+      this.logger.error(
+        `Push notification failed for user ${userId}: ${err.message}`,
+      );
     }
   }
 }

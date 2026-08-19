@@ -14,7 +14,14 @@ import { DisputesModule } from '../disputes/disputes.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([User, ArtisanProfile, Job, JobApplication, ArtisanVerification, Booking]),
+    TypeOrmModule.forFeature([
+      User,
+      ArtisanProfile,
+      Job,
+      JobApplication,
+      ArtisanVerification,
+      Booking,
+    ]),
     JobsModule,
     VerificationModule,
     DisputesModule,

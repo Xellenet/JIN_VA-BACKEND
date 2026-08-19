@@ -4,7 +4,8 @@ import { IsEnum, IsString, MinLength, Matches } from 'class-validator';
 export class SetupPayoutMethodDto {
   @ApiProperty({
     enum: ['mobile_money', 'bank'],
-    description: 'mobile_money for MTN/Vodafone/AirtelTigo, bank for bank account',
+    description:
+      'mobile_money for MTN/Vodafone/AirtelTigo, bank for bank account',
   })
   @IsEnum(['mobile_money', 'bank'])
   type!: 'mobile_money' | 'bank';
@@ -25,7 +26,11 @@ export class SetupPayoutMethodDto {
   @ApiProperty({
     description:
       "Mobile money: 'MTN' | 'VOD' | 'ATL'. Bank: Paystack bank code (see Paystack /bank?country=ghana).",
-    examples: { mtn: { value: 'MTN' }, vodafone: { value: 'VOD' }, airtel: { value: 'ATL' } },
+    examples: {
+      mtn: { value: 'MTN' },
+      vodafone: { value: 'VOD' },
+      airtel: { value: 'ATL' },
+    },
   })
   @IsString()
   @MinLength(2)

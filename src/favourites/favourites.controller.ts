@@ -51,9 +51,14 @@ export class FavouritesController {
    */
   @Get()
   @ApiOperation({ summary: "Get the customer's saved artisans (paginated)" })
-  @ApiOkResponse({ description: 'Favourites retrieved successfully', type: [ArtisanPublicResponseDto] })
+  @ApiOkResponse({
+    description: 'Favourites retrieved successfully',
+    type: [ArtisanPublicResponseDto],
+  })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
-  @ApiForbiddenResponse({ description: 'Caller does not have the CUSTOMER role' })
+  @ApiForbiddenResponse({
+    description: 'Caller does not have the CUSTOMER role',
+  })
   findAll(@Req() req: any, @Query() query: GetFavouritesQueryDto) {
     return this.favouritesService.findAll(req.user.id, query);
   }
@@ -72,8 +77,13 @@ export class FavouritesController {
   @ApiNotFoundResponse({ description: 'Artisan profile not found' })
   @ApiConflictResponse({ description: 'Artisan is already in favourites' })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
-  @ApiForbiddenResponse({ description: 'Caller does not have the CUSTOMER role' })
-  add(@Req() req: any, @Param('artisanProfileId', ParseIntPipe) artisanProfileId: number) {
+  @ApiForbiddenResponse({
+    description: 'Caller does not have the CUSTOMER role',
+  })
+  add(
+    @Req() req: any,
+    @Param('artisanProfileId', ParseIntPipe) artisanProfileId: number,
+  ) {
     return this.favouritesService.add(req.user.id, artisanProfileId);
   }
 
@@ -90,8 +100,13 @@ export class FavouritesController {
   @ApiOkResponse({ description: 'Artisan removed from favourites' })
   @ApiNotFoundResponse({ description: 'Artisan is not in favourites' })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
-  @ApiForbiddenResponse({ description: 'Caller does not have the CUSTOMER role' })
-  remove(@Req() req: any, @Param('artisanProfileId', ParseIntPipe) artisanProfileId: number) {
+  @ApiForbiddenResponse({
+    description: 'Caller does not have the CUSTOMER role',
+  })
+  remove(
+    @Req() req: any,
+    @Param('artisanProfileId', ParseIntPipe) artisanProfileId: number,
+  ) {
     return this.favouritesService.remove(req.user.id, artisanProfileId);
   }
 }

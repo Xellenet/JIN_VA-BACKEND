@@ -34,13 +34,18 @@ export class DisputesService {
     if (!booking) throw new NotFoundException('Booking not found.');
 
     const isCustomer = booking.customer.id === userId;
-    const isArtisan  = booking.artisanProfile.user.id === userId;
+    const isArtisan = booking.artisanProfile.user.id === userId;
 
     if (!isCustomer && !isArtisan) {
-      throw new ForbiddenException('You are not a participant of this booking.');
+      throw new ForbiddenException(
+        'You are not a participant of this booking.',
+      );
     }
 
-    const disputeableStatuses: BookingStatus[] = [BookingStatus.COMPLETED, BookingStatus.CANCELLED];
+    const disputeableStatuses: BookingStatus[] = [
+      BookingStatus.COMPLETED,
+      BookingStatus.CANCELLED,
+    ];
     if (!disputeableStatuses.includes(booking.status)) {
       throw new BadRequestException(
         `Disputes can only be raised on COMPLETED or CANCELLED bookings (current: ${booking.status}).`,
@@ -51,7 +56,9 @@ export class DisputesService {
       where: { bookingId: dto.bookingId, raisedById: userId },
     });
     if (existing) {
-      throw new BadRequestException('You have already raised a dispute for this booking.');
+      throw new BadRequestException(
+        'You have already raised a dispute for this booking.',
+      );
     }
 
     const dispute = await this.repo.save(
@@ -66,7 +73,8 @@ export class DisputesService {
     );
 
     return {
-      message: 'Dispute raised. Our team will review and respond within 48 hours.',
+      message:
+        'Dispute raised. Our team will review and respond within 48 hours.',
       data: this.toDto(dispute),
     };
   }
@@ -80,7 +88,7 @@ export class DisputesService {
 
     return {
       message: 'Your disputes retrieved.',
-      data: disputes.map(d => this.toDto(d)),
+      data: disputes.map((d) => this.toDto(d)),
     };
   }
 
@@ -97,17 +105,18 @@ export class DisputesService {
   // ─── Admin-facing ────────────────────────────────────────────────────────────
 
   async findAll(query: GetDisputesQueryDto) {
-    const page  = query.page  ?? 1;
+    const page = query.page ?? 1;
     const limit = query.limit ?? 20;
 
     const qb = this.repo
       .createQueryBuilder('d')
-      .leftJoinAndSelect('d.booking',     'booking')
-      .leftJoinAndSelect('d.raisedBy',    'raisedBy')
-      .leftJoinAndSelect('d.resolvedBy',  'resolvedBy')
+      .leftJoinAndSelect('d.booking', 'booking')
+      .leftJoinAndSelect('d.raisedBy', 'raisedBy')
+      .leftJoinAndSelect('d.resolvedBy', 'resolvedBy')
       .orderBy('d.createdAt', 'DESC');
 
-    if (query.status) qb.andWhere('d.status = :status', { status: query.status });
+    if (query.status)
+      qb.andWhere('d.status = :status', { status: query.status });
 
     const [disputes, total] = await qb
       .skip((page - 1) * limit)
@@ -116,7 +125,7 @@ export class DisputesService {
 
     return {
       message: 'Disputes retrieved.',
-      data: disputes.map(d => this.toDto(d)),
+      data: disputes.map((d) => this.toDto(d)),
       pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
   }
@@ -124,7 +133,13 @@ export class DisputesService {
   async findOne(id: number) {
     const dispute = await this.repo.findOne({
       where: { id },
-      relations: ['booking', 'booking.customer', 'booking.artisanProfile', 'raisedBy', 'resolvedBy'],
+      relations: [
+        'booking',
+        'booking.customer',
+        'booking.artisanProfile',
+        'raisedBy',
+        'resolvedBy',
+      ],
     });
     if (!dispute) throw new NotFoundException('Dispute not found.');
     return { message: 'Dispute retrieved.', data: this.toDto(dispute) };
@@ -133,7 +148,9 @@ export class DisputesService {
   async startReview(adminId: number, id: number) {
     const dispute = await this.loadOrFail(id);
     if (dispute.status !== DisputeStatus.OPEN) {
-      throw new BadRequestException(`Cannot start review — current status is ${dispute.status}.`);
+      throw new BadRequestException(
+        `Cannot start review — current status is ${dispute.status}.`,
+      );
     }
     dispute.status = DisputeStatus.UNDER_REVIEW;
     await this.repo.save(dispute);
@@ -142,15 +159,18 @@ export class DisputesService {
 
   async resolve(adminId: number, id: number, dto: ResolveDisputeDto) {
     const dispute = await this.loadOrFail(id);
-    if (dispute.status === DisputeStatus.RESOLVED || dispute.status === DisputeStatus.CLOSED) {
+    if (
+      dispute.status === DisputeStatus.RESOLVED ||
+      dispute.status === DisputeStatus.CLOSED
+    ) {
       throw new BadRequestException(`Dispute is already ${dispute.status}.`);
     }
 
-    dispute.status       = DisputeStatus.RESOLVED;
-    dispute.resolution   = dto.resolution;
+    dispute.status = DisputeStatus.RESOLVED;
+    dispute.resolution = dto.resolution;
     dispute.resolvedById = adminId;
-    dispute.resolvedBy   = { id: adminId } as any;
-    dispute.resolvedAt   = new Date();
+    dispute.resolvedBy = { id: adminId } as any;
+    dispute.resolvedAt = new Date();
     if (dto.adminNotes) dispute.adminNotes = dto.adminNotes;
 
     await this.repo.save(dispute);
@@ -163,10 +183,10 @@ export class DisputesService {
       throw new BadRequestException('Dispute is already closed.');
     }
 
-    dispute.status       = DisputeStatus.CLOSED;
+    dispute.status = DisputeStatus.CLOSED;
     dispute.resolvedById = adminId;
-    dispute.resolvedBy   = { id: adminId } as any;
-    dispute.resolvedAt   = new Date();
+    dispute.resolvedBy = { id: adminId } as any;
+    dispute.resolvedAt = new Date();
     if (dto.adminNotes) dispute.adminNotes = dto.adminNotes;
 
     await this.repo.save(dispute);
@@ -182,6 +202,8 @@ export class DisputesService {
   }
 
   private toDto(dispute: Dispute): DisputeResponseDto {
-    return plainToInstance(DisputeResponseDto, dispute, { excludeExtraneousValues: true });
+    return plainToInstance(DisputeResponseDto, dispute, {
+      excludeExtraneousValues: true,
+    });
   }
 }

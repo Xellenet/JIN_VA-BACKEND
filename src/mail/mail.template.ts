@@ -10,10 +10,11 @@ export class MailTemplateService {
 
   renderTemplate(eventType: string, data: Record<string, any>) {
     const name = eventType.replace(/\./g, '-'); // e.g. artisan.profile.verified → artisan-profile-verified
-    const templatePath =
-    fs.existsSync(path.join(__dirname, 'templates', `${name}.hbs`))
-        ? path.join(__dirname, 'templates', `${name}.hbs`)
-        : path.join(process.cwd(), 'src', 'mail', 'templates', `${name}.hbs`);
+    const templatePath = fs.existsSync(
+      path.join(__dirname, 'templates', `${name}.hbs`),
+    )
+      ? path.join(__dirname, 'templates', `${name}.hbs`)
+      : path.join(process.cwd(), 'src', 'mail', 'templates', `${name}.hbs`);
 
     let templateFn = this.cache.get(name);
 

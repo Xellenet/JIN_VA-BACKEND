@@ -27,7 +27,9 @@ export class DomainMailListener {
     private readonly usersRepository: Repository<User>,
   ) {}
 
-  private async findUser(userId: number): Promise<{ email: string; firstname: string } | null> {
+  private async findUser(
+    userId: number,
+  ): Promise<{ email: string; firstname: string } | null> {
     return this.usersRepository.findOne({
       where: { id: userId },
       select: ['email', 'firstname'],
@@ -51,36 +53,52 @@ export class DomainMailListener {
   }
 
   @OnEvent(APP_EVENTS.ARTISAN_PROFILE_VERIFIED, { async: true })
-  async handleArtisanVerified(payload: ArtisanProfileVerifiedPayload): Promise<void> {
+  async handleArtisanVerified(
+    payload: ArtisanProfileVerifiedPayload,
+  ): Promise<void> {
     try {
       const user = await this.findUser(payload.artisanUserId);
       if (!user) return;
-      await this.mailService.sendMail(user.email, APP_EVENTS.ARTISAN_PROFILE_VERIFIED, {
-        firstname: user.firstname,
-        dashboardUrl: this.dashboardUrl,
-        appName: this.appName,
-        year: this.year,
-        supportEmail: this.supportEmail,
-      });
+      await this.mailService.sendMail(
+        user.email,
+        APP_EVENTS.ARTISAN_PROFILE_VERIFIED,
+        {
+          firstname: user.firstname,
+          dashboardUrl: this.dashboardUrl,
+          appName: this.appName,
+          year: this.year,
+          supportEmail: this.supportEmail,
+        },
+      );
     } catch (err) {
-      this.logger.error(`Failed to send artisan verified email: ${err.message}`);
+      this.logger.error(
+        `Failed to send artisan verified email: ${err.message}`,
+      );
     }
   }
 
   @OnEvent(APP_EVENTS.ARTISAN_VERIFICATION_REJECTED, { async: true })
-  async handleVerificationRejected(payload: ArtisanVerificationRejectedPayload): Promise<void> {
+  async handleVerificationRejected(
+    payload: ArtisanVerificationRejectedPayload,
+  ): Promise<void> {
     try {
       const user = await this.findUser(payload.artisanUserId);
       if (!user) return;
-      await this.mailService.sendMail(user.email, APP_EVENTS.ARTISAN_VERIFICATION_REJECTED, {
-        firstname: user.firstname,
-        reason: payload.reason,
-        appName: this.appName,
-        year: this.year,
-        supportEmail: this.supportEmail,
-      });
+      await this.mailService.sendMail(
+        user.email,
+        APP_EVENTS.ARTISAN_VERIFICATION_REJECTED,
+        {
+          firstname: user.firstname,
+          reason: payload.reason,
+          appName: this.appName,
+          year: this.year,
+          supportEmail: this.supportEmail,
+        },
+      );
     } catch (err) {
-      this.logger.error(`Failed to send verification rejected email: ${err.message}`);
+      this.logger.error(
+        `Failed to send verification rejected email: ${err.message}`,
+      );
     }
   }
 
@@ -99,27 +117,37 @@ export class DomainMailListener {
         year: this.year,
       });
     } catch (err) {
-      this.logger.error(`Failed to send booking received email: ${err.message}`);
+      this.logger.error(
+        `Failed to send booking received email: ${err.message}`,
+      );
     }
   }
 
   @OnEvent(APP_EVENTS.BOOKING_CONFIRMED, { async: true })
-  async handleBookingConfirmed(payload: BookingConfirmedPayload): Promise<void> {
+  async handleBookingConfirmed(
+    payload: BookingConfirmedPayload,
+  ): Promise<void> {
     try {
       const user = await this.findUser(payload.customerId);
       if (!user) return;
-      await this.mailService.sendMail(user.email, APP_EVENTS.BOOKING_CONFIRMED, {
-        firstname: user.firstname,
-        artisanName: payload.artisanName,
-        scheduledDate: payload.scheduledDate,
-        bookingId: payload.bookingId,
-        dashboardUrl: this.dashboardUrl,
-        appName: this.appName,
-        year: this.year,
-        supportEmail: this.supportEmail,
-      });
+      await this.mailService.sendMail(
+        user.email,
+        APP_EVENTS.BOOKING_CONFIRMED,
+        {
+          firstname: user.firstname,
+          artisanName: payload.artisanName,
+          scheduledDate: payload.scheduledDate,
+          bookingId: payload.bookingId,
+          dashboardUrl: this.dashboardUrl,
+          appName: this.appName,
+          year: this.year,
+          supportEmail: this.supportEmail,
+        },
+      );
     } catch (err) {
-      this.logger.error(`Failed to send booking confirmed email: ${err.message}`);
+      this.logger.error(
+        `Failed to send booking confirmed email: ${err.message}`,
+      );
     }
   }
 
@@ -139,44 +167,62 @@ export class DomainMailListener {
         supportEmail: this.supportEmail,
       });
     } catch (err) {
-      this.logger.error(`Failed to send booking declined email: ${err.message}`);
+      this.logger.error(
+        `Failed to send booking declined email: ${err.message}`,
+      );
     }
   }
 
   @OnEvent(APP_EVENTS.BOOKING_CANCELLED, { async: true })
-  async handleBookingCancelled(payload: BookingCancelledPayload): Promise<void> {
+  async handleBookingCancelled(
+    payload: BookingCancelledPayload,
+  ): Promise<void> {
     try {
       const user = await this.findUser(payload.artisanUserId);
       if (!user) return;
-      await this.mailService.sendMail(user.email, APP_EVENTS.BOOKING_CANCELLED, {
-        firstname: user.firstname,
-        customerName: payload.customerName,
-        scheduledDate: payload.scheduledDate,
-        bookingId: payload.bookingId,
-        appName: this.appName,
-        year: this.year,
-        supportEmail: this.supportEmail,
-      });
+      await this.mailService.sendMail(
+        user.email,
+        APP_EVENTS.BOOKING_CANCELLED,
+        {
+          firstname: user.firstname,
+          customerName: payload.customerName,
+          scheduledDate: payload.scheduledDate,
+          bookingId: payload.bookingId,
+          appName: this.appName,
+          year: this.year,
+          supportEmail: this.supportEmail,
+        },
+      );
     } catch (err) {
-      this.logger.error(`Failed to send booking cancelled email: ${err.message}`);
+      this.logger.error(
+        `Failed to send booking cancelled email: ${err.message}`,
+      );
     }
   }
 
   @OnEvent(APP_EVENTS.BOOKING_COMPLETED, { async: true })
-  async handleBookingCompleted(payload: BookingCompletedPayload): Promise<void> {
+  async handleBookingCompleted(
+    payload: BookingCompletedPayload,
+  ): Promise<void> {
     try {
       const user = await this.findUser(payload.artisanUserId);
       if (!user) return;
-      await this.mailService.sendMail(user.email, APP_EVENTS.BOOKING_COMPLETED, {
-        firstname: user.firstname,
-        scheduledDate: payload.scheduledDate,
-        bookingId: payload.bookingId,
-        appName: this.appName,
-        year: this.year,
-        supportEmail: this.supportEmail,
-      });
+      await this.mailService.sendMail(
+        user.email,
+        APP_EVENTS.BOOKING_COMPLETED,
+        {
+          firstname: user.firstname,
+          scheduledDate: payload.scheduledDate,
+          bookingId: payload.bookingId,
+          appName: this.appName,
+          year: this.year,
+          supportEmail: this.supportEmail,
+        },
+      );
     } catch (err) {
-      this.logger.error(`Failed to send booking completed email: ${err.message}`);
+      this.logger.error(
+        `Failed to send booking completed email: ${err.message}`,
+      );
     }
   }
 }
