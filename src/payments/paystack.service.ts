@@ -1,4 +1,8 @@
-import { Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
 
@@ -25,7 +29,10 @@ export class PaystackService {
     };
   }
 
-  private async post<T>(path: string, body: Record<string, unknown>): Promise<T> {
+  private async post<T>(
+    path: string,
+    body: Record<string, unknown>,
+  ): Promise<T> {
     const res = await fetch(`${this.baseUrl}${path}`, {
       method: 'POST',
       headers: this.headers,
@@ -34,24 +41,33 @@ export class PaystackService {
     const json = (await res.json()) as PaystackResponse<T>;
     if (!json.status) {
       this.logger.error(`Paystack POST ${path} failed: ${json.message}`);
-      throw new InternalServerErrorException(`Payment provider error: ${json.message}`);
+      throw new InternalServerErrorException(
+        `Payment provider error: ${json.message}`,
+      );
     }
     return json.data;
   }
 
   private async get<T>(path: string): Promise<T> {
-    const res = await fetch(`${this.baseUrl}${path}`, { headers: this.headers });
+    const res = await fetch(`${this.baseUrl}${path}`, {
+      headers: this.headers,
+    });
     const json = (await res.json()) as PaystackResponse<T>;
     if (!json.status) {
       this.logger.error(`Paystack GET ${path} failed: ${json.message}`);
-      throw new InternalServerErrorException(`Payment provider error: ${json.message}`);
+      throw new InternalServerErrorException(
+        `Payment provider error: ${json.message}`,
+      );
     }
     return json.data;
   }
 
   /** Verify that a webhook request genuinely came from Paystack */
   verifyWebhookSignature(rawBody: string, signature: string): boolean {
-    const hash = crypto.createHmac('sha512', this.secretKey).update(rawBody).digest('hex');
+    const hash = crypto
+      .createHmac('sha512', this.secretKey)
+      .update(rawBody)
+      .digest('hex');
     return hash === signature;
   }
 

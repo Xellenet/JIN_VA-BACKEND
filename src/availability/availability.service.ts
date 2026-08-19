@@ -18,8 +18,11 @@ import {
 } from './dto/availability-response.dto';
 import { SUCCESS_MESSAGES } from '@common/constants/success-messages.constants';
 
-type SlotItem         = { message: string; data: AvailabilitySlotResponseDto };
-type AvailabilityItem = { message: string; data: ArtisanAvailabilityResponseDto };
+type SlotItem = { message: string; data: AvailabilitySlotResponseDto };
+type AvailabilityItem = {
+  message: string;
+  data: ArtisanAvailabilityResponseDto;
+};
 
 @Injectable()
 export class AvailabilityService {
@@ -38,39 +41,54 @@ export class AvailabilityService {
     const profile = await this.loadProfileOrFail(userId);
     return {
       message: SUCCESS_MESSAGES.AVAILABILITY.RETRIEVED,
-      data:    await this.buildAvailabilityDto(profile, false),
+      data: await this.buildAvailabilityDto(profile, false),
     };
   }
 
-  async setStatus(userId: number, dto: SetAvailabilityStatusDto): Promise<AvailabilityItem> {
+  async setStatus(
+    userId: number,
+    dto: SetAvailabilityStatusDto,
+  ): Promise<AvailabilityItem> {
     const profile = await this.loadProfileOrFail(userId);
     profile.availabilityStatus = dto.status;
     await this.profileRepo.save(profile);
     this.logger.log(`Artisan profile ${profile.id} status → ${dto.status}`);
     return {
       message: SUCCESS_MESSAGES.AVAILABILITY.STATUS_UPDATED,
-      data:    await this.buildAvailabilityDto(profile, false),
+      data: await this.buildAvailabilityDto(profile, false),
     };
   }
 
-  async addSlot(userId: number, dto: CreateAvailabilitySlotDto): Promise<SlotItem> {
+  async addSlot(
+    userId: number,
+    dto: CreateAvailabilitySlotDto,
+  ): Promise<SlotItem> {
     const profile = await this.loadProfileOrFail(userId);
     this.assertValidTimes(dto.startTime, dto.endTime);
-    await this.assertNoOverlap(profile.id, dto.dayOfWeek, dto.startTime, dto.endTime);
+    await this.assertNoOverlap(
+      profile.id,
+      dto.dayOfWeek,
+      dto.startTime,
+      dto.endTime,
+    );
 
     const slot = await this.slotRepo.save(
       this.slotRepo.create({
         artisanProfile: { id: profile.id },
-        dayOfWeek:      dto.dayOfWeek,
-        startTime:      dto.startTime,
-        endTime:        dto.endTime,
+        dayOfWeek: dto.dayOfWeek,
+        startTime: dto.startTime,
+        endTime: dto.endTime,
       }),
     );
 
-    this.logger.log(`Artisan ${profile.id} added slot: day ${dto.dayOfWeek} ${dto.startTime}–${dto.endTime}`);
+    this.logger.log(
+      `Artisan ${profile.id} added slot: day ${dto.dayOfWeek} ${dto.startTime}–${dto.endTime}`,
+    );
     return {
       message: SUCCESS_MESSAGES.AVAILABILITY.SLOT_ADDED,
-      data:    plainToInstance(AvailabilitySlotResponseDto, slot, { excludeExtraneousValues: true }),
+      data: plainToInstance(AvailabilitySlotResponseDto, slot, {
+        excludeExtraneousValues: true,
+      }),
     };
   }
 
@@ -80,28 +98,33 @@ export class AvailabilityService {
     dto: UpdateAvailabilitySlotDto,
   ): Promise<SlotItem> {
     const profile = await this.loadProfileOrFail(userId);
-    const slot    = await this.loadSlotOrFail(slotId, profile.id);
+    const slot = await this.loadSlotOrFail(slotId, profile.id);
 
-    const nextDay   = dto.dayOfWeek  ?? slot.dayOfWeek;
-    const nextStart = dto.startTime  ?? slot.startTime;
-    const nextEnd   = dto.endTime    ?? slot.endTime;
+    const nextDay = dto.dayOfWeek ?? slot.dayOfWeek;
+    const nextStart = dto.startTime ?? slot.startTime;
+    const nextEnd = dto.endTime ?? slot.endTime;
 
     this.assertValidTimes(nextStart, nextEnd);
     await this.assertNoOverlap(profile.id, nextDay, nextStart, nextEnd, slotId);
 
-    slot.dayOfWeek  = nextDay;
-    slot.startTime  = nextStart;
-    slot.endTime    = nextEnd;
+    slot.dayOfWeek = nextDay;
+    slot.startTime = nextStart;
+    slot.endTime = nextEnd;
     if (dto.isActive !== undefined) slot.isActive = dto.isActive;
 
     await this.slotRepo.save(slot);
     return {
       message: SUCCESS_MESSAGES.AVAILABILITY.SLOT_UPDATED,
-      data:    plainToInstance(AvailabilitySlotResponseDto, slot, { excludeExtraneousValues: true }),
+      data: plainToInstance(AvailabilitySlotResponseDto, slot, {
+        excludeExtraneousValues: true,
+      }),
     };
   }
 
-  async removeSlot(userId: number, slotId: number): Promise<{ message: string }> {
+  async removeSlot(
+    userId: number,
+    slotId: number,
+  ): Promise<{ message: string }> {
     const profile = await this.loadProfileOrFail(userId);
     await this.loadSlotOrFail(slotId, profile.id);
     await this.slotRepo.delete(slotId);
@@ -110,12 +133,19 @@ export class AvailabilityService {
 
   // ─── Public read ─────────────────────────────────────────────────────────────
 
-  async getArtisanAvailability(artisanProfileId: number): Promise<AvailabilityItem> {
-    const profile = await this.profileRepo.findOne({ where: { id: artisanProfileId } });
-    if (!profile) throw new NotFoundException(`Artisan profile ${artisanProfileId} not found.`);
+  async getArtisanAvailability(
+    artisanProfileId: number,
+  ): Promise<AvailabilityItem> {
+    const profile = await this.profileRepo.findOne({
+      where: { id: artisanProfileId },
+    });
+    if (!profile)
+      throw new NotFoundException(
+        `Artisan profile ${artisanProfileId} not found.`,
+      );
     return {
       message: SUCCESS_MESSAGES.AVAILABILITY.RETRIEVED,
-      data:    await this.buildAvailabilityDto(profile, true),
+      data: await this.buildAvailabilityDto(profile, true),
     };
   }
 
@@ -135,8 +165,8 @@ export class AvailabilityService {
 
     return {
       artisanProfileId: profile.id,
-      status:           profile.availabilityStatus,
-      slots:            plainToInstance(AvailabilitySlotResponseDto, slots, {
+      status: profile.availabilityStatus,
+      slots: plainToInstance(AvailabilitySlotResponseDto, slots, {
         excludeExtraneousValues: true,
       }),
     };
@@ -146,7 +176,10 @@ export class AvailabilityService {
     const profile = await this.profileRepo.findOne({
       where: { user: { id: userId } },
     });
-    if (!profile) throw new NotFoundException('Artisan profile not found. Set up your profile first.');
+    if (!profile)
+      throw new NotFoundException(
+        'Artisan profile not found. Set up your profile first.',
+      );
     return profile;
   }
 
@@ -158,7 +191,8 @@ export class AvailabilityService {
       where: { id: slotId, artisanProfile: { id: profileId } },
     });
     // Ownership check is implicit: the slot must belong to the caller's profile
-    if (!slot) throw new NotFoundException(`Availability slot ${slotId} not found.`);
+    if (!slot)
+      throw new NotFoundException(`Availability slot ${slotId} not found.`);
     return slot;
   }
 

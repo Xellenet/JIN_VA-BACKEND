@@ -15,7 +15,11 @@ export class AddUserBanFields1782850000000 implements MigrationInterface {
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(`ALTER TABLE "users" DROP COLUMN IF EXISTS "banned_at"`);
-    await queryRunner.query(`ALTER TABLE "users" DROP COLUMN IF EXISTS "is_banned"`);
+    await queryRunner.query(
+      `ALTER TABLE "users" DROP COLUMN IF EXISTS "banned_at"`,
+    );
+    await queryRunner.query(
+      `ALTER TABLE "users" DROP COLUMN IF EXISTS "is_banned"`,
+    );
   }
 }

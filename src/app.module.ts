@@ -34,7 +34,7 @@ import { PaymentsModule } from './payments/payments.module';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      load: [appConfig]
+      load: [appConfig],
     }),
     TypeOrmModule.forRootAsync(typeOrmConfigAsync),
     WinstonModule.forRoot(winstonConfig),

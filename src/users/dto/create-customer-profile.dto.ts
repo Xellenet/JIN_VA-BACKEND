@@ -10,7 +10,9 @@ import {
 } from 'class-validator';
 
 export class CreateCustomerProfileDto {
-  @ApiPropertyOptional({ example: 'I prefer weekend appointments and nearby providers.' })
+  @ApiPropertyOptional({
+    example: 'I prefer weekend appointments and nearby providers.',
+  })
   @IsOptional()
   @IsString()
   @MaxLength(1000)

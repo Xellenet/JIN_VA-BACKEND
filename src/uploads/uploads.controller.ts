@@ -10,7 +10,13 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { ApiBearerAuth, ApiBody, ApiConsumes, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiConsumes,
+  ApiOperation,
+  ApiTags,
+} from '@nestjs/swagger';
 import { memoryStorage } from 'multer';
 import { UploadsService } from './uploads.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -38,7 +44,10 @@ export class UploadsController {
   @Post('avatar')
   @HttpCode(HttpStatus.OK)
   @UseInterceptors(FileInterceptor('file', { storage: memoryStorage() }))
-  @ApiOperation({ summary: 'Upload a profile avatar (all authenticated users, ≤ 3 MB, JPEG/PNG/WebP)' })
+  @ApiOperation({
+    summary:
+      'Upload a profile avatar (all authenticated users, ≤ 3 MB, JPEG/PNG/WebP)',
+  })
   @ApiConsumes('multipart/form-data')
   @ApiBody(fileField)
   uploadAvatar(
@@ -57,7 +66,9 @@ export class UploadsController {
   @UseGuards(RolesGuard)
   @Roles(Role.ARTISAN)
   @UseInterceptors(FileInterceptor('file', { storage: memoryStorage() }))
-  @ApiOperation({ summary: 'Upload a KYC document (artisan only, ≤ 10 MB, JPEG/PNG/WebP/PDF)' })
+  @ApiOperation({
+    summary: 'Upload a KYC document (artisan only, ≤ 10 MB, JPEG/PNG/WebP/PDF)',
+  })
   @ApiConsumes('multipart/form-data')
   @ApiBody(fileField)
   uploadDocument(
@@ -76,7 +87,9 @@ export class UploadsController {
   @UseGuards(RolesGuard)
   @Roles(Role.ARTISAN)
   @UseInterceptors(FileInterceptor('file', { storage: memoryStorage() }))
-  @ApiOperation({ summary: 'Upload a KYC selfie (artisan only, ≤ 5 MB, JPEG/PNG/WebP)' })
+  @ApiOperation({
+    summary: 'Upload a KYC selfie (artisan only, ≤ 5 MB, JPEG/PNG/WebP)',
+  })
   @ApiConsumes('multipart/form-data')
   @ApiBody(fileField)
   uploadSelfie(

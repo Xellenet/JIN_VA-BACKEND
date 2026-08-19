@@ -7,7 +7,9 @@ import { ArtisanProfile } from '@users/entities/artisan-profile.entity';
 import { ArtisanAvailability } from '../availability/entities/artisan-availability.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Booking, ArtisanProfile, ArtisanAvailability])],
+  imports: [
+    TypeOrmModule.forFeature([Booking, ArtisanProfile, ArtisanAvailability]),
+  ],
   controllers: [BookingsController],
   providers: [BookingsService],
   exports: [BookingsService],

@@ -37,7 +37,11 @@ export class PaymentsService {
    * Creates a PENDING payment record when an artisan accepts a job.
    * The customer then calls POST /payments/initialize to get the Paystack payment URL.
    */
-  async holdPayment(jobId: number, customerId: number, amount?: number): Promise<string> {
+  async holdPayment(
+    jobId: number,
+    customerId: number,
+    amount?: number,
+  ): Promise<string> {
     const job = await this.jobRepo.findOne({ where: { id: jobId } });
     if (!job) throw new NotFoundException('Job not found.');
 
@@ -48,12 +52,13 @@ export class PaymentsService {
     const profile = await this.profileRepo.findOne({
       where: { user: { id: job.acceptedArtisanId } },
     });
-    if (!profile) throw new NotFoundException('Artisan profile not found for this job.');
+    if (!profile)
+      throw new NotFoundException('Artisan profile not found for this job.');
 
-    const feePercent  = this.config.get<number>('PLATFORM_FEE_PERCENT', 5);
+    const feePercent = this.config.get<number>('PLATFORM_FEE_PERCENT', 5);
     const agreedAmount = +(amount ?? job.budgetMax ?? 0);
-    const platformFee  = +(agreedAmount * feePercent / 100).toFixed(2);
-    const artisanAmt   = +(agreedAmount - platformFee).toFixed(2);
+    const platformFee = +((agreedAmount * feePercent) / 100).toFixed(2);
+    const artisanAmt = +(agreedAmount - platformFee).toFixed(2);
 
     const reference = `jinva-${jobId}-${customerId}-${Date.now()}`;
 
@@ -85,13 +90,19 @@ export class PaymentsService {
       return;
     }
     if (payment.status !== PaymentStatus.HELD) {
-      this.logger.warn(`capturePayment: payment ${reference} is ${payment.status}, not HELD`);
+      this.logger.warn(
+        `capturePayment: payment ${reference} is ${payment.status}, not HELD`,
+      );
       return;
     }
 
-    const profile = await this.profileRepo.findOne({ where: { id: payment.artisanProfileId } });
+    const profile = await this.profileRepo.findOne({
+      where: { id: payment.artisanProfileId },
+    });
     if (!profile?.paystackRecipientCode) {
-      this.logger.warn(`Artisan ${payment.artisanProfileId} has no payout method — marking PENDING_TRANSFER`);
+      this.logger.warn(
+        `Artisan ${payment.artisanProfileId} has no payout method — marking PENDING_TRANSFER`,
+      );
       payment.status = PaymentStatus.PENDING_TRANSFER;
       await this.repo.save(payment);
       return;
@@ -110,7 +121,9 @@ export class PaymentsService {
 
     payment.transferCode = transfer.transfer_code;
     await this.repo.save(payment);
-    this.logger.log(`Transfer initiated: job=${jobId} amount=${payment.artisanAmount} GHS code=${transfer.transfer_code}`);
+    this.logger.log(
+      `Transfer initiated: job=${jobId} amount=${payment.artisanAmount} GHS code=${transfer.transfer_code}`,
+    );
   }
 
   /**
@@ -141,10 +154,14 @@ export class PaymentsService {
       where: { jobId, customerId, status: PaymentStatus.PENDING },
     });
     if (!payment) {
-      throw new NotFoundException('No pending payment found for this job. Has the artisan accepted yet?');
+      throw new NotFoundException(
+        'No pending payment found for this job. Has the artisan accepted yet?',
+      );
     }
 
-    const customer = await this.userRepo.findOneOrFail({ where: { id: customerId } });
+    const customer = await this.userRepo.findOneOrFail({
+      where: { id: customerId },
+    });
 
     const result = await this.paystack.initializeTransaction({
       email: customer.email,
@@ -155,17 +172,18 @@ export class PaymentsService {
     });
 
     payment.authorizationUrl = result.authorization_url;
-    payment.accessCode       = result.access_code;
+    payment.accessCode = result.access_code;
     await this.repo.save(payment);
 
     return {
-      message: 'Payment initialized. Redirect the customer to the authorization URL.',
+      message:
+        'Payment initialized. Redirect the customer to the authorization URL.',
       data: {
-        reference:        payment.reference,
+        reference: payment.reference,
         authorizationUrl: result.authorization_url,
-        accessCode:       result.access_code,
-        amount:           payment.amount,
-        currency:         payment.currency,
+        accessCode: result.access_code,
+        amount: payment.amount,
+        currency: payment.currency,
       },
     };
   }
@@ -197,8 +215,13 @@ export class PaymentsService {
 
   async adminRefund(paymentId: number, amountGhs?: number) {
     const payment = await this.repo.findOneOrFail({ where: { id: paymentId } });
-    if (payment.status !== PaymentStatus.HELD && payment.status !== PaymentStatus.RELEASED) {
-      throw new BadRequestException(`Cannot refund a payment with status ${payment.status}.`);
+    if (
+      payment.status !== PaymentStatus.HELD &&
+      payment.status !== PaymentStatus.RELEASED
+    ) {
+      throw new BadRequestException(
+        `Cannot refund a payment with status ${payment.status}.`,
+      );
     }
     await this.paystack.createRefund(payment.reference, amountGhs);
     payment.status = PaymentStatus.REFUNDED;
@@ -214,14 +237,20 @@ export class PaymentsService {
       return;
     }
 
-    const event = JSON.parse(rawBody) as { event: string; data: Record<string, unknown> };
+    const event = JSON.parse(rawBody) as {
+      event: string;
+      data: Record<string, unknown>;
+    };
     this.logger.log(`Paystack webhook: ${event.event}`);
 
     switch (event.event) {
-      case 'charge.success':     return this.onChargeSuccess(event.data);
-      case 'transfer.success':   return this.onTransferSuccess(event.data);
+      case 'charge.success':
+        return this.onChargeSuccess(event.data);
+      case 'transfer.success':
+        return this.onTransferSuccess(event.data);
       case 'transfer.failed':
-      case 'transfer.reversed':  return this.onTransferFailed(event.event, event.data);
+      case 'transfer.reversed':
+        return this.onTransferFailed(event.event, event.data);
     }
   }
 
@@ -232,18 +261,22 @@ export class PaymentsService {
       this.logger.warn(`charge.success: no payment for reference ${reference}`);
       return;
     }
-    payment.status    = PaymentStatus.HELD;
-    payment.channel   = data.channel as string;
-    payment.paidAt    = new Date(data.paid_at as string);
+    payment.status = PaymentStatus.HELD;
+    payment.channel = data.channel as string;
+    payment.paidAt = new Date(data.paid_at as string);
     await this.repo.save(payment);
-    this.logger.log(`Payment HELD: ref=${reference} channel=${payment.channel}`);
+    this.logger.log(
+      `Payment HELD: ref=${reference} channel=${payment.channel}`,
+    );
   }
 
   private async onTransferSuccess(data: Record<string, unknown>) {
     const reference = data.reference as string;
-    const payment = await this.repo.findOne({ where: { transferReference: reference } });
+    const payment = await this.repo.findOne({
+      where: { transferReference: reference },
+    });
     if (!payment) return;
-    payment.status     = PaymentStatus.RELEASED;
+    payment.status = PaymentStatus.RELEASED;
     payment.releasedAt = new Date();
     await this.repo.save(payment);
     this.logger.log(`Payment RELEASED: job=${payment.jobId}`);
@@ -259,16 +292,22 @@ export class PaymentsService {
    * Registers the artisan's mobile money or bank account with Paystack and
    * stores the recipient_code on their profile for future payouts.
    */
-  async setupPayoutMethod(artisanUserId: number, dto: {
-    type: 'mobile_money' | 'bank';
-    accountName: string;
-    accountNumber: string;
-    bankCode: string;
-  }) {
-    const profile = await this.profileRepo.findOne({ where: { user: { id: artisanUserId } } });
+  async setupPayoutMethod(
+    artisanUserId: number,
+    dto: {
+      type: 'mobile_money' | 'bank';
+      accountName: string;
+      accountNumber: string;
+      bankCode: string;
+    },
+  ) {
+    const profile = await this.profileRepo.findOne({
+      where: { user: { id: artisanUserId } },
+    });
     if (!profile) throw new NotFoundException('Artisan profile not found.');
 
-    const paystackType = dto.type === 'mobile_money' ? 'mobile_money' : 'ghipss';
+    const paystackType =
+      dto.type === 'mobile_money' ? 'mobile_money' : 'ghipss';
     const recipient = await this.paystack.createTransferRecipient({
       type: paystackType,
       name: dto.accountName,
@@ -276,11 +315,12 @@ export class PaymentsService {
       bankCode: dto.bankCode,
     });
 
-    profile.payoutType             = dto.type === 'mobile_money' ? PayoutType.MOBILE_MONEY : PayoutType.BANK;
-    profile.paystackRecipientCode  = recipient.recipient_code;
-    profile.payoutAccountName      = dto.accountName;
-    profile.payoutAccountNumber    = dto.accountNumber;
-    profile.payoutBankCode         = dto.bankCode;
+    profile.payoutType =
+      dto.type === 'mobile_money' ? PayoutType.MOBILE_MONEY : PayoutType.BANK;
+    profile.paystackRecipientCode = recipient.recipient_code;
+    profile.payoutAccountName = dto.accountName;
+    profile.payoutAccountNumber = dto.accountNumber;
+    profile.payoutBankCode = dto.bankCode;
     await this.profileRepo.save(profile);
 
     return { message: 'Payout method registered successfully.' };
@@ -290,7 +330,8 @@ export class PaymentsService {
     const payment = await this.repo.findOne({
       where: { jobId, status: PaymentStatus.PENDING_TRANSFER },
     });
-    if (!payment) throw new NotFoundException('No pending transfer for this job.');
+    if (!payment)
+      throw new NotFoundException('No pending transfer for this job.');
     await this.capturePayment(payment.reference, jobId);
     return { message: 'Transfer retry initiated.' };
   }

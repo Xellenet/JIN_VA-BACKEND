@@ -23,7 +23,7 @@ export class JobsSchedulerService {
 
     const staleJobs = await this.jobsRepository.find({
       where: {
-        status:   Status.OPEN,
+        status: Status.OPEN,
         deadline: LessThan(now),
       },
       select: ['id'],
@@ -37,7 +37,9 @@ export class JobsSchedulerService {
       try {
         await this.jobsService.expireJob(id);
       } catch (err) {
-        this.logger.error(`Failed to expire job ${id}: ${(err as Error).message}`);
+        this.logger.error(
+          `Failed to expire job ${id}: ${(err as Error).message}`,
+        );
       }
     }
   }

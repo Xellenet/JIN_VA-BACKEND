@@ -12,7 +12,11 @@ describe('UsersService', () => {
   let service: UsersService;
   let usersRepository: jest.Mocked<Repository<User>>;
 
-  const mockUser = { id: 1, email: 'test@example.com', password: 'hashed' } as User;
+  const mockUser = {
+    id: 1,
+    email: 'test@example.com',
+    password: 'hashed',
+  } as User;
 
   const mockUsersRepository = {
     create: jest.fn(),
@@ -39,17 +43,25 @@ describe('UsersService', () => {
 
   describe('createUser', () => {
     it('should throw BadRequestException if email is missing', async () => {
-      await expect(service.createUser({ password: 'pass' } as CreateUserDto)).rejects.toThrow(BadRequestException);
+      await expect(
+        service.createUser({ password: 'pass' } as CreateUserDto),
+      ).rejects.toThrow(BadRequestException);
     });
 
     it('should throw UserAlreadyExists if user already exists', async () => {
       mockUsersRepository.findOne.mockResolvedValueOnce(mockUser);
-      const dto: CreateUserDto = { email: mockUser.email, password: 'pass' } as CreateUserDto;
+      const dto: CreateUserDto = {
+        email: mockUser.email,
+        password: 'pass',
+      } as CreateUserDto;
       await expect(service.createUser(dto)).rejects.toThrow(UserAlreadyExists);
     });
 
     it('should create and save a user, and log the action', async () => {
-      const dto: CreateUserDto = { email: 'new@example.com', password: 'pass' } as CreateUserDto;
+      const dto: CreateUserDto = {
+        email: 'new@example.com',
+        password: 'pass',
+      } as CreateUserDto;
       mockUsersRepository.findOne.mockResolvedValueOnce(null);
       mockUsersRepository.create.mockReturnValueOnce({ ...dto, id: 2 });
       mockUsersRepository.save.mockResolvedValueOnce({ ...dto, id: 2 });
@@ -83,7 +95,9 @@ describe('UsersService', () => {
 
   describe('findUserByEmail', () => {
     it('should throw NotFoundException if email is missing', async () => {
-      await expect(service.findUserByEmail(undefined as any)).rejects.toThrow(NotFoundException);
+      await expect(service.findUserByEmail(undefined as any)).rejects.toThrow(
+        NotFoundException,
+      );
     });
 
     it('should log and return user if found', async () => {
@@ -91,8 +105,12 @@ describe('UsersService', () => {
       const loggerSpy = jest.spyOn(service['logger'], 'log');
       const result = await service.findUserByEmail(mockUser.email);
 
-      expect(loggerSpy).toHaveBeenCalledWith(`Finding user with email ${mockUser.email}`);
-      expect(usersRepository.findOne).toHaveBeenCalledWith({ where: { email: mockUser.email } });
+      expect(loggerSpy).toHaveBeenCalledWith(
+        `Finding user with email ${mockUser.email}`,
+      );
+      expect(usersRepository.findOne).toHaveBeenCalledWith({
+        where: { email: mockUser.email },
+      });
       expect(result).toEqual(mockUser);
     });
 

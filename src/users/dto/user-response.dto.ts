@@ -8,11 +8,18 @@ export class UserResponseDto {
   @Expose()
   id: number;
 
-  @ApiProperty({ example: 'john@example.com', description: 'User email address' })
+  @ApiProperty({
+    example: 'john@example.com',
+    description: 'User email address',
+  })
   @Expose()
   email: string;
 
-  @ApiProperty({ example: 'johndoe', description: 'User username', nullable: true })
+  @ApiProperty({
+    example: 'johndoe',
+    description: 'User username',
+    nullable: true,
+  })
   @Expose()
   username: string;
 
@@ -46,11 +53,18 @@ export class UserResponseDto {
   @Expose()
   phoneNumber: string;
 
-  @ApiProperty({ example: 'https://api.example.com/uploads/avatars/abc.jpg', description: 'Profile picture URL', nullable: true })
+  @ApiProperty({
+    example: 'https://api.example.com/uploads/avatars/abc.jpg',
+    description: 'Profile picture URL',
+    nullable: true,
+  })
   @Expose()
   profilePicture?: string;
 
-  @ApiProperty({ example: true, description: 'Whether the account email has been verified' })
+  @ApiProperty({
+    example: true,
+    description: 'Whether the account email has been verified',
+  })
   @Expose()
   accountVerified: boolean;
 
@@ -63,6 +77,10 @@ export class UserResponseDto {
   @Type(() => AddressResponseDto)
   addresses?: AddressResponseDto[];
 
-  @ApiProperty({ example: 'password123', description: 'User password', required: false })
+  @ApiProperty({
+    example: 'password123',
+    description: 'User password',
+    required: false,
+  })
   password?: string;
 }

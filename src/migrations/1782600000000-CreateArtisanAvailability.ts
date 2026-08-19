@@ -1,6 +1,8 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class CreateArtisanAvailability1782600000000 implements MigrationInterface {
+export class CreateArtisanAvailability1782600000000
+  implements MigrationInterface
+{
   name = 'CreateArtisanAvailability1782600000000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
@@ -42,7 +44,9 @@ export class CreateArtisanAvailability1782600000000 implements MigrationInterfac
   public async down(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`DROP INDEX "IDX_aa_profile"`);
     await queryRunner.query(`DROP INDEX "UQ_aa_profile_day_start"`);
-    await queryRunner.query(`ALTER TABLE "artisan_availability" DROP CONSTRAINT "FK_aa_artisan_profile"`);
+    await queryRunner.query(
+      `ALTER TABLE "artisan_availability" DROP CONSTRAINT "FK_aa_artisan_profile"`,
+    );
     await queryRunner.query(`DROP TABLE "artisan_availability"`);
   }
 }

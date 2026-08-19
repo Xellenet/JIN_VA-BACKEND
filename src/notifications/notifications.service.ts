@@ -34,54 +34,90 @@ import type {
   SecurityAlertPayload,
 } from '@common/events/app.events';
 
-type Pagination       = { total: number; page: number; limit: number; totalPages: number };
-type NotificationList = { message: string; data: NotificationResponseDto[]; pagination: Pagination };
-type PrefsData        = CustomerNotificationPreferencesResponseDto | ArtisanNotificationPreferencesResponseDto;
-type PrefsResponse    = { message: string; data: PrefsData };
+type Pagination = {
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+};
+type NotificationList = {
+  message: string;
+  data: NotificationResponseDto[];
+  pagination: Pagination;
+};
+type PrefsData =
+  | CustomerNotificationPreferencesResponseDto
+  | ArtisanNotificationPreferencesResponseDto;
+type PrefsResponse = { message: string; data: PrefsData };
 
 // ─── Role-aware preference key maps ──────────────────────────────────────────
 // Maps each NotificationType to the flag that gates it for that role.
 // If a type has no entry for the recipient's role, it always goes through.
 
-const CUSTOMER_PREF_KEY: Partial<Record<NotificationType, keyof NotificationPreferences>> = {
+const CUSTOMER_PREF_KEY: Partial<
+  Record<NotificationType, keyof NotificationPreferences>
+> = {
   [NotificationType.JOB_APPLICATION_RECEIVED]: 'bookingConfirmations',
-  [NotificationType.JOB_STARTED]:              'jobStatusUpdates',
+  [NotificationType.JOB_STARTED]: 'jobStatusUpdates',
   [NotificationType.JOB_COMPLETION_REQUESTED]: 'jobStatusUpdates',
-  [NotificationType.JOB_EXPIRED]:              'jobExpired',
-  [NotificationType.BOOKING_CONFIRMED]:        'bookingConfirmed',
-  [NotificationType.BOOKING_DECLINED]:         'bookingDeclined',
-  [NotificationType.MESSAGE_RECEIVED]:         'messageReceived',
+  [NotificationType.JOB_EXPIRED]: 'jobExpired',
+  [NotificationType.BOOKING_CONFIRMED]: 'bookingConfirmed',
+  [NotificationType.BOOKING_DECLINED]: 'bookingDeclined',
+  [NotificationType.MESSAGE_RECEIVED]: 'messageReceived',
 };
 
-const ARTISAN_PREF_KEY: Partial<Record<NotificationType, keyof NotificationPreferences>> = {
-  [NotificationType.JOB_APPLICATION_ACCEPTED]:  'applicationUpdates',
-  [NotificationType.JOB_APPLICATION_REJECTED]:  'applicationRejected',
-  [NotificationType.JOB_CANCELLED]:             'artisanJobUpdates',
-  [NotificationType.JOB_COMPLETED]:             'paymentReleased',
-  [NotificationType.JOB_EXPIRED]:               'appliedJobExpired',
-  [NotificationType.REVIEW_RECEIVED]:           'reviewsAndRatings',
-  [NotificationType.ARTISAN_PROFILE_VERIFIED]:       'profileVerified',
-  [NotificationType.ARTISAN_VERIFICATION_REJECTED]:  'verificationRejected',
-  [NotificationType.BOOKING_RECEIVED]:               'bookingReceived',
-  [NotificationType.BOOKING_CANCELLED]:              'bookingCancelled',
-  [NotificationType.BOOKING_COMPLETED]:              'bookingCompletedArtisan',
-  [NotificationType.MESSAGE_RECEIVED]:               'messageReceived',
+const ARTISAN_PREF_KEY: Partial<
+  Record<NotificationType, keyof NotificationPreferences>
+> = {
+  [NotificationType.JOB_APPLICATION_ACCEPTED]: 'applicationUpdates',
+  [NotificationType.JOB_APPLICATION_REJECTED]: 'applicationRejected',
+  [NotificationType.JOB_CANCELLED]: 'artisanJobUpdates',
+  [NotificationType.JOB_COMPLETED]: 'paymentReleased',
+  [NotificationType.JOB_EXPIRED]: 'appliedJobExpired',
+  [NotificationType.REVIEW_RECEIVED]: 'reviewsAndRatings',
+  [NotificationType.ARTISAN_PROFILE_VERIFIED]: 'profileVerified',
+  [NotificationType.ARTISAN_VERIFICATION_REJECTED]: 'verificationRejected',
+  [NotificationType.BOOKING_RECEIVED]: 'bookingReceived',
+  [NotificationType.BOOKING_CANCELLED]: 'bookingCancelled',
+  [NotificationType.BOOKING_COMPLETED]: 'bookingCompletedArtisan',
+  [NotificationType.MESSAGE_RECEIVED]: 'messageReceived',
 };
 
 // Fields each role is allowed to update — prevents artisans from setting customer flags
 const CUSTOMER_UPDATABLE = new Set<keyof NotificationPreferences>([
-  'bookingConfirmations', 'jobStatusUpdates', 'paymentReceipts',
-  'promotionalOffers', 'serviceReminders', 'reviewRequests',
-  'jobExpired', 'bookingConfirmed', 'bookingDeclined',
-  'messageReceived', 'emailEnabled', 'smsEnabled', 'pushEnabled',
+  'bookingConfirmations',
+  'jobStatusUpdates',
+  'paymentReceipts',
+  'promotionalOffers',
+  'serviceReminders',
+  'reviewRequests',
+  'jobExpired',
+  'bookingConfirmed',
+  'bookingDeclined',
+  'messageReceived',
+  'emailEnabled',
+  'smsEnabled',
+  'pushEnabled',
 ]);
 
 const ARTISAN_UPDATABLE = new Set<keyof NotificationPreferences>([
-  'newJobOpportunities', 'applicationUpdates', 'artisanJobUpdates',
-  'paymentReleased', 'reviewsAndRatings', 'artisanPromotions',
-  'applicationRejected', 'appliedJobExpired', 'profileVerified', 'verificationRejected',
-  'bookingReceived', 'bookingCancelled', 'bookingCompletedArtisan',
-  'messageReceived', 'emailEnabled', 'smsEnabled', 'pushEnabled',
+  'newJobOpportunities',
+  'applicationUpdates',
+  'artisanJobUpdates',
+  'paymentReleased',
+  'reviewsAndRatings',
+  'artisanPromotions',
+  'applicationRejected',
+  'appliedJobExpired',
+  'profileVerified',
+  'verificationRejected',
+  'bookingReceived',
+  'bookingCancelled',
+  'bookingCompletedArtisan',
+  'messageReceived',
+  'emailEnabled',
+  'smsEnabled',
+  'pushEnabled',
 ]);
 
 @Injectable()
@@ -284,7 +320,9 @@ export class NotificationsService {
   }
 
   @OnEvent(APP_EVENTS.ARTISAN_VERIFICATION_REJECTED)
-  async handleVerificationRejected(payload: ArtisanVerificationRejectedPayload) {
+  async handleVerificationRejected(
+    payload: ArtisanVerificationRejectedPayload,
+  ) {
     await this.persist(
       payload.artisanUserId,
       NotificationType.ARTISAN_VERIFICATION_REJECTED,
@@ -299,18 +337,20 @@ export class NotificationsService {
     try {
       const titles: Record<SecurityAlertPayload['event'], string> = {
         PASSWORD_CHANGED: 'Password Changed',
-        PASSWORD_RESET:   'Password Reset',
+        PASSWORD_RESET: 'Password Reset',
       };
       const bodies: Record<SecurityAlertPayload['event'], string> = {
-        PASSWORD_CHANGED: 'Your account password was changed. If this wasn\'t you, contact support immediately.',
-        PASSWORD_RESET:   'Your account password was reset. If this wasn\'t you, contact support immediately.',
+        PASSWORD_CHANGED:
+          "Your account password was changed. If this wasn't you, contact support immediately.",
+        PASSWORD_RESET:
+          "Your account password was reset. If this wasn't you, contact support immediately.",
       };
       await this.notificationsRepository.save(
         this.notificationsRepository.create({
-          user:    { id: payload.userId },
-          type:    NotificationType.SECURITY_ALERT,
-          title:   titles[payload.event],
-          body:    bodies[payload.event],
+          user: { id: payload.userId },
+          type: NotificationType.SECURITY_ALERT,
+          title: titles[payload.event],
+          body: bodies[payload.event],
           payload: { event: payload.event },
         }),
       );
@@ -323,8 +363,11 @@ export class NotificationsService {
 
   // ─── Public API ─────────────────────────────────────────────────────────────
 
-  async findAll(userId: number, query: GetNotificationsQueryDto): Promise<NotificationList> {
-    const page  = query.page  ?? 1;
+  async findAll(
+    userId: number,
+    query: GetNotificationsQueryDto,
+  ): Promise<NotificationList> {
+    const page = query.page ?? 1;
     const limit = query.limit ?? 20;
 
     const qb = this.notificationsRepository
@@ -343,7 +386,9 @@ export class NotificationsService {
 
     return {
       message: SUCCESS_MESSAGES.NOTIFICATION.ALL_RETRIEVED,
-      data:    plainToInstance(NotificationResponseDto, notifications, { excludeExtraneousValues: true }),
+      data: plainToInstance(NotificationResponseDto, notifications, {
+        excludeExtraneousValues: true,
+      }),
       pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
   }
@@ -355,7 +400,10 @@ export class NotificationsService {
     return { count };
   }
 
-  async markRead(userId: number, notificationId: number): Promise<{ message: string }> {
+  async markRead(
+    userId: number,
+    notificationId: number,
+  ): Promise<{ message: string }> {
     const notification = await this.notificationsRepository.findOne({
       where: { id: notificationId, user: { id: userId } },
     });
@@ -387,7 +435,7 @@ export class NotificationsService {
     const prefs = await this.findOrCreatePrefs(userId);
     return {
       message: SUCCESS_MESSAGES.NOTIFICATION_PREFERENCES.RETRIEVED,
-      data:    this.toPrefsDto(prefs),
+      data: this.toPrefsDto(prefs),
     };
   }
 
@@ -396,12 +444,19 @@ export class NotificationsService {
    * Only role-relevant fields are applied — a customer cannot accidentally
    * set artisan-only flags and vice versa.
    */
-  async updatePreferences(userId: number, dto: UpdateNotificationPreferencesDto): Promise<PrefsResponse> {
-    const prefs       = await this.findOrCreatePrefs(userId);
-    const allowedKeys = prefs.user.role === Role.ARTISAN ? ARTISAN_UPDATABLE : CUSTOMER_UPDATABLE;
+  async updatePreferences(
+    userId: number,
+    dto: UpdateNotificationPreferencesDto,
+  ): Promise<PrefsResponse> {
+    const prefs = await this.findOrCreatePrefs(userId);
+    const allowedKeys =
+      prefs.user.role === Role.ARTISAN ? ARTISAN_UPDATABLE : CUSTOMER_UPDATABLE;
 
     for (const [key, value] of Object.entries(dto)) {
-      if (allowedKeys.has(key as keyof NotificationPreferences) && value !== undefined) {
+      if (
+        allowedKeys.has(key as keyof NotificationPreferences) &&
+        value !== undefined
+      ) {
         (prefs as any)[key] = value;
       }
     }
@@ -409,7 +464,7 @@ export class NotificationsService {
     await this.prefsRepository.save(prefs);
     return {
       message: SUCCESS_MESSAGES.NOTIFICATION_PREFERENCES.UPDATED,
-      data:    this.toPrefsDto(prefs),
+      data: this.toPrefsDto(prefs),
     };
   }
 
@@ -417,20 +472,28 @@ export class NotificationsService {
 
   private toPrefsDto(prefs: NotificationPreferences): PrefsData {
     if (prefs.user.role === Role.ARTISAN) {
-      return plainToInstance(ArtisanNotificationPreferencesResponseDto, prefs, { excludeExtraneousValues: true });
+      return plainToInstance(ArtisanNotificationPreferencesResponseDto, prefs, {
+        excludeExtraneousValues: true,
+      });
     }
-    return plainToInstance(CustomerNotificationPreferencesResponseDto, prefs, { excludeExtraneousValues: true });
+    return plainToInstance(CustomerNotificationPreferencesResponseDto, prefs, {
+      excludeExtraneousValues: true,
+    });
   }
 
-  private async findOrCreatePrefs(userId: number): Promise<NotificationPreferences> {
+  private async findOrCreatePrefs(
+    userId: number,
+  ): Promise<NotificationPreferences> {
     let prefs = await this.prefsRepository.findOne({
-      where:     { user: { id: userId } },
+      where: { user: { id: userId } },
       relations: ['user'],
     });
     if (!prefs) {
-      await this.prefsRepository.save(this.prefsRepository.create({ user: { id: userId } }));
+      await this.prefsRepository.save(
+        this.prefsRepository.create({ user: { id: userId } }),
+      );
       prefs = await this.prefsRepository.findOne({
-        where:     { user: { id: userId } },
+        where: { user: { id: userId } },
         relations: ['user'],
       });
     }
@@ -446,22 +509,32 @@ export class NotificationsService {
   ): Promise<void> {
     try {
       const prefs = await this.prefsRepository.findOne({
-        where:     { user: { id: userId } },
+        where: { user: { id: userId } },
         relations: ['user'],
       });
 
       if (prefs) {
-        const prefMap = prefs.user.role === Role.ARTISAN ? ARTISAN_PREF_KEY : CUSTOMER_PREF_KEY;
+        const prefMap =
+          prefs.user.role === Role.ARTISAN
+            ? ARTISAN_PREF_KEY
+            : CUSTOMER_PREF_KEY;
         const prefKey = prefMap[type];
         // Skip if the user has explicitly disabled this notification type
         if (prefKey && prefs[prefKey] === false) return;
         // Skip in-app delivery if the user has disabled all channels
         // (email/SMS/push channel checks happen in their respective send services)
-        if (!prefs.pushEnabled && !prefs.emailEnabled && !prefs.smsEnabled) return;
+        if (!prefs.pushEnabled && !prefs.emailEnabled && !prefs.smsEnabled)
+          return;
       }
 
       await this.notificationsRepository.save(
-        this.notificationsRepository.create({ user: { id: userId }, type, title, body, payload }),
+        this.notificationsRepository.create({
+          user: { id: userId },
+          type,
+          title,
+          body,
+          payload,
+        }),
       );
     } catch (err) {
       this.logger.error(

@@ -62,9 +62,14 @@ export class JobsController {
   @UseGuards(RolesGuard)
   @Roles(Role.CUSTOMER)
   @ApiOperation({ summary: 'Post a new job (CUSTOMER only)' })
-  @ApiCreatedResponse({ description: 'Job created successfully', type: JobResponseDto })
+  @ApiCreatedResponse({
+    description: 'Job created successfully',
+    type: JobResponseDto,
+  })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT' })
-  @ApiForbiddenResponse({ description: 'Caller does not have the CUSTOMER role' })
+  @ApiForbiddenResponse({
+    description: 'Caller does not have the CUSTOMER role',
+  })
   create(@Body() createJobDto: CreateJobDto, @Req() req: any) {
     return this.jobsService.create(createJobDto, req.user);
   }
@@ -76,8 +81,13 @@ export class JobsController {
    * @param query - Optional `status`, `serviceId`, `location` filters + `page`/`limit`.
    */
   @Get()
-  @ApiOperation({ summary: 'List all jobs with optional filters and pagination' })
-  @ApiOkResponse({ description: 'Jobs retrieved successfully', type: [JobResponseDto] })
+  @ApiOperation({
+    summary: 'List all jobs with optional filters and pagination',
+  })
+  @ApiOkResponse({
+    description: 'Jobs retrieved successfully',
+    type: [JobResponseDto],
+  })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT' })
   findAll(@Query() query: GetJobsQueryDto) {
     return this.jobsService.findAll(query);
@@ -93,10 +103,17 @@ export class JobsController {
   @Get('mine')
   @UseGuards(RolesGuard)
   @Roles(Role.CUSTOMER)
-  @ApiOperation({ summary: "List the authenticated customer's own jobs (CUSTOMER only)" })
-  @ApiOkResponse({ description: "Customer's jobs retrieved successfully", type: [JobResponseDto] })
+  @ApiOperation({
+    summary: "List the authenticated customer's own jobs (CUSTOMER only)",
+  })
+  @ApiOkResponse({
+    description: "Customer's jobs retrieved successfully",
+    type: [JobResponseDto],
+  })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT' })
-  @ApiForbiddenResponse({ description: 'Caller does not have the CUSTOMER role' })
+  @ApiForbiddenResponse({
+    description: 'Caller does not have the CUSTOMER role',
+  })
   findMine(@Req() req: any, @Query() query: GetJobsQueryDto) {
     return this.jobsService.findMine(req.user.id, query);
   }
@@ -108,7 +125,10 @@ export class JobsController {
    */
   @Get(':id')
   @ApiOperation({ summary: 'Get a single job by ID' })
-  @ApiOkResponse({ description: 'Job retrieved successfully', type: JobResponseDto })
+  @ApiOkResponse({
+    description: 'Job retrieved successfully',
+    type: JobResponseDto,
+  })
   @ApiNotFoundResponse({ description: 'No job found with the given ID' })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT' })
   findOne(@Param('id', ParseIntPipe) id: number) {
@@ -127,10 +147,15 @@ export class JobsController {
   @UseGuards(RolesGuard)
   @Roles(Role.CUSTOMER)
   @ApiOperation({ summary: 'Update a job (owner only, OPEN/PENDING state)' })
-  @ApiOkResponse({ description: 'Job updated successfully', type: JobResponseDto })
+  @ApiOkResponse({
+    description: 'Job updated successfully',
+    type: JobResponseDto,
+  })
   @ApiNotFoundResponse({ description: 'No job found with the given ID' })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT' })
-  @ApiForbiddenResponse({ description: 'Caller does not own this job or lacks CUSTOMER role' })
+  @ApiForbiddenResponse({
+    description: 'Caller does not own this job or lacks CUSTOMER role',
+  })
   update(
     @Param('id', ParseIntPipe) id: number,
     @Body() updateJobDto: UpdateJobDto,
@@ -153,7 +178,9 @@ export class JobsController {
   @ApiOkResponse({ description: 'Job deleted successfully' })
   @ApiNotFoundResponse({ description: 'No job found with the given ID' })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT' })
-  @ApiForbiddenResponse({ description: 'Caller does not own this job or lacks CUSTOMER role' })
+  @ApiForbiddenResponse({
+    description: 'Caller does not own this job or lacks CUSTOMER role',
+  })
   remove(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return this.jobsService.remove(id, req.user.id);
   }
@@ -173,10 +200,15 @@ export class JobsController {
   @UseGuards(RolesGuard)
   @Roles(Role.ARTISAN)
   @ApiOperation({ summary: 'Apply to a job (ARTISAN only)' })
-  @ApiCreatedResponse({ description: 'Application submitted successfully', type: ApplicationResponseDto })
+  @ApiCreatedResponse({
+    description: 'Application submitted successfully',
+    type: ApplicationResponseDto,
+  })
   @ApiNotFoundResponse({ description: 'No job found with the given ID' })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT' })
-  @ApiForbiddenResponse({ description: 'Caller does not have the ARTISAN role' })
+  @ApiForbiddenResponse({
+    description: 'Caller does not have the ARTISAN role',
+  })
   applyToJob(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: CreateApplicationDto,
@@ -194,11 +226,16 @@ export class JobsController {
   @Get(':id/applications')
   @UseGuards(RolesGuard)
   @Roles(Role.CUSTOMER)
-  @ApiOperation({ summary: "List all applications for a job (job owner only)" })
-  @ApiOkResponse({ description: 'Applications retrieved successfully', type: [ApplicationResponseDto] })
+  @ApiOperation({ summary: 'List all applications for a job (job owner only)' })
+  @ApiOkResponse({
+    description: 'Applications retrieved successfully',
+    type: [ApplicationResponseDto],
+  })
   @ApiNotFoundResponse({ description: 'No job found with the given ID' })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT' })
-  @ApiForbiddenResponse({ description: 'Caller does not own this job or lacks CUSTOMER role' })
+  @ApiForbiddenResponse({
+    description: 'Caller does not own this job or lacks CUSTOMER role',
+  })
   getApplications(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return this.jobsService.getApplications(id, req.user.id);
   }
@@ -214,11 +251,18 @@ export class JobsController {
   @Post(':id/applications/:appId/accept')
   @UseGuards(RolesGuard)
   @Roles(Role.CUSTOMER)
-  @ApiOperation({ summary: 'Accept an artisan application (job owner only) — OPEN → PENDING' })
-  @ApiOkResponse({ description: 'Application accepted. Job is now PENDING.', type: JobResponseDto })
+  @ApiOperation({
+    summary: 'Accept an artisan application (job owner only) — OPEN → PENDING',
+  })
+  @ApiOkResponse({
+    description: 'Application accepted. Job is now PENDING.',
+    type: JobResponseDto,
+  })
   @ApiNotFoundResponse({ description: 'Job or application not found' })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT' })
-  @ApiForbiddenResponse({ description: 'Caller does not own this job or lacks CUSTOMER role' })
+  @ApiForbiddenResponse({
+    description: 'Caller does not own this job or lacks CUSTOMER role',
+  })
   acceptApplication(
     @Param('id', ParseIntPipe) id: number,
     @Param('appId', ParseIntPipe) appId: number,
@@ -238,11 +282,18 @@ export class JobsController {
   @Patch(':id/start')
   @UseGuards(RolesGuard)
   @Roles(Role.ARTISAN)
-  @ApiOperation({ summary: 'Start a job (accepted artisan only) — PENDING → IN_PROGRESS' })
-  @ApiOkResponse({ description: 'Job is now in progress', type: JobResponseDto })
+  @ApiOperation({
+    summary: 'Start a job (accepted artisan only) — PENDING → IN_PROGRESS',
+  })
+  @ApiOkResponse({
+    description: 'Job is now in progress',
+    type: JobResponseDto,
+  })
   @ApiNotFoundResponse({ description: 'No job found with the given ID' })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT' })
-  @ApiForbiddenResponse({ description: 'Caller is not the accepted artisan or lacks ARTISAN role' })
+  @ApiForbiddenResponse({
+    description: 'Caller is not the accepted artisan or lacks ARTISAN role',
+  })
   startJob(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return this.jobsService.startJob(id, req.user.id);
   }
@@ -257,11 +308,19 @@ export class JobsController {
   @Patch(':id/request-completion')
   @UseGuards(RolesGuard)
   @Roles(Role.ARTISAN)
-  @ApiOperation({ summary: 'Request job completion (accepted artisan only) — awaits customer confirmation' })
-  @ApiOkResponse({ description: 'Completion requested. Awaiting customer confirmation.', type: JobResponseDto })
+  @ApiOperation({
+    summary:
+      'Request job completion (accepted artisan only) — awaits customer confirmation',
+  })
+  @ApiOkResponse({
+    description: 'Completion requested. Awaiting customer confirmation.',
+    type: JobResponseDto,
+  })
   @ApiNotFoundResponse({ description: 'No job found with the given ID' })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT' })
-  @ApiForbiddenResponse({ description: 'Caller is not the accepted artisan or lacks ARTISAN role' })
+  @ApiForbiddenResponse({
+    description: 'Caller is not the accepted artisan or lacks ARTISAN role',
+  })
   requestCompletion(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return this.jobsService.requestCompletion(id, req.user.id);
   }
@@ -276,11 +335,19 @@ export class JobsController {
   @Post(':id/confirm')
   @UseGuards(RolesGuard)
   @Roles(Role.CUSTOMER)
-  @ApiOperation({ summary: 'Confirm job completion (job owner only) — IN_PROGRESS → COMPLETED' })
-  @ApiOkResponse({ description: 'Job completed. Payment released.', type: JobResponseDto })
+  @ApiOperation({
+    summary:
+      'Confirm job completion (job owner only) — IN_PROGRESS → COMPLETED',
+  })
+  @ApiOkResponse({
+    description: 'Job completed. Payment released.',
+    type: JobResponseDto,
+  })
   @ApiNotFoundResponse({ description: 'No job found with the given ID' })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT' })
-  @ApiForbiddenResponse({ description: 'Caller does not own this job or lacks CUSTOMER role' })
+  @ApiForbiddenResponse({
+    description: 'Caller does not own this job or lacks CUSTOMER role',
+  })
   confirmCompletion(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return this.jobsService.confirmCompletion(id, req.user.id);
   }
@@ -295,11 +362,15 @@ export class JobsController {
   @Patch(':id/cancel')
   @UseGuards(RolesGuard)
   @Roles(Role.CUSTOMER)
-  @ApiOperation({ summary: 'Cancel a job (job owner only) — any non-terminal state' })
+  @ApiOperation({
+    summary: 'Cancel a job (job owner only) — any non-terminal state',
+  })
   @ApiOkResponse({ description: 'Job cancelled successfully' })
   @ApiNotFoundResponse({ description: 'No job found with the given ID' })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT' })
-  @ApiForbiddenResponse({ description: 'Caller does not own this job or lacks CUSTOMER role' })
+  @ApiForbiddenResponse({
+    description: 'Caller does not own this job or lacks CUSTOMER role',
+  })
   cancelJob(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return this.jobsService.cancelJob(id, req.user.id);
   }
