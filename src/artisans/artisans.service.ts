@@ -11,14 +11,17 @@ import { In, Repository, SelectQueryBuilder } from 'typeorm';
 import { ArtisanProfile } from '@users/entities/artisan-profile.entity';
 import { User } from '@users/entities/user.entity';
 import { ServiceEntity } from '@services/entities/service.entity';
+import { Job } from '@jobs/entities/job.entity';
 import { ArtisanPublicResponseDto } from './dto/artisan-public-response.dto';
 import {
   GetArtisansQueryDto,
   ArtisanSortBy,
+  AvailabilityWindow,
 } from './dto/get-artisans-query.dto';
 import { UpdateArtisanProfileDto } from '@users/dto/update-artisan-profile.dto';
 import { ArtisanProfileResponseDto } from '@users/dto/artisan-profile-response.dto';
 import { SUCCESS_MESSAGES } from '@common/constants/success-messages.constants';
+import { Status } from '@common/types/enums';
 type Pagination = {
   total: number;
   page: number;
@@ -63,6 +66,8 @@ export class ArtisansService {
     private readonly usersRepository: Repository<User>,
     @InjectRepository(ServiceEntity)
     private readonly servicesRepository: Repository<ServiceEntity>,
+    @InjectRepository(Job)
+    private readonly jobsRepository: Repository<Job>,
   ) {}
 
   // ─── Public discovery ────────────────────────────────────────────────────────
@@ -85,18 +90,40 @@ export class ArtisansService {
    */
   async search(query: GetArtisansQueryDto): Promise<PublicList> {
     const page = query.page ?? 1;
-    const limit = query.limit ?? 10;
+    // D6: default reconciled to 20/page to match the PRD (previously 10).
+    const limit = query.limit ?? 20;
     const skip = (page - 1) * limit;
 
     const qb = this.buildSearchQb();
     this.applySearchFilters(qb, query);
     this.applySortOrder(qb, query.sortBy);
 
-    const [profiles, total] = await qb.skip(skip).take(limit).getManyAndCount();
+    // NOTE: intentionally not using qb.getManyAndCount() here. TypeORM's
+    // getManyAndCount() has a "lazyCount" fast-path optimization that, when
+    // fewer rows come back than the requested `take`, infers `total = skip +
+    // entities.length` instead of issuing a real COUNT query. That inference
+    // is wrong whenever the requested page is beyond the last real page
+    // (e.g. 0 real matches, page > 1): it reports `total = skip` instead of
+    // the true count. Cloning the qb before skip/take and calling
+    // `.getCount()` on the clone always runs the real COUNT(DISTINCT ...)
+    // query, sidestepping the shortcut entirely.
+    const countQb = qb.clone();
+    const [profiles, total] = await Promise.all([
+      qb.skip(skip).take(limit).getMany(),
+      countQb.getCount(),
+    ]);
+
+    // D3: bulk-compute completed-jobs counts for every profile on this page
+    // in a single query, rather than N+1 queries per result card.
+    const countsByUserId = await this.getCompletedJobsCountsByUserId(
+      profiles.map((p) => p.user.id),
+    );
 
     return {
       message: SUCCESS_MESSAGES.ARTISAN_PROFILE.ALL_RETRIEVED,
-      data: profiles.map((p) => this.toPublic(p)),
+      data: profiles.map((p) =>
+        this.toPublic(p, countsByUserId.get(p.user.id) ?? 0),
+      ),
       pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
   }
@@ -120,9 +147,14 @@ export class ArtisansService {
       );
     }
 
+    // D3/P1: same completed-jobs count computation as search, for the Hero section.
+    const completedJobsCount = await this.getCompletedJobsCount(
+      profile.user.id,
+    );
+
     return {
       message: SUCCESS_MESSAGES.ARTISAN_PROFILE.RETRIEVED,
-      data: this.toPublic(profile),
+      data: this.toPublic(profile, completedJobsCount),
     };
   }
 
@@ -187,7 +219,11 @@ export class ArtisansService {
 
     return {
       message: SUCCESS_MESSAGES.ARTISAN_PROFILE.UPDATED,
-      data: this.toPrivate(updated!, missingFields),
+      data: this.toPrivate(
+        updated!,
+        missingFields,
+        await this.getCompletedJobsCount(userId),
+      ),
     };
   }
 
@@ -244,7 +280,11 @@ export class ArtisansService {
 
     return {
       message: SUCCESS_MESSAGES.ARTISAN_PROFILE.SERVICE_ADDED,
-      data: this.toPrivate(updated!, missingFields),
+      data: this.toPrivate(
+        updated!,
+        missingFields,
+        await this.getCompletedJobsCount(userId),
+      ),
     };
   }
 
@@ -294,7 +334,11 @@ export class ArtisansService {
 
     return {
       message: SUCCESS_MESSAGES.ARTISAN_PROFILE.SERVICE_REMOVED,
-      data: this.toPrivate(updated!, missingFields),
+      data: this.toPrivate(
+        updated!,
+        missingFields,
+        await this.getCompletedJobsCount(userId),
+      ),
     };
   }
 
@@ -362,6 +406,61 @@ export class ArtisansService {
         isVerified: query.isVerified,
       });
     }
+
+    // D4: price-range filter against Service.price for any service the artisan offers.
+    if (query.minPrice !== undefined || query.maxPrice !== undefined) {
+      const priceConditions = [
+        'aps2.artisan_profile_id = ap.id',
+        'svc.price IS NOT NULL',
+      ];
+      const params: Record<string, number> = {};
+      if (query.minPrice !== undefined) {
+        priceConditions.push('svc.price >= :minPrice');
+        params.minPrice = query.minPrice;
+      }
+      if (query.maxPrice !== undefined) {
+        priceConditions.push('svc.price <= :maxPrice');
+        params.maxPrice = query.maxPrice;
+      }
+      qb.andWhere(
+        `EXISTS (
+          SELECT 1 FROM artisan_profile_services aps2
+          INNER JOIN services svc ON svc.id = aps2.service_id
+          WHERE ${priceConditions.join(' AND ')}
+        )`,
+        params,
+      );
+    }
+
+    // D7: best-effort "now" / "this week" availability filter, backed by real
+    // ArtisanAvailability weekly-hours rows. Cannot account for already-booked/
+    // blocked time — see AvailabilityWindow doc comment and api-contract.md.
+    if (query.availabilityWindow === AvailabilityWindow.NOW) {
+      const now = new Date();
+      const dayOfWeek = now.getDay(); // 0 = Sunday, matches ArtisanAvailability.dayOfWeek
+      const currentTime = now.toTimeString().slice(0, 8); // HH:MM:SS
+      qb.andWhere(
+        `EXISTS (
+          SELECT 1 FROM artisan_availability av
+          WHERE av.artisan_profile_id = ap.id
+          AND av.is_active = true
+          AND av.day_of_week = :availDayOfWeek
+          AND av.start_time <= :availCurrentTime
+          AND av.end_time > :availCurrentTime
+        )`,
+        { availDayOfWeek: dayOfWeek, availCurrentTime: currentTime },
+      );
+    } else if (query.availabilityWindow === AvailabilityWindow.THIS_WEEK) {
+      // The stored schedule is a recurring weekly pattern (not date-specific),
+      // so any active slot recurs within any 7-day window by definition.
+      qb.andWhere(
+        `EXISTS (
+          SELECT 1 FROM artisan_availability av
+          WHERE av.artisan_profile_id = ap.id
+          AND av.is_active = true
+        )`,
+      );
+    }
   }
 
   private applySortOrder(
@@ -385,10 +484,15 @@ export class ArtisansService {
     }
   }
 
-  private toPublic(profile: ArtisanProfile): ArtisanPublicResponseDto {
-    return plainToInstance(ArtisanPublicResponseDto, profile, {
+  private toPublic(
+    profile: ArtisanProfile,
+    completedJobsCount = 0,
+  ): ArtisanPublicResponseDto {
+    const dto = plainToInstance(ArtisanPublicResponseDto, profile, {
       excludeExtraneousValues: true,
     });
+    dto.completedJobsCount = completedJobsCount;
+    return dto;
   }
 
   /**
@@ -400,11 +504,54 @@ export class ArtisansService {
   private toPrivate(
     profile: ArtisanProfile,
     missingFields: string[],
+    completedJobsCount = 0,
   ): ArtisanProfileResponseDto {
     const dto = plainToInstance(ArtisanProfileResponseDto, profile, {
       excludeExtraneousValues: true,
     });
+    dto.completedJobsCount = completedJobsCount;
     dto.missingFields = missingFields;
     return dto;
+  }
+
+  /**
+   * D3/P1: number of `Job` records completed by the given artisan (by user ID).
+   */
+  private async getCompletedJobsCount(userId: number): Promise<number> {
+    return this.jobsRepository.count({
+      where: { acceptedArtisan: { id: userId }, status: Status.COMPLETED },
+    });
+  }
+
+  /**
+   * D3: bulk variant of {@link getCompletedJobsCount} for a page of search
+   * results — one grouped query instead of one query per result card.
+   */
+  private async getCompletedJobsCountsByUserId(
+    userIds: number[],
+  ): Promise<Map<number, number>> {
+    const counts = new Map<number, number>();
+    if (userIds.length === 0) return counts;
+
+    // NOTE: `job.acceptedArtisanId` is a @RelationId() virtual property on
+    // Job, not a real column — TypeORM can't translate it inside a raw
+    // select/groupBy string, so Postgres receives the literal (invalid)
+    // identifier and rejects the query. Join the real `acceptedArtisan`
+    // relation and reference the joined alias's `id` instead, which TypeORM
+    // correctly maps to the real `accepted_artisan_id` column.
+    const rows = await this.jobsRepository
+      .createQueryBuilder('job')
+      .innerJoin('job.acceptedArtisan', 'acceptedArtisan')
+      .select('acceptedArtisan.id', 'artisanUserId')
+      .addSelect('COUNT(*)', 'count')
+      .where('acceptedArtisan.id IN (:...userIds)', { userIds })
+      .andWhere('job.status = :status', { status: Status.COMPLETED })
+      .groupBy('acceptedArtisan.id')
+      .getRawMany<{ artisanUserId: number; count: string }>();
+
+    for (const row of rows) {
+      counts.set(Number(row.artisanUserId), Number(row.count));
+    }
+    return counts;
   }
 }

@@ -11,6 +11,7 @@ import { Booking } from '../bookings/entities/booking.entity';
 import { JobsModule } from '@jobs/jobs.module';
 import { VerificationModule } from '../verification/verification.module';
 import { DisputesModule } from '../disputes/disputes.module';
+import { PortfolioModule } from '../portfolio/portfolio.module';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { DisputesModule } from '../disputes/disputes.module';
     JobsModule,
     VerificationModule,
     DisputesModule,
+    PortfolioModule,
   ],
   controllers: [AdminController],
   providers: [AdminService],

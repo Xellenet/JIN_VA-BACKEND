@@ -68,6 +68,14 @@ export class ArtisanPublicResponseDto {
   totalReviews: number;
 
   @ApiProperty({
+    example: 34,
+    description:
+      'D3/P1: number of Job records completed by this artisan (distinct from totalReviews).',
+  })
+  @Expose()
+  completedJobsCount: number;
+
+  @ApiProperty({
     example: 'AVAILABLE',
     description: 'AVAILABLE | BUSY | OFFLINE',
   })

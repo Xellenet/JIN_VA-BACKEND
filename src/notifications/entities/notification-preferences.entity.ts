@@ -96,6 +96,14 @@ export class NotificationPreferences {
   @Column({ name: 'verification_rejected', type: 'boolean', default: true })
   verificationRejected!: boolean;
 
+  /** PF5: a submitted portfolio item was approved by an admin */
+  @Column({ name: 'portfolio_approved', type: 'boolean', default: true })
+  portfolioApproved!: boolean;
+
+  /** PF5: a submitted portfolio item was rejected by an admin */
+  @Column({ name: 'portfolio_rejected', type: 'boolean', default: true })
+  portfolioRejected!: boolean;
+
   // ─── Booking notification types ───────────────────────────────────────────
   /** [Artisan] New booking request received */
   @Column({ name: 'booking_received', type: 'boolean', default: true })

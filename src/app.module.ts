@@ -29,6 +29,7 @@ import { UploadsModule } from './uploads/uploads.module';
 import { PushNotificationsModule } from './push-notifications/push-notifications.module';
 import { DisputesModule } from './disputes/disputes.module';
 import { PaymentsModule } from './payments/payments.module';
+import { PortfolioModule } from './portfolio/portfolio.module';
 
 @Module({
   imports: [
@@ -60,6 +61,7 @@ import { PaymentsModule } from './payments/payments.module';
     PushNotificationsModule,
     DisputesModule,
     PaymentsModule,
+    PortfolioModule,
   ],
   controllers: [AppController],
   providers: [AppService],

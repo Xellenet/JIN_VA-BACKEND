@@ -32,6 +32,8 @@ import type {
   BookingCancelledPayload,
   BookingCompletedPayload,
   SecurityAlertPayload,
+  PortfolioApprovedPayload,
+  PortfolioRejectedPayload,
 } from '@common/events/app.events';
 
 type Pagination = {
@@ -81,6 +83,8 @@ const ARTISAN_PREF_KEY: Partial<
   [NotificationType.BOOKING_CANCELLED]: 'bookingCancelled',
   [NotificationType.BOOKING_COMPLETED]: 'bookingCompletedArtisan',
   [NotificationType.MESSAGE_RECEIVED]: 'messageReceived',
+  [NotificationType.PORTFOLIO_APPROVED]: 'portfolioApproved',
+  [NotificationType.PORTFOLIO_REJECTED]: 'portfolioRejected',
 };
 
 // Fields each role is allowed to update — prevents artisans from setting customer flags
@@ -115,6 +119,8 @@ const ARTISAN_UPDATABLE = new Set<keyof NotificationPreferences>([
   'bookingCancelled',
   'bookingCompletedArtisan',
   'messageReceived',
+  'portfolioApproved',
+  'portfolioRejected',
   'emailEnabled',
   'smsEnabled',
   'pushEnabled',
@@ -328,6 +334,28 @@ export class NotificationsService {
       NotificationType.ARTISAN_VERIFICATION_REJECTED,
       'Verification Submission Rejected',
       `Your identity verification was not approved. Reason: ${payload.reason}. Please resubmit with correct documents.`,
+    );
+  }
+
+  @OnEvent(APP_EVENTS.PORTFOLIO_APPROVED)
+  async handlePortfolioApproved(payload: PortfolioApprovedPayload) {
+    await this.persist(
+      payload.artisanUserId,
+      NotificationType.PORTFOLIO_APPROVED,
+      'Portfolio Item Approved',
+      'Your portfolio item has been approved and is now visible on your public profile.',
+      { portfolioItemId: payload.portfolioItemId },
+    );
+  }
+
+  @OnEvent(APP_EVENTS.PORTFOLIO_REJECTED)
+  async handlePortfolioRejected(payload: PortfolioRejectedPayload) {
+    await this.persist(
+      payload.artisanUserId,
+      NotificationType.PORTFOLIO_REJECTED,
+      'Portfolio Item Rejected',
+      `Your portfolio item was not approved. Reason: ${payload.reason}. You can resubmit it from your portfolio management view.`,
+      { portfolioItemId: payload.portfolioItemId },
     );
   }
 
