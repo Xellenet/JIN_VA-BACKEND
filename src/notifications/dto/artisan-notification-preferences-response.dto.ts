@@ -52,6 +52,14 @@ export class ArtisanNotificationPreferencesResponseDto {
   verificationRejected!: boolean;
 
   @Expose()
+  @ApiProperty({ description: 'A submitted portfolio item was approved' })
+  portfolioApproved!: boolean;
+
+  @Expose()
+  @ApiProperty({ description: 'A submitted portfolio item was rejected' })
+  portfolioRejected!: boolean;
+
+  @Expose()
   @ApiProperty({ description: 'New booking request received' })
   bookingReceived!: boolean;
 

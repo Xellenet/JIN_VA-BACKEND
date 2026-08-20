@@ -33,6 +33,8 @@ import {
   ResolveDisputeDto,
   CloseDisputeDto,
 } from '../disputes/dto/resolve-dispute.dto';
+import { PortfolioService } from '../portfolio/portfolio.service';
+import { RejectPortfolioItemDto } from '../portfolio/dto/reject-portfolio-item.dto';
 
 @ApiTags('Admin')
 @ApiBearerAuth()
@@ -44,6 +46,7 @@ export class AdminController {
     private readonly adminService: AdminService,
     private readonly verificationService: VerificationService,
     private readonly disputesService: DisputesService,
+    private readonly portfolioService: PortfolioService,
   ) {}
 
   // ─── Stats ────────────────────────────────────────────────────────────────────
@@ -206,5 +209,35 @@ export class AdminController {
     @Body() dto: CloseDisputeDto,
   ) {
     return this.disputesService.close(req.user.id, id, dto);
+  }
+
+  // ─── Portfolio moderation (PF4) ────────────────────────────────────────────────
+
+  @Get('portfolio/queue')
+  @ApiOperation({
+    summary: 'List all PENDING portfolio items awaiting moderation',
+  })
+  getPortfolioQueue() {
+    return this.portfolioService.getQueue();
+  }
+
+  @Patch('portfolio/:id/approve')
+  @ApiOperation({
+    summary:
+      "Approve a portfolio item — makes it visible in the artisan's public gallery",
+  })
+  @ApiParam({ name: 'id', type: Number })
+  approvePortfolioItem(@Param('id', ParseIntPipe) id: number) {
+    return this.portfolioService.approve(id);
+  }
+
+  @Patch('portfolio/:id/reject')
+  @ApiOperation({ summary: 'Reject a portfolio item with a mandatory reason' })
+  @ApiParam({ name: 'id', type: Number })
+  rejectPortfolioItem(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: RejectPortfolioItemDto,
+  ) {
+    return this.portfolioService.reject(id, dto);
   }
 }

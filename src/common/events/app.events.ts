@@ -17,6 +17,8 @@ export const APP_EVENTS = {
   BOOKING_DECLINED: 'booking.declined',
   BOOKING_CANCELLED: 'booking.cancelled',
   BOOKING_COMPLETED: 'booking.completed',
+  PORTFOLIO_APPROVED: 'portfolio.approved',
+  PORTFOLIO_REJECTED: 'portfolio.rejected',
   SECURITY_ALERT: 'security.alert',
 } as const;
 
@@ -139,4 +141,15 @@ export interface ReviewReceivedPayload {
   jobId: number;
   rating: number;
   reviewerName: string;
+}
+
+export interface PortfolioApprovedPayload {
+  artisanUserId: number;
+  portfolioItemId: number;
+}
+
+export interface PortfolioRejectedPayload {
+  artisanUserId: number;
+  portfolioItemId: number;
+  reason: string;
 }

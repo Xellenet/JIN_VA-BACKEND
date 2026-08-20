@@ -107,5 +107,14 @@ export enum NotificationType {
   BOOKING_DECLINED = 'BOOKING_DECLINED',
   BOOKING_CANCELLED = 'BOOKING_CANCELLED',
   BOOKING_COMPLETED = 'BOOKING_COMPLETED',
+  PORTFOLIO_APPROVED = 'PORTFOLIO_APPROVED',
+  PORTFOLIO_REJECTED = 'PORTFOLIO_REJECTED',
   SECURITY_ALERT = 'SECURITY_ALERT',
+}
+
+/** PF1: moderation status of an artisan's portfolio (photo/video) upload. */
+export enum PortfolioStatus {
+  PENDING = 'PENDING',
+  APPROVED = 'APPROVED',
+  REJECTED = 'REJECTED',
 }

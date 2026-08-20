@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { writeFile, unlink, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { join, extname } from 'node:path';
+import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type {
   IStorageProvider,
@@ -22,9 +22,13 @@ export class LocalStorageProvider implements IStorageProvider {
       await mkdir(folderPath, { recursive: true });
     }
 
-    const ext =
-      extname(options.originalName).toLowerCase() ||
-      this.mimeToExt(options.mimetype);
+    // Security: the stored extension is derived solely from the (caller-
+    // validated) MIME type, never from the client-supplied original
+    // filename — otherwise an attacker could upload e.g. `payload.html`
+    // with a spoofed image `Content-Type` and have it served back as
+    // `text/html` by Express's extension-based static-file Content-Type
+    // inference (see the security report for the full exploit chain).
+    const ext = this.mimeToExt(options.mimetype);
     const filename = `${randomUUID()}${ext}`;
     const filePath = join(folderPath, filename);
 
@@ -57,6 +61,7 @@ export class LocalStorageProvider implements IStorageProvider {
       'image/webp': '.webp',
       'image/gif': '.gif',
       'application/pdf': '.pdf',
+      'video/mp4': '.mp4',
     };
     return map[mimetype] ?? '.bin';
   }

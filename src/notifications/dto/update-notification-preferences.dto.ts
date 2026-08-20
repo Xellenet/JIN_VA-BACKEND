@@ -144,6 +144,20 @@ export class UpdateNotificationPreferencesDto {
   verificationRejected?: boolean;
 
   @ApiPropertyOptional({
+    description: '[Artisan] A submitted portfolio item was approved',
+  })
+  @IsBoolean()
+  @IsOptional()
+  portfolioApproved?: boolean;
+
+  @ApiPropertyOptional({
+    description: '[Artisan] A submitted portfolio item was rejected',
+  })
+  @IsBoolean()
+  @IsOptional()
+  portfolioRejected?: boolean;
+
+  @ApiPropertyOptional({
     description: '[Artisan] New booking request received',
   })
   @IsBoolean()
