@@ -64,6 +64,14 @@ export class MailTemplateService {
         return 'Booking Cancelled';
       case 'booking.completed':
         return 'Booking Marked as Completed';
+      case 'booking.expired':
+        return 'Booking Request Expired';
+      case 'booking.no-show':
+        return 'No-Show Reported';
+      case 'booking.reminder.24h':
+        return 'Reminder: Appointment Tomorrow';
+      case 'booking.reminder.2h':
+        return 'Reminder: Appointment in 2 Hours';
       default:
         return 'Notification from JinVa';
     }

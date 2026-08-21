@@ -42,6 +42,21 @@ export class UploadsService {
     return this.store(file, 'selfies', mimetype);
   }
 
+  /**
+   * J4: photo attachments for a job (or a booking that will later become one
+   * — see R2). Any authenticated user may call this; ownership of the
+   * resulting job/booking is enforced where the URL is subsequently attached
+   * (job creation / booking creation), not at upload time.
+   */
+  async uploadJobAttachment(file: Express.Multer.File) {
+    const mimetype = await this.assertMime(
+      file,
+      ALLOWED_IMAGE_TYPES,
+      'Job attachments must be JPEG, PNG, or WebP.',
+    );
+    return this.store(file, 'job-attachments', mimetype);
+  }
+
   private async store(
     file: Express.Multer.File,
     folder: UploadFolder,

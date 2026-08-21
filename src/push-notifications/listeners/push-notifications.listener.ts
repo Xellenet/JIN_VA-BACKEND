@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { PushNotificationsService } from '../push-notifications.service';
 import { APP_EVENTS } from '@common/events/app.events';
+import { getErrorMessage } from '@common/utils/error.util';
 import type {
   ArtisanProfileVerifiedPayload,
   ArtisanVerificationRejectedPayload,
@@ -134,7 +135,7 @@ export class PushNotificationsListener {
       await this.pushService.sendToUser(userId, payload);
     } catch (err) {
       this.logger.error(
-        `Push notification failed for user ${userId}: ${err.message}`,
+        `Push notification failed for user ${userId}: ${getErrorMessage(err)}`,
       );
     }
   }

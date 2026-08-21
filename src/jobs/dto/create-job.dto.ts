@@ -1,9 +1,11 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  IsArray,
   IsDateString,
+  IsIn,
   IsInt,
-  IsISO4217CurrencyCode,
   IsNotEmpty,
   IsNumber,
   IsOptional,
@@ -12,6 +14,7 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
+import { IsAttachmentUrl } from '@common/validators/is-attachment-url.decorator';
 
 export class CreateJobDto {
   @ApiProperty({
@@ -74,9 +77,15 @@ export class CreateJobDto {
   @ApiProperty({
     example: 'GHS',
     description:
-      'ISO 4217 currency code for the budget amounts (e.g. GHS, USD, EUR)',
+      'Currency code for the budget amounts. GHS only — the payments ' +
+      'integration (Paystack) is hardcoded to Ghana cedis; jobs in any ' +
+      'other currency cannot be paid in-app, so job creation rejects them ' +
+      'outright rather than creating a payment record that would silently ' +
+      'mismatch the real charge amount.',
   })
-  @IsISO4217CurrencyCode()
+  @IsIn(['GHS'], {
+    message: 'currency must be GHS — only Ghana cedis jobs can be paid in-app',
+  })
   currency!: string;
 
   @ApiPropertyOptional({
@@ -105,4 +114,17 @@ export class CreateJobDto {
   @IsOptional()
   @IsDateString()
   deadline?: string;
+
+  @ApiPropertyOptional({
+    type: [String],
+    description:
+      'J4: photo URLs uploaded beforehand via POST /uploads/job-attachment. ' +
+      'Optional — a job may be created with zero attachments.',
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @IsAttachmentUrl({ each: true })
+  @ArrayMaxSize(10)
+  attachmentUrls?: string[];
 }

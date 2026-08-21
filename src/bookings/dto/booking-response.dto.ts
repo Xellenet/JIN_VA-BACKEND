@@ -32,6 +32,11 @@ class BookingSlotDto {
   @Expose() @ApiProperty() endTime!: string;
 }
 
+class BookingServiceDto {
+  @Expose() @ApiProperty() id!: number;
+  @Expose() @ApiProperty() name!: string;
+}
+
 export class BookingResponseDto {
   @Expose() @ApiProperty() id!: number;
 
@@ -50,6 +55,11 @@ export class BookingResponseDto {
   @Type(() => BookingSlotDto)
   availabilitySlot?: BookingSlotDto;
 
+  @Expose()
+  @ApiPropertyOptional({ type: BookingServiceDto })
+  @Type(() => BookingServiceDto)
+  service?: BookingServiceDto;
+
   @Expose() @ApiProperty() scheduledDate!: string;
   @Expose() @ApiProperty() startTime!: string;
   @Expose() @ApiProperty() endTime!: string;
@@ -60,6 +70,28 @@ export class BookingResponseDto {
   @Expose() @ApiPropertyOptional() artisanNotes?: string;
   @Expose() @ApiPropertyOptional() agreedPrice?: number;
   @Expose() @ApiProperty() currency!: string;
+
+  @Expose()
+  @ApiPropertyOptional({ type: [String] })
+  attachmentUrls?: string[];
+
+  @Expose()
+  @ApiPropertyOptional({
+    description: 'A6: set when the customer flagged the artisan as a no-show.',
+  })
+  noShowByCustomerAt?: Date;
+
+  @Expose()
+  @ApiPropertyOptional({
+    description: 'A6: set when the artisan flagged the customer as a no-show.',
+  })
+  noShowByArtisanAt?: Date;
+
+  @Expose()
+  @ApiPropertyOptional({
+    description: 'R2: the job created when this booking was confirmed, if any.',
+  })
+  jobId?: number;
 
   @Expose() @ApiProperty() createdAt!: Date;
   @Expose() @ApiProperty() updatedAt!: Date;

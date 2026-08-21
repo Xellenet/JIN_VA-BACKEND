@@ -15,10 +15,10 @@ export class LogPushProvider implements IPushProvider {
   readonly providerName = 'log';
   private readonly logger = new Logger(LogPushProvider.name);
 
-  async send(tokens: string[], payload: PushPayload): Promise<PushSendResult> {
+  send(tokens: string[], payload: PushPayload): Promise<PushSendResult> {
     this.logger.debug(
       `[PUSH:LOG] "${payload.title}" → ${tokens.length} device(s): ${payload.body}`,
     );
-    return { successCount: tokens.length, failedTokens: [] };
+    return Promise.resolve({ successCount: tokens.length, failedTokens: [] });
   }
 }

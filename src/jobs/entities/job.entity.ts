@@ -8,11 +8,12 @@ import {
   Entity,
   JoinColumn,
   ManyToOne,
+  OneToOne,
   PrimaryGeneratedColumn,
   RelationId,
   UpdateDateColumn,
 } from 'typeorm';
-import { JobApplication } from './job-application.entity';
+import { Booking } from '../../bookings/entities/booking.entity';
 
 @Entity('jobs')
 export class Job {
@@ -96,6 +97,19 @@ export class Job {
     nullable: true,
   })
   completionRequestedAt?: Date;
+
+  /**
+   * R2: set when this job was created by an artisan confirming a direct
+   * `Booking` (rather than through the open-posting apply/accept flow).
+   * A unique constraint (see migration) guarantees at most one job per
+   * booking, guarding against duplicate-confirmation races.
+   */
+  @OneToOne(() => Booking, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'booking_id' })
+  booking?: Booking;
+
+  @RelationId((job: Job) => job.booking)
+  bookingId?: number;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamp' })
   createdAt!: Date;

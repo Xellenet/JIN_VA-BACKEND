@@ -125,6 +125,10 @@ export class NotificationPreferences {
   @Column({ name: 'booking_completed_artisan', type: 'boolean', default: true })
   bookingCompletedArtisan!: boolean;
 
+  /** [Artisan] A24h/2h pre-appointment reminder (A7) for a CONFIRMED booking */
+  @Column({ name: 'booking_reminders', type: 'boolean', default: true })
+  bookingReminders!: boolean;
+
   // ─── Shared ───────────────────────────────────────────────────────────────
   @Column({ name: 'message_received', type: 'boolean', default: true })
   messageReceived!: boolean;

@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+  <title>{{appName}}</title>
+</head>
+<body style="margin:0;padding:0;background-color:#edf2ec;font-family:'Segoe UI',Arial,Helvetica,sans-serif;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#edf2ec;padding:32px 16px;">
+  <tr><td align="center">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:580px;width:100%;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 2px 12px rgba(28,69,50,0.10);">
+      <tr>
+        <td style="background-color:#1c4532;padding:22px 36px;">
+          <span style="color:#ffffff;font-size:21px;font-weight:700;">{{appName}}</span>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:36px 36px 28px;">
+          <h1 style="margin:0 0 20px;color:#1c4532;font-size:24px;font-weight:700;">No-show reported</h1>
+          <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.7;">Hi <strong style="color:#1c4532;">{{firstname}}</strong>,</p>
+          <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.7;">
+            <strong>{{flaggedByName}}</strong> reported that you did not show up for the appointment scheduled on
+            <strong>{{scheduledDate}}</strong> (booking reference #{{bookingId}}). If you believe this is a mistake,
+            please contact support so we can review it.
+          </p>
+        </td>
+      </tr>
+      <tr>
+        <td style="background-color:#1c4532;padding:28px 36px;text-align:center;border-radius:0 0 16px 16px;">
+          <p style="margin:0 0 6px;color:#a7f3d0;font-size:13px;">&copy; {{year}} {{appName}}. All rights reserved.</p>
+          <p style="margin:0;color:#6ee7b7;font-size:13px;">Need help?&nbsp;<a href="mailto:{{supportEmail}}" style="color:#bbf7d0;">{{supportEmail}}</a></p>
+        </td>
+      </tr>
+    </table>
+  </td></tr>
+</table>
+</body>
+</html>

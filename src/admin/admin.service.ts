@@ -12,8 +12,17 @@ import { JobApplication } from '@jobs/entities/job-application.entity';
 import { ArtisanVerification } from '../verification/entities/artisan-verification.entity';
 import { Booking } from '../bookings/entities/booking.entity';
 import { JobsService } from '@jobs/jobs.service';
-import { AdminUsersQueryDto, AdminJobsQueryDto } from './dto/admin-query.dto';
-import { VerificationStatus } from '@common/types/enums';
+import {
+  AdminUsersQueryDto,
+  AdminJobsQueryDto,
+  AdminBookingsQueryDto,
+} from './dto/admin-query.dto';
+import {
+  BookingStatus,
+  Role,
+  Status,
+  VerificationStatus,
+} from '@common/types/enums';
 
 type Pagination = {
   total: number;
@@ -129,6 +138,60 @@ export class AdminService {
     return { message: `Job ${jobId} has been expired.` };
   }
 
+  // ─── A6: bookings (minimal read path for the admin dispute-resolution channel) ─
+
+  async listBookings(query: AdminBookingsQueryDto) {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 20;
+
+    const qb = this.bookingsRepo
+      .createQueryBuilder('b')
+      .leftJoinAndSelect('b.customer', 'customer')
+      .leftJoinAndSelect('b.artisanProfile', 'artisanProfile')
+      .leftJoinAndSelect('artisanProfile.user', 'artisanUser')
+      .leftJoinAndSelect('b.service', 'service')
+      .orderBy('b.createdAt', 'DESC');
+
+    if (query.status)
+      qb.andWhere('b.status = :status', { status: query.status });
+    // artisanProfileId/customerId on Booking are @RelationId (virtual, not
+    // real columns) — query builder's alias.propertyName resolution
+    // doesn't cover them; use the raw snake_case column names instead.
+    if (query.artisanProfileId)
+      qb.andWhere('b.artisan_profile_id = :artisanProfileId', {
+        artisanProfileId: query.artisanProfileId,
+      });
+    if (query.customerId)
+      qb.andWhere('b.customer_id = :customerId', {
+        customerId: query.customerId,
+      });
+
+    const [bookings, total] = await qb
+      .skip((page - 1) * limit)
+      .take(limit)
+      .getManyAndCount();
+
+    return {
+      message: 'Bookings retrieved.',
+      data: bookings,
+      pagination: this.paginate(total, page, limit),
+    };
+  }
+
+  async getBooking(id: number) {
+    const booking = await this.bookingsRepo.findOne({
+      where: { id },
+      relations: [
+        'customer',
+        'artisanProfile',
+        'artisanProfile.user',
+        'service',
+      ],
+    });
+    if (!booking) throw new NotFoundException('Booking not found.');
+    return { message: 'Booking retrieved.', data: booking };
+  }
+
   // ─── Artisans ────────────────────────────────────────────────────────────────
 
   async listArtisans(page = 1, limit = 20) {
@@ -166,11 +229,11 @@ export class AdminService {
       confirmedBookings,
     ] = await Promise.all([
       this.usersRepo.count(),
-      this.usersRepo.count({ where: { role: 'ARTISAN' as any } }),
-      this.usersRepo.count({ where: { role: 'CUSTOMER' as any } }),
+      this.usersRepo.count({ where: { role: Role.ARTISAN } }),
+      this.usersRepo.count({ where: { role: Role.CUSTOMER } }),
       this.usersRepo.count({ where: { isBanned: true } }),
       this.jobsRepo.count(),
-      this.jobsRepo.count({ where: { status: 'OPEN' as any } }),
+      this.jobsRepo.count({ where: { status: Status.OPEN } }),
       this.verificationsRepo.count({
         where: { status: VerificationStatus.PENDING },
       }),
@@ -178,7 +241,7 @@ export class AdminService {
         where: { status: VerificationStatus.APPROVED },
       }),
       this.bookingsRepo.count(),
-      this.bookingsRepo.count({ where: { status: 'CONFIRMED' as any } }),
+      this.bookingsRepo.count({ where: { status: BookingStatus.CONFIRMED } }),
     ]);
 
     return {
@@ -209,7 +272,7 @@ export class AdminService {
   }
 
   private sanitizeUser(user: User) {
-    const { password, ...safe } = user as any;
+    const { password: _password, ...safe } = user;
     return safe;
   }
 

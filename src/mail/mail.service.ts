@@ -1,12 +1,14 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import type { Transporter } from 'nodemailer';
 import { createTransporter } from './mail.config';
 import { MailTemplateService } from './mail.template';
+import { getErrorMessage } from '@common/utils/error.util';
 
 @Injectable()
 export class MailService {
   private readonly logger = new Logger(MailService.name);
-  private readonly transporter: any;
+  private readonly transporter: Transporter;
 
   constructor(
     private readonly config: ConfigService,
@@ -15,12 +17,16 @@ export class MailService {
     this.transporter = createTransporter(config);
   }
 
-  async sendMail(to: string, eventType: string, data: Record<string, any>) {
-    const from = this.config.get('MAIL_FROM');
+  async sendMail(
+    to: string,
+    eventType: string,
+    data: Record<string, any>,
+  ): Promise<void> {
+    const from = this.config.get<string>('MAIL_FROM');
     const { subject, html } = this.templates.renderTemplate(eventType, data);
 
     try {
-      const info = await this.transporter.sendMail({
+      await this.transporter.sendMail({
         from,
         to,
         subject,
@@ -29,9 +35,10 @@ export class MailService {
       });
 
       this.logger.log(`✅ Mail sent to ${to} [${eventType}]`);
-      return info;
     } catch (err) {
-      this.logger.error(`❌ Failed to send mail to ${to}: ${err.message}`);
+      this.logger.error(
+        `❌ Failed to send mail to ${to}: ${getErrorMessage(err)}`,
+      );
       throw err;
     }
   }

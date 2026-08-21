@@ -16,7 +16,11 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { AdminService } from './admin.service';
-import { AdminJobsQueryDto, AdminUsersQueryDto } from './dto/admin-query.dto';
+import {
+  AdminJobsQueryDto,
+  AdminUsersQueryDto,
+  AdminBookingsQueryDto,
+} from './dto/admin-query.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '@common/decorators/roles.decorator';
@@ -35,6 +39,7 @@ import {
 } from '../disputes/dto/resolve-dispute.dto';
 import { PortfolioService } from '../portfolio/portfolio.service';
 import { RejectPortfolioItemDto } from '../portfolio/dto/reject-portfolio-item.dto';
+import type { AuthenticatedRequest } from '@common/types/authenticated-request.type';
 
 @ApiTags('Admin')
 @ApiBearerAuth()
@@ -75,7 +80,10 @@ export class AdminController {
   @Patch('users/:id/ban')
   @ApiOperation({ summary: 'Ban a user — blocks all future logins' })
   @ApiParam({ name: 'id', type: Number })
-  banUser(@Req() req: any, @Param('id', ParseIntPipe) id: number) {
+  banUser(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
     return this.adminService.banUser(req.user.id, id);
   }
 
@@ -99,6 +107,24 @@ export class AdminController {
   @ApiParam({ name: 'id', type: Number })
   forceExpireJob(@Param('id', ParseIntPipe) id: number) {
     return this.adminService.forceExpireJob(id);
+  }
+
+  // ─── Bookings (A6: minimal admin read path) ────────────────────────────────────
+
+  @Get('bookings')
+  @ApiOperation({
+    summary:
+      'A6: list all bookings, filterable by status/artisan/customer (includes no-show flags)',
+  })
+  listBookings(@Query() query: AdminBookingsQueryDto) {
+    return this.adminService.listBookings(query);
+  }
+
+  @Get('bookings/:id')
+  @ApiOperation({ summary: 'A6: get a single booking with full detail' })
+  @ApiParam({ name: 'id', type: Number })
+  getBooking(@Param('id', ParseIntPipe) id: number) {
+    return this.adminService.getBooking(id);
   }
 
   // ─── Artisans ─────────────────────────────────────────────────────────────────
@@ -135,7 +161,7 @@ export class AdminController {
   @ApiOperation({ summary: 'Move a verification submission to UNDER_REVIEW' })
   @ApiParam({ name: 'id', type: Number })
   startVerificationReview(
-    @Req() req: any,
+    @Req() req: AuthenticatedRequest,
     @Param('id', ParseIntPipe) id: number,
   ) {
     return this.verificationService.startReview(req.user.id, id);
@@ -147,7 +173,7 @@ export class AdminController {
   })
   @ApiParam({ name: 'id', type: Number })
   approveVerification(
-    @Req() req: any,
+    @Req() req: AuthenticatedRequest,
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: ApproveVerificationDto,
   ) {
@@ -158,7 +184,7 @@ export class AdminController {
   @ApiOperation({ summary: 'Reject a verification with a mandatory reason' })
   @ApiParam({ name: 'id', type: Number })
   rejectVerification(
-    @Req() req: any,
+    @Req() req: AuthenticatedRequest,
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: RejectVerificationDto,
   ) {
@@ -185,7 +211,10 @@ export class AdminController {
   @Patch('disputes/:id/start-review')
   @ApiOperation({ summary: 'Move a dispute to UNDER_REVIEW' })
   @ApiParam({ name: 'id', type: Number })
-  startDisputeReview(@Req() req: any, @Param('id', ParseIntPipe) id: number) {
+  startDisputeReview(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
     return this.disputesService.startReview(req.user.id, id);
   }
 
@@ -193,7 +222,7 @@ export class AdminController {
   @ApiOperation({ summary: 'Resolve a dispute with a resolution statement' })
   @ApiParam({ name: 'id', type: Number })
   resolveDispute(
-    @Req() req: any,
+    @Req() req: AuthenticatedRequest,
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: ResolveDisputeDto,
   ) {
@@ -204,7 +233,7 @@ export class AdminController {
   @ApiOperation({ summary: 'Close a dispute (e.g. parties settled privately)' })
   @ApiParam({ name: 'id', type: Number })
   closeDispute(
-    @Req() req: any,
+    @Req() req: AuthenticatedRequest,
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: CloseDisputeDto,
   ) {

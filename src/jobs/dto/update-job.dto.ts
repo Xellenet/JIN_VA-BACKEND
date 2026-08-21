@@ -2,7 +2,7 @@ import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   IsDateString,
-  IsISO4217CurrencyCode,
+  IsIn,
   IsNumber,
   IsOptional,
   IsString,
@@ -83,12 +83,14 @@ export class UpdateJobDto {
   longitude?: number;
 
   @ApiPropertyOptional({
-    example: 'USD',
+    example: 'GHS',
     description:
-      'ISO 4217 currency code for the budget amounts (e.g. GHS, USD, EUR)',
+      'Currency code for the budget amounts. GHS only — see CreateJobDto for why.',
   })
   @IsOptional()
-  @IsISO4217CurrencyCode()
+  @IsIn(['GHS'], {
+    message: 'currency must be GHS — only Ghana cedis jobs can be paid in-app',
+  })
   currency?: string;
 
   @ApiPropertyOptional({
