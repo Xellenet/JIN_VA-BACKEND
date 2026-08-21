@@ -28,7 +28,8 @@ export class MessageSendThrottlerGuard extends ThrottlerGuard {
   protected getTracker(req: Record<string, unknown>): Promise<string> {
     const user = req.user as { id?: number } | undefined;
     if (user?.id) return Promise.resolve(`user-${user.id}`);
-    return Promise.resolve(`ip-${String(req.ip ?? 'unknown')}`);
+    const ip = typeof req.ip === 'string' ? req.ip : 'unknown';
+    return Promise.resolve(`ip-${ip}`);
   }
 
   protected throwThrottlingException(

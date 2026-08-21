@@ -68,6 +68,16 @@ type LastMessageRow = {
   isRead: boolean;
 };
 
+/**
+ * Raw shape of the per-conversation unread aggregate. `count` is a string
+ * because Postgres returns `bigint` (which `COUNT(*)` is) as text over the
+ * wire — node-postgres refuses to silently narrow it to a JS number.
+ */
+type UnreadCountRow = {
+  conversationId: number;
+  count: string;
+};
+
 @Injectable()
 export class MessagesService {
   private readonly logger = new Logger(MessagesService.name);
@@ -248,7 +258,9 @@ export class MessagesService {
 
     const data = conversations.map((conv) => {
       const contact =
-        conv.participantA?.id === userId ? conv.participantB : conv.participantA;
+        conv.participantA?.id === userId
+          ? conv.participantB
+          : conv.participantA;
       const last = lastByConversation.get(conv.id) ?? null;
 
       return {
@@ -509,7 +521,7 @@ export class MessagesService {
   ): Promise<Map<number, number>> {
     if (conversationIds.length === 0) return new Map();
 
-    const rows = (await this.messagesRepository.query(
+    const rows = await this.messagesRepository.query<UnreadCountRow[]>(
       `SELECT m.conversation_id AS "conversationId",
               COUNT(*)          AS "count"
          FROM messages m
@@ -518,9 +530,11 @@ export class MessagesService {
           AND m.is_read = false
         GROUP BY m.conversation_id`,
       [conversationIds, userId],
-    )) as { conversationId: number; count: string }[];
+    );
 
-    return new Map(rows.map((r) => [Number(r.conversationId), Number(r.count)]));
+    return new Map(
+      rows.map((r) => [Number(r.conversationId), Number(r.count)]),
+    );
   }
 
   /**
@@ -533,7 +547,7 @@ export class MessagesService {
   ): Promise<Map<number, LastMessageRow>> {
     if (conversationIds.length === 0) return new Map();
 
-    const rows = await this.messagesRepository.query(
+    const rows = await this.messagesRepository.query<LastMessageRow[]>(
       `SELECT DISTINCT ON (m.conversation_id)
               m.conversation_id AS "conversationId",
               m.id              AS "id",
@@ -548,9 +562,7 @@ export class MessagesService {
       [conversationIds],
     );
 
-    return new Map(
-      (rows as LastMessageRow[]).map((r) => [Number(r.conversationId), r]),
-    );
+    return new Map(rows.map((r) => [Number(r.conversationId), r]));
   }
 
   private toParticipant(user?: User) {

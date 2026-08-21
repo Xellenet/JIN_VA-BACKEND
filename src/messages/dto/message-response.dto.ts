@@ -114,7 +114,7 @@ export class ConversationContactDto {
   @ApiProperty({
     enum: ['CUSTOMER', 'ARTISAN'],
     description:
-      'The contact\'s role. Always the opposite of the caller\'s, since a ' +
+      "The contact's role. Always the opposite of the caller's, since a " +
       'conversation is always exactly one customer and one artisan.',
   })
   role!: string;

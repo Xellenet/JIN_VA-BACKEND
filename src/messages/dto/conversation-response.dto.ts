@@ -49,7 +49,7 @@ export class ConversationResponseDto {
     example: 3,
     description:
       'Unread messages in this conversation sent by the other participant. ' +
-      'Drives the row badge and HB1\'s header Mail dot (any conversation with ' +
+      "Drives the row badge and HB1's header Mail dot (any conversation with " +
       'unreadCount > 0).',
   })
   unreadCount!: number;

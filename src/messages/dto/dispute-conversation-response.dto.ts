@@ -32,7 +32,8 @@ export class DisputeConversationResponseDto {
   artisan!: DisputeConversationParticipantDto;
 
   @ApiProperty({
-    description: 'Total messages in the thread, regardless of how many are returned.',
+    description:
+      'Total messages in the thread, regardless of how many are returned.',
   })
   totalMessages!: number;
 
