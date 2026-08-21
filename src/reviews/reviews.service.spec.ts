@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken, getDataSourceToken } from '@nestjs/typeorm';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { QueryFailedError } from 'typeorm';
 import {
   BadRequestException,
   ConflictException,
@@ -46,6 +47,7 @@ describe('ReviewsService', () => {
     findOne: jest.fn(),
     create: jest.fn((data: Record<string, unknown>) => data),
     save: jest.fn((data: Record<string, unknown>) => Promise.resolve(data)),
+    update: jest.fn().mockResolvedValue({ affected: 1 }),
     delete: jest.fn(),
     createQueryBuilder: jest.fn(),
   };
@@ -246,16 +248,38 @@ describe('ReviewsService', () => {
 
     it('persists the reply for the correct artisan', async () => {
       const review = baseReview();
+      const updatedReview = baseReview({
+        artisanReply: 'Thanks for the feedback!',
+        artisanRepliedAt: new Date(),
+      });
       mockReviewsRepo.findOne
-        .mockResolvedValueOnce(review)
-        .mockResolvedValueOnce(review);
+        .mockResolvedValueOnce(review) // ownership/state lookup
+        .mockResolvedValueOnce(updatedReview); // loadPopulated after update
+      mockReviewsRepo.update.mockResolvedValueOnce({ affected: 1 });
 
-      await service.addReply(artisanUser.id, 1, {
+      const result = await service.addReply(artisanUser.id, 1, {
         reply: 'Thanks for the feedback!',
       });
 
-      expect(review.artisanReply).toBe('Thanks for the feedback!');
-      expect(review.artisanRepliedAt).toBeInstanceOf(Date);
+      expect(mockReviewsRepo.update).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 1 }),
+        expect.objectContaining({ artisanReply: 'Thanks for the feedback!' }),
+      );
+      expect(result.data.artisanReply).toBe('Thanks for the feedback!');
+    });
+
+    it('rejects when a concurrent reply wins the race (conditional update affects zero rows)', async () => {
+      // Security finding (round 1, LOW, CWE-362): the read above is only a
+      // fast-path — a second, near-simultaneous request can still read
+      // `artisanReply === null` before either commits. The conditional
+      // `UPDATE ... WHERE artisan_reply IS NULL`'s affected-row count is the
+      // real one-reply guarantee.
+      mockReviewsRepo.findOne.mockResolvedValueOnce(baseReview());
+      mockReviewsRepo.update.mockResolvedValueOnce({ affected: 0 });
+
+      await expect(
+        service.addReply(artisanUser.id, 1, { reply: 'Too slow!' }),
+      ).rejects.toThrow(ConflictException);
     });
   });
 
@@ -294,6 +318,31 @@ describe('ReviewsService', () => {
       });
 
       expect(mockArtisanProfileRepo.update).not.toHaveBeenCalled();
+    });
+
+    it('translates a concurrent duplicate-flag race (DB unique violation) into a ConflictException', async () => {
+      // Security finding (round 1, MEDIUM, CWE-362): the "already flagged by
+      // you" read above is only a fast-path — a second, near-simultaneous
+      // request from the same actor can pass it before either commits. The
+      // partial unique index on (review_id, actor_id) WHERE action='FLAG'
+      // (`AddReviewModerationActionsFlagUniqueIndex1783090000000`) is the
+      // real guarantee; this simulates the losing side's DB-level rejection.
+      mockReviewsRepo.findOne.mockResolvedValueOnce(baseReview());
+      mockModerationActionsRepo.findOne.mockResolvedValueOnce(null);
+      const driverError = Object.assign(new Error('duplicate key value'), {
+        code: '23505',
+      });
+      mockModerationActionsRepo.save.mockRejectedValueOnce(
+        new QueryFailedError(
+          'INSERT INTO "review_moderation_actions" ...',
+          [],
+          driverError,
+        ),
+      );
+
+      await expect(
+        service.flag(reviewer, 1, { reason: 'This review looks fabricated.' }),
+      ).rejects.toThrow(ConflictException);
     });
   });
 

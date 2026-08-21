@@ -25,7 +25,16 @@ export class ReviewModerationAction {
   @PrimaryGeneratedColumn()
   id!: number;
 
-  /** The review this action was taken against. No FK — see class doc. */
+  /**
+   * The review this action was taken against. No FK — see class doc.
+   *
+   * Together with `actorId`, unique at the DB level for `action = 'FLAG'`
+   * rows via the partial unique index
+   * `UQ_review_moderation_actions_flag_review_actor` (added by
+   * `AddReviewModerationActionsFlagUniqueIndex1783090000000`) — closes a
+   * concurrent-request race on `ReviewsService.flag()`'s "already flagged
+   * by you" check. REMOVE/RESTORE rows are intentionally not constrained.
+   */
   @Column({ name: 'review_id' })
   reviewId!: number;
 

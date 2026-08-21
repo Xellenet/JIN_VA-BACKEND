@@ -9,7 +9,14 @@ import {
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { plainToInstance } from 'class-transformer';
-import { DataSource, In, Repository, SelectQueryBuilder } from 'typeorm';
+import {
+  DataSource,
+  In,
+  IsNull,
+  QueryFailedError,
+  Repository,
+  SelectQueryBuilder,
+} from 'typeorm';
 import { Review } from './entities/review.entity';
 import { ReviewPhoto } from './entities/review-photo.entity';
 import { ReviewModerationAction } from './entities/review-moderation-action.entity';
@@ -262,6 +269,13 @@ export class ReviewsService {
    * AR1: the reviewed artisan's one-time public reply. Rejects a second
    * attempt (one reply per review) and enforces that the caller is the
    * artisan the review is actually about.
+   *
+   * Security finding (reviews-ratings-favourites round 1, LOW,
+   * CWE-362/TOCTOU): two near-simultaneous replies could both read
+   * `artisanReply === null` below before either commits. The initial read
+   * is now only a fast-path/friendlier-message check — the actual guarantee
+   * is the conditional `UPDATE ... WHERE artisan_reply IS NULL` further
+   * down, whose affected-row count is the real one-reply enforcement.
    */
   async addReply(
     artisanUserId: number,
@@ -284,9 +298,15 @@ export class ReviewsService {
       throw new ConflictException(ERROR_MESSAGES.REVIEW.ALREADY_REPLIED);
     }
 
-    review.artisanReply = dto.reply;
-    review.artisanRepliedAt = new Date();
-    await this.reviewsRepository.save(review);
+    const result = await this.reviewsRepository.update(
+      { id, artisanReply: IsNull() },
+      { artisanReply: dto.reply, artisanRepliedAt: new Date() },
+    );
+    if (!result.affected) {
+      // Lost the race: another reply committed between the read above and
+      // this conditional update.
+      throw new ConflictException(ERROR_MESSAGES.REVIEW.ALREADY_REPLIED);
+    }
     this.logger.log(`Artisan ${artisanUserId} replied to review ${id}`);
 
     const populated = await this.loadPopulated(id);
@@ -302,6 +322,14 @@ export class ReviewsService {
    * reviewer's own view (enforced in the find* methods below, not here).
    * A `FLAGGED` review still counts toward rating aggregation, so no
    * recalculation is triggered by flagging.
+   *
+   * Security finding (reviews-ratings-favourites round 1, MEDIUM,
+   * CWE-362/TOCTOU): the `alreadyFlaggedByActor` read below is a
+   * friendlier-message fast path, not the sole guarantee anymore — the
+   * partial unique index `UQ_review_moderation_actions_flag_review_actor`
+   * (`AddReviewModerationActionsFlagUniqueIndex1783090000000`) is the real
+   * enforcement, and the `catch` around the insert translates a concurrent
+   * loser's `23505` into the same `ConflictException`.
    *
    * @throws {ConflictException} This exact user already flagged this review.
    */
@@ -330,16 +358,25 @@ export class ReviewsService {
       throw new ConflictException(ERROR_MESSAGES.REVIEW.ALREADY_FLAGGED_BY_YOU);
     }
 
-    await this.moderationActionsRepository.save(
-      this.moderationActionsRepository.create(
-        this.buildModerationLogEntry(
-          review,
-          actor,
-          ModerationAction.FLAG,
-          dto.reason,
+    try {
+      await this.moderationActionsRepository.save(
+        this.moderationActionsRepository.create(
+          this.buildModerationLogEntry(
+            review,
+            actor,
+            ModerationAction.FLAG,
+            dto.reason,
+          ),
         ),
-      ),
-    );
+      );
+    } catch (err) {
+      if (this.isUniqueViolation(err)) {
+        throw new ConflictException(
+          ERROR_MESSAGES.REVIEW.ALREADY_FLAGGED_BY_YOU,
+        );
+      }
+      throw err;
+    }
 
     if (review.status === ReviewStatus.ACTIVE) {
       review.status = ReviewStatus.FLAGGED;
@@ -794,5 +831,18 @@ export class ReviewsService {
   private guessMimeFromUrl(url: string): string {
     const ext = url.slice(url.lastIndexOf('.')).toLowerCase();
     return REVIEW_PHOTO_MIME_BY_EXT[ext] ?? 'image/jpeg';
+  }
+
+  /**
+   * Narrows a caught error to a Postgres unique_violation (`23505`) surfaced
+   * by TypeORM as a `QueryFailedError`. Used by {@link flag} to translate the
+   * losing side of a concurrent-insert race into the same `ConflictException`
+   * the app-level pre-check throws for the non-concurrent case.
+   */
+  private isUniqueViolation(err: unknown): boolean {
+    return (
+      err instanceof QueryFailedError &&
+      (err as QueryFailedError & { code?: string }).code === '23505'
+    );
   }
 }
