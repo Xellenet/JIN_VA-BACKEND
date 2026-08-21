@@ -27,7 +27,7 @@ import { Roles } from '@common/decorators/roles.decorator';
 import { Role } from '@common/types/enums';
 import { FavouritesService } from './favourites.service';
 import { GetFavouritesQueryDto } from './dto/get-favourites-query.dto';
-import { ArtisanPublicResponseDto } from '@artisans/dto/artisan-public-response.dto';
+import { FavouriteArtisanResponseDto } from './dto/favourite-artisan-response.dto';
 import type { AuthenticatedRequest } from '@common/types/authenticated-request.type';
 
 /**
@@ -48,13 +48,13 @@ export class FavouritesController {
    *
    * @param req   - Express request; `req.user.id` is injected by `JwtAuthGuard`.
    * @param query - Pagination options (`page`, `limit`).
-   * @returns Paginated array of {@link ArtisanPublicResponseDto}.
+   * @returns Paginated array of {@link FavouriteArtisanResponseDto}.
    */
   @Get()
   @ApiOperation({ summary: "Get the customer's saved artisans (paginated)" })
   @ApiOkResponse({
     description: 'Favourites retrieved successfully',
-    type: [ArtisanPublicResponseDto],
+    type: [FavouriteArtisanResponseDto],
   })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
   @ApiForbiddenResponse({

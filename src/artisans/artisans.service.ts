@@ -463,6 +463,18 @@ export class ArtisansService {
     }
   }
 
+  /**
+   * RA2: `RATING` (and the default, when `sortBy` is omitted) now orders by
+   * `weightedRating` (the Bayesian-weighted score), not the plain
+   * `averageRating` — this is exactly the "ranking/sorting artisans against
+   * each other" use case RA2 reserves the weighted score for, so a
+   * brand-new artisan with one 5-star review no longer outranks an
+   * established artisan with hundreds of reviews at 4.7. The plain average
+   * is unaffected and still what's shown on a single profile (`minRating`
+   * filtering elsewhere in this method also stays on `averageRating` — see
+   * `applySearchFilters`). Flagged as a behavior change (not a shape
+   * change) in `docs/team/reviews-ratings-favourites/api-contract.md`.
+   */
   private applySortOrder(
     qb: SelectQueryBuilder<ArtisanProfile>,
     sortBy?: ArtisanSortBy,
@@ -479,7 +491,7 @@ export class ArtisansService {
         break;
       case ArtisanSortBy.RATING:
       default:
-        qb.orderBy('ap.averageRating', 'DESC');
+        qb.orderBy('ap.weightedRating', 'DESC');
         break;
     }
   }
