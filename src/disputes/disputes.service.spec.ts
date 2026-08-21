@@ -36,15 +36,19 @@ describe('DisputesService', () => {
       raisedBy: customerUser,
     }) as unknown as Dispute;
 
-  let disputeRepo: { findOne: jest.Mock; save: jest.Mock; create: jest.Mock };
+  let disputeRepo: {
+    findOne: jest.Mock;
+    save: jest.Mock<Promise<Dispute>, [Dispute]>;
+    create: jest.Mock<Dispute, [Partial<Dispute>]>;
+  };
   let emitter: { emit: jest.Mock };
   let messagesService: { getConversationBetween: jest.Mock };
 
   beforeEach(async () => {
     disputeRepo = {
       findOne: jest.fn(),
-      save: jest.fn((d) => Promise.resolve(d)),
-      create: jest.fn((d) => d),
+      save: jest.fn((d: Dispute) => Promise.resolve(d)),
+      create: jest.fn((d: Partial<Dispute>) => d as Dispute),
     };
     emitter = { emit: jest.fn() };
     messagesService = {
@@ -57,9 +61,15 @@ describe('DisputesService', () => {
       providers: [
         DisputesService,
         { provide: getRepositoryToken(Dispute), useValue: disputeRepo },
-        { provide: getRepositoryToken(Booking), useValue: { findOne: jest.fn() } },
+        {
+          provide: getRepositoryToken(Booking),
+          useValue: { findOne: jest.fn() },
+        },
         { provide: getRepositoryToken(Job), useValue: { findOne: jest.fn() } },
-        { provide: getRepositoryToken(Payment), useValue: { findOne: jest.fn() } },
+        {
+          provide: getRepositoryToken(Payment),
+          useValue: { findOne: jest.fn() },
+        },
         { provide: EventEmitter2, useValue: emitter },
         { provide: MessagesService, useValue: messagesService },
       ],

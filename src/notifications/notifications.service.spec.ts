@@ -15,14 +15,34 @@ import { formatGhs } from '@common/utils/currency.util';
 describe('NotificationsService', () => {
   let service: NotificationsService;
 
+  /**
+   * The subset of a persisted notification these tests assert on. Declared so
+   * the mocks are typed rather than `any` — `create.mock.calls[0][0]` is how we
+   * read back the notification the service tried to persist.
+   */
+  type NotificationRow = {
+    user: { id: number };
+    type: string;
+    title: string;
+    body: string;
+    payload?: Record<string, unknown>;
+  };
+
   let notificationsRepo: {
-    save: jest.Mock;
-    create: jest.Mock;
+    save: jest.Mock<Promise<NotificationRow>, [NotificationRow]>;
+    create: jest.Mock<NotificationRow, [NotificationRow]>;
     findOne: jest.Mock;
     count: jest.Mock;
     createQueryBuilder: jest.Mock;
   };
-  let prefsRepo: { findOne: jest.Mock; save: jest.Mock; create: jest.Mock };
+  let prefsRepo: {
+    findOne: jest.Mock;
+    save: jest.Mock<
+      Promise<NotificationPreferences>,
+      [NotificationPreferences]
+    >;
+    create: jest.Mock<NotificationPreferences, [NotificationPreferences]>;
+  };
   let usersRepo: { find: jest.Mock };
 
   /** A prefs row with every flag on, for a user of the given role. */
@@ -46,16 +66,16 @@ describe('NotificationsService', () => {
 
   beforeEach(async () => {
     notificationsRepo = {
-      save: jest.fn((n) => Promise.resolve(n)),
-      create: jest.fn((n) => n),
+      save: jest.fn((n: NotificationRow) => Promise.resolve(n)),
+      create: jest.fn((n: NotificationRow) => n),
       findOne: jest.fn(),
       count: jest.fn(),
       createQueryBuilder: jest.fn(),
     };
     prefsRepo = {
       findOne: jest.fn(),
-      save: jest.fn((p) => Promise.resolve(p)),
-      create: jest.fn((p) => p),
+      save: jest.fn((p: NotificationPreferences) => Promise.resolve(p)),
+      create: jest.fn((p: NotificationPreferences) => p),
     };
     usersRepo = { find: jest.fn().mockResolvedValue([]) };
 
@@ -150,10 +170,7 @@ describe('NotificationsService', () => {
         reference: 'jinva-3-99-1',
       });
 
-      const saved = notificationsRepo.create.mock.calls[0][0] as {
-        type: string;
-        body: string;
-      };
+      const saved = notificationsRepo.create.mock.calls[0][0];
       expect(saved.type).toBe(NotificationType.PAYMENT_RECEIPT);
       expect(saved.body).toContain(formatGhs(850));
       expect(saved.body).toContain('GH₵');
@@ -214,9 +231,7 @@ describe('NotificationsService', () => {
         jobId: 3,
       });
 
-      const saved = notificationsRepo.create.mock.calls[0][0] as {
-        body: string;
-      };
+      const saved = notificationsRepo.create.mock.calls[0][0];
       expect(saved.body).not.toContain('has been released');
     });
   });

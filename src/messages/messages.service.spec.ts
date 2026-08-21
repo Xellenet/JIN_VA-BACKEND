@@ -43,9 +43,25 @@ describe('MessagesService', () => {
     role: Role.CUSTOMER,
   } as User;
 
+  /**
+   * The subset of a persisted message these tests assert on. Declared so the
+   * mocks are typed rather than `any` — `create.mock.calls` is how we read back
+   * what the service tried to persist.
+   */
+  type MessageRow = {
+    conversation: { id: number };
+    sender: { id: number };
+    content: string | null;
+    attachmentUrl: string | null;
+    attachmentType: string | null;
+    jobId: number | null;
+    bookingId: number | null;
+  };
+  type ConversationRow = { id?: number };
+
   let messagesRepo: {
-    save: jest.Mock;
-    create: jest.Mock;
+    save: jest.Mock<Promise<MessageRow & { id: number }>, [MessageRow]>;
+    create: jest.Mock<MessageRow, [MessageRow]>;
     findOne: jest.Mock;
     find: jest.Mock;
     findAndCount: jest.Mock;
@@ -54,10 +70,13 @@ describe('MessagesService', () => {
     createQueryBuilder: jest.Mock;
   };
   let conversationsRepo: {
-    save: jest.Mock;
-    create: jest.Mock;
+    save: jest.Mock<
+      Promise<ConversationRow & { id: number }>,
+      [ConversationRow]
+    >;
+    create: jest.Mock<ConversationRow, [ConversationRow]>;
     findOne: jest.Mock;
-    update: jest.Mock;
+    update: jest.Mock<Promise<unknown>, [number, { lastMessageAt: Date }]>;
     createQueryBuilder: jest.Mock;
   };
   let usersRepo: { findOne: jest.Mock };
@@ -67,8 +86,8 @@ describe('MessagesService', () => {
 
   beforeEach(async () => {
     messagesRepo = {
-      save: jest.fn((m) => Promise.resolve({ id: 99, ...m })),
-      create: jest.fn((m) => m),
+      save: jest.fn((m: MessageRow) => Promise.resolve({ ...m, id: 99 })),
+      create: jest.fn((m: MessageRow) => m),
       findOne: jest.fn(),
       find: jest.fn().mockResolvedValue([]),
       findAndCount: jest.fn().mockResolvedValue([[], 0]),
@@ -77,10 +96,14 @@ describe('MessagesService', () => {
       createQueryBuilder: jest.fn(),
     };
     conversationsRepo = {
-      save: jest.fn((c) => Promise.resolve({ id: 7, ...c })),
-      create: jest.fn((c) => c),
+      save: jest.fn((c: ConversationRow) => Promise.resolve({ ...c, id: 7 })),
+      create: jest.fn((c: ConversationRow) => c),
       findOne: jest.fn(),
-      update: jest.fn(),
+      // Typed implementation (rather than a bare jest.fn()) so
+      // `update.mock.calls[0]` reads back as a real tuple instead of `any`.
+      update: jest.fn((_id: number, _patch: { lastMessageAt: Date }) =>
+        Promise.resolve<unknown>(undefined),
+      ),
       createQueryBuilder: jest.fn(),
     };
     usersRepo = { findOne: jest.fn() };
@@ -180,10 +203,10 @@ describe('MessagesService', () => {
       });
 
       expect(conversationsRepo.save).not.toHaveBeenCalled();
-      expect(conversationsRepo.update).toHaveBeenCalledWith(
-        7,
-        expect.objectContaining({ lastMessageAt: expect.any(Date) }),
-      );
+      expect(conversationsRepo.update).toHaveBeenCalledTimes(1);
+      const [conversationId, patch] = conversationsRepo.update.mock.calls[0];
+      expect(conversationId).toBe(7);
+      expect(patch.lastMessageAt).toBeInstanceOf(Date);
     });
   });
 
