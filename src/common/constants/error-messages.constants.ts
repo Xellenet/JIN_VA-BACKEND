@@ -32,13 +32,11 @@ export const ERROR_MESSAGES = {
     DUPLICATE: 'You have already submitted a review for this job.',
     JOB_NO_ARTISAN: 'This job does not have an accepted artisan to review.',
     NOT_FOUND: (id: number) => `Review with id ${id} not found.`,
-    NO_FIELDS_TO_UPDATE:
-      'Provide a rating and/or review text to update.',
+    NO_FIELDS_TO_UPDATE: 'Provide a rating and/or review text to update.',
     NOT_REVIEW_OWNER: 'You can only edit your own review.',
     EDIT_WINDOW_EXPIRED:
       'This review can no longer be edited — the 48-hour edit window has passed.',
-    NOT_REVIEWED_ARTISAN:
-      'You can only reply to reviews written about you.',
+    NOT_REVIEWED_ARTISAN: 'You can only reply to reviews written about you.',
     ALREADY_REPLIED: 'This review already has a reply.',
     ALREADY_FLAGGED_BY_YOU: 'You have already flagged this review.',
     NOT_FLAGGED: 'Only a flagged review can be restored.',
