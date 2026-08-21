@@ -36,6 +36,13 @@ export const SUCCESS_MESSAGES = {
     CREATED: 'Review submitted successfully',
     RETRIEVED: 'Review retrieved successfully',
     ALL_RETRIEVED: 'Reviews retrieved successfully',
+    UPDATED: 'Review updated successfully.',
+    REPLY_ADDED: 'Reply posted successfully.',
+    FLAGGED: 'Review reported. It has been hidden pending admin review.',
+    REMOVED: 'Review permanently removed.',
+    RESTORED: 'Review restored.',
+    ADMIN_LIST_RETRIEVED: 'Reviews retrieved successfully.',
+    MODERATION_LOG_RETRIEVED: 'Moderation log retrieved successfully.',
   },
   JOB: {
     CREATED: 'Job created successfully',

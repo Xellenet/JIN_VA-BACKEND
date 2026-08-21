@@ -123,4 +123,25 @@ export class UploadsController {
   ) {
     return this.uploadsService.uploadJobAttachment(file);
   }
+
+  @Post('review-photo')
+  @HttpCode(HttpStatus.OK)
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage() }))
+  @ApiOperation({
+    summary:
+      'RP1: upload a review photo (any authenticated user, ≤ 5 MB, JPEG/PNG only). ' +
+      'Returns a URL to reference in POST /reviews (max 3 per review).',
+  })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody(fileField)
+  uploadReviewPhoto(
+    @UploadedFile(
+      new ParseFilePipe({
+        validators: [new MaxFileSizeValidator({ maxSize: 5 * MB })],
+      }),
+    )
+    file: Express.Multer.File,
+  ) {
+    return this.uploadsService.uploadReviewPhoto(file);
+  }
 }

@@ -61,4 +61,37 @@ export const VARIABLES = {
    * the catalog price (0.2 = ±20%).
    */
   AGREED_PRICE_TOLERANCE_RATIO: 0.2,
+
+  /** REVIEWS / RATINGS / FAVOURITES CONSTANTS */
+  /** RE1: a review may only be edited by its original author within this many hours of `createdAt`. */
+  REVIEW_EDIT_WINDOW_HOURS: 48,
+  /** RP1: max photos per review and max size per photo. */
+  REVIEW_MAX_PHOTOS: 3,
+  REVIEW_MAX_PHOTO_SIZE_MB: 5,
+  /** AR1: artisan reply is a short, one-time public response. */
+  REVIEW_REPLY_MIN_LENGTH: 1,
+  REVIEW_REPLY_MAX_LENGTH: 300,
+  /** FL1: required reason when flagging a review. */
+  REVIEW_FLAG_REASON_MIN_LENGTH: 10,
+  REVIEW_FLAG_REASON_MAX_LENGTH: 500,
+  /** AM3: required reason when an admin permanently removes a review. */
+  REVIEW_MODERATION_REASON_MIN_LENGTH: 10,
+  REVIEW_MODERATION_REASON_MAX_LENGTH: 1000,
+  /** AM5: how much of the review text is snapshotted into the moderation log. */
+  REVIEW_MODERATION_SNAPSHOT_EXCERPT_LENGTH: 200,
+  /**
+   * RA2: Bayesian weighted-rating (IMDb-style) tuning knobs.
+   * `WR = (v / (v + m)) * R + (m / (v + m)) * C`
+   * `m` — minimum-votes prior: how many reviews it takes before an artisan's
+   * own average (R) dominates the platform mean (C). A formula constant, not
+   * stored data — tune here as the platform's review volume grows.
+   */
+  RATING_BAYESIAN_MIN_VOTES: 10,
+  /**
+   * Fallback platform mean (`C`) used only until `PlatformRatingCacheService`
+   * completes its first computation (e.g. immediately after a cold start) or
+   * when zero reviews exist platform-wide yet. The neutral midpoint of the
+   * 1–5 scale.
+   */
+  PLATFORM_MEAN_DEFAULT_RATING: 3,
 };

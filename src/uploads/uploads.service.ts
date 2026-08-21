@@ -10,6 +10,8 @@ const ALLOWED_DOCUMENT_TYPES = new Set([
   'image/webp',
   'application/pdf',
 ]);
+/** RP1: reviews are explicitly JPEG/PNG only — no WebP, unlike other image uploads. */
+const ALLOWED_REVIEW_PHOTO_TYPES = new Set(['image/jpeg', 'image/png']);
 
 @Injectable()
 export class UploadsService {
@@ -55,6 +57,23 @@ export class UploadsService {
       'Job attachments must be JPEG, PNG, or WebP.',
     );
     return this.store(file, 'job-attachments', mimetype);
+  }
+
+  /**
+   * RP1: photo attachments for a review. Any authenticated user may call
+   * this (same "upload first, attach the URL later" pattern as job
+   * attachments) — ownership/limits (max 3 per review) are enforced where
+   * the resulting URL is attached, in `ReviewsService.create`. JPEG/PNG only,
+   * per the resolved RP1 sizing decision (max 5MB is enforced by the
+   * controller's `MaxFileSizeValidator`, not here).
+   */
+  async uploadReviewPhoto(file: Express.Multer.File) {
+    const mimetype = await this.assertMime(
+      file,
+      ALLOWED_REVIEW_PHOTO_TYPES,
+      'Review photos must be JPEG or PNG.',
+    );
+    return this.store(file, 'reviews', mimetype);
   }
 
   private async store(

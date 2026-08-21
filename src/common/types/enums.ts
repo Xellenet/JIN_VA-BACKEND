@@ -136,3 +136,25 @@ export enum PortfolioStatus {
   APPROVED = 'APPROVED',
   REJECTED = 'REJECTED',
 }
+
+/**
+ * AM1: moderation status of a review.
+ * `REMOVED` is intentionally never observed on a persisted row — AM3 is a
+ * hard delete, so a review transitions straight from `ACTIVE`/`FLAGGED` to
+ * being deleted outright (see `ReviewsService.adminRemove`). The value is
+ * kept in the enum for vocabulary parity with the PRD/admin UI and so
+ * `GET /admin/reviews?status=REMOVED` is a valid (always-empty) filter
+ * rather than a validation error.
+ */
+export enum ReviewStatus {
+  ACTIVE = 'ACTIVE',
+  FLAGGED = 'FLAGGED',
+  REMOVED = 'REMOVED',
+}
+
+/** AM5: the three actions that append a row to `review_moderation_actions`. */
+export enum ModerationAction {
+  FLAG = 'FLAG',
+  REMOVE = 'REMOVE',
+  RESTORE = 'RESTORE',
+}
