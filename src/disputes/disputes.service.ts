@@ -9,6 +9,9 @@ import { plainToInstance } from 'class-transformer';
 import { Repository } from 'typeorm';
 import { Dispute } from './entities/dispute.entity';
 import { Booking } from '../bookings/entities/booking.entity';
+import { Job } from '@jobs/entities/job.entity';
+import { Payment } from '../payments/entities/payment.entity';
+import { User } from '@users/entities/user.entity';
 import { CreateDisputeDto } from './dto/create-dispute.dto';
 import { GetDisputesQueryDto } from './dto/get-disputes-query.dto';
 import { ResolveDisputeDto, CloseDisputeDto } from './dto/resolve-dispute.dto';
@@ -22,6 +25,10 @@ export class DisputesService {
     private readonly repo: Repository<Dispute>,
     @InjectRepository(Booking)
     private readonly bookingRepo: Repository<Booking>,
+    @InjectRepository(Job)
+    private readonly jobRepo: Repository<Job>,
+    @InjectRepository(Payment)
+    private readonly paymentRepo: Repository<Payment>,
   ) {}
 
   // ─── User-facing ────────────────────────────────────────────────────────────
@@ -65,7 +72,7 @@ export class DisputesService {
       this.repo.create({
         booking,
         bookingId: dto.bookingId,
-        raisedBy: { id: userId } as any,
+        raisedBy: { id: userId } as User,
         raisedById: userId,
         reason: dto.reason,
         status: DisputeStatus.OPEN,
@@ -130,6 +137,38 @@ export class DisputesService {
     };
   }
 
+  /**
+   * Ad3: `Dispute.bookingId` and `Payment.jobId` are never joined anywhere
+   * else in the codebase — a booking-derived `Job` (`Job.bookingId`) is the
+   * only link between the two. Look one up here so the admin dispute screen
+   * can show the associated payment (if any) without a separate manual
+   * lookup in the transactions list.
+   *
+   * A dispute's booking legitimately may have no associated payment at all:
+   * booking-derived jobs don't currently call `holdPayment` (see the
+   * payments-integration requirements doc), so `jobId`/`payment` being
+   * `null` here is an expected, common case, not an error.
+   */
+  private async findLinkedPayment(
+    bookingId: number,
+  ): Promise<{ jobId: number | null; payment: Payment | null }> {
+    // `Job.bookingId` is a `@RelationId` projection, not a real column —
+    // TypeORM's find options can't filter on it directly (it throws
+    // EntityPropertyNotFoundError at runtime despite compiling fine, since
+    // RelationId fields are populated from a loaded relation, not queryable
+    // on their own). Filter on the relation itself instead, which TypeORM
+    // correctly translates into a `booking_id = :id` condition.
+    const job = await this.jobRepo.findOne({
+      where: { booking: { id: bookingId } },
+    });
+    if (!job) return { jobId: null, payment: null };
+
+    const payment = await this.paymentRepo.findOne({
+      where: { jobId: job.id },
+    });
+    return { jobId: job.id, payment: payment ?? null };
+  }
+
   async findOne(id: number) {
     const dispute = await this.repo.findOne({
       where: { id },
@@ -142,7 +181,13 @@ export class DisputesService {
       ],
     });
     if (!dispute) throw new NotFoundException('Dispute not found.');
-    return { message: 'Dispute retrieved.', data: this.toDto(dispute) };
+
+    const { jobId, payment } = await this.findLinkedPayment(dispute.bookingId);
+
+    return {
+      message: 'Dispute retrieved.',
+      data: { ...this.toDto(dispute), jobId, payment },
+    };
   }
 
   async startReview(adminId: number, id: number) {
@@ -169,7 +214,7 @@ export class DisputesService {
     dispute.status = DisputeStatus.RESOLVED;
     dispute.resolution = dto.resolution;
     dispute.resolvedById = adminId;
-    dispute.resolvedBy = { id: adminId } as any;
+    dispute.resolvedBy = { id: adminId } as User;
     dispute.resolvedAt = new Date();
     if (dto.adminNotes) dispute.adminNotes = dto.adminNotes;
 
@@ -185,7 +230,7 @@ export class DisputesService {
 
     dispute.status = DisputeStatus.CLOSED;
     dispute.resolvedById = adminId;
-    dispute.resolvedBy = { id: adminId } as any;
+    dispute.resolvedBy = { id: adminId } as User;
     dispute.resolvedAt = new Date();
     if (dto.adminNotes) dispute.adminNotes = dto.adminNotes;
 
