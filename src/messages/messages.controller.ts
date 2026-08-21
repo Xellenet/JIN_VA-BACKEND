@@ -24,7 +24,6 @@ import {
   ApiTooManyRequestsResponse,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
-import { Throttle } from '@nestjs/throttler';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { MessageSendThrottlerGuard } from './guards/message-send-throttler.guard';
 import { MessagesService } from './messages.service';
@@ -59,14 +58,17 @@ export class MessagesController {
    * Creates a new conversation if this is the first message between the two users;
    * otherwise appends to the existing conversation thread.
    *
-   * RL1: rate-limited per authenticated sender. The limit is configurable via
-   * `MESSAGE_RATE_LIMIT_PER_MINUTE` (see `MessagesModule`); exceeding it
-   * returns a specific 429 body, never a bare "Too many requests".
+   * RL1: rate-limited per authenticated sender. Attaching
+   * `MessageSendThrottlerGuard` is all that's needed — the guard applies the
+   * single named `message-send` throttler configured in `MessagesModule`, so
+   * there is no per-route `@Throttle()` override here (an empty one would
+   * imply configuration that isn't happening). The limit is tunable via
+   * `MESSAGE_RATE_LIMIT_PER_MINUTE`; exceeding it returns a specific 429 body,
+   * never a bare "Too many requests".
    */
   @Post()
   @HttpCode(HttpStatus.CREATED)
   @UseGuards(MessageSendThrottlerGuard)
-  @Throttle({ 'message-send': {} })
   @ApiOperation({
     summary: 'Send a message to a user',
     description:
