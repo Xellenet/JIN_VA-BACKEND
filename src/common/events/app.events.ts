@@ -1,3 +1,5 @@
+import type { Role } from '@common/types/enums';
+
 export const APP_EVENTS = {
   JOB_APPLICATION_RECEIVED: 'job.application.received',
   JOB_APPLICATION_ACCEPTED: 'job.application.accepted',
@@ -17,6 +19,10 @@ export const APP_EVENTS = {
   BOOKING_DECLINED: 'booking.declined',
   BOOKING_CANCELLED: 'booking.cancelled',
   BOOKING_COMPLETED: 'booking.completed',
+  BOOKING_EXPIRED: 'booking.expired',
+  BOOKING_NO_SHOW: 'booking.no-show',
+  BOOKING_REMINDER_24H: 'booking.reminder.24h',
+  BOOKING_REMINDER_2H: 'booking.reminder.2h',
   PORTFOLIO_APPROVED: 'portfolio.approved',
   PORTFOLIO_REJECTED: 'portfolio.rejected',
   SECURITY_ALERT: 'security.alert',
@@ -133,6 +139,29 @@ export interface BookingCompletedPayload {
   artisanUserId: number;
   scheduledDate: string;
   bookingId: number;
+}
+
+export interface BookingExpiredPayload {
+  customerId: number;
+  scheduledDate: string;
+  bookingId: number;
+}
+
+export interface BookingNoShowPayload {
+  /** The recipient being notified (the *other* party from the flagger). */
+  recipientUserId: number;
+  flaggedByName: string;
+  scheduledDate: string;
+  bookingId: number;
+}
+
+export interface BookingReminderPayload {
+  recipientUserId: number;
+  recipientRole: Role;
+  scheduledDate: string;
+  startTime: string;
+  bookingId: number;
+  milestone: '24H' | '2H';
 }
 
 export interface ReviewReceivedPayload {

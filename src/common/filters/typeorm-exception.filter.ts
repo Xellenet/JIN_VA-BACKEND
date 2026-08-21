@@ -1,5 +1,14 @@
 import { ArgumentsHost, Catch, ExceptionFilter, Logger } from '@nestjs/common';
 import { QueryFailedError } from 'typeorm';
+import type { Request, Response } from 'express';
+
+/** TypeORM forwards the pg driver's error fields directly onto the thrown
+ * `QueryFailedError` instance at runtime, but they aren't part of its
+ * declared type — this narrows the `any` cast to just those two fields. */
+interface PgQueryFailedError extends QueryFailedError {
+  code?: string;
+  detail?: string;
+}
 
 /**
  * Global exception filter that intercepts TypeORM {@link QueryFailedError} instances
@@ -21,14 +30,15 @@ export class TypeOrmFilter implements ExceptionFilter {
    */
   catch(exception: QueryFailedError, host: ArgumentsHost): void {
     const ctx = host.switchToHttp();
-    const response = ctx.getResponse();
-    const request = ctx.getRequest();
+    const response = ctx.getResponse<Response>();
+    const request = ctx.getRequest<Request>();
 
+    const pgException = exception as PgQueryFailedError;
     // TypeORM forwards the pg driver error code directly onto the exception object.
-    const pgCode = (exception as any).code as string | undefined;
+    const pgCode = pgException.code;
     // PostgreSQL includes a human-readable detail like:
     // "Key (email)=(john@example.com) already exists."
-    const detail = ((exception as any).detail ?? '') as string;
+    const detail = pgException.detail ?? '';
 
     let message = 'Database operation failed';
     let status = 500;

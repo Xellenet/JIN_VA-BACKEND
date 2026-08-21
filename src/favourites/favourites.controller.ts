@@ -28,6 +28,7 @@ import { Role } from '@common/types/enums';
 import { FavouritesService } from './favourites.service';
 import { GetFavouritesQueryDto } from './dto/get-favourites-query.dto';
 import { ArtisanPublicResponseDto } from '@artisans/dto/artisan-public-response.dto';
+import type { AuthenticatedRequest } from '@common/types/authenticated-request.type';
 
 /**
  * Allows customers to save and manage their favourite artisans.
@@ -59,7 +60,10 @@ export class FavouritesController {
   @ApiForbiddenResponse({
     description: 'Caller does not have the CUSTOMER role',
   })
-  findAll(@Req() req: any, @Query() query: GetFavouritesQueryDto) {
+  findAll(
+    @Req() req: AuthenticatedRequest,
+    @Query() query: GetFavouritesQueryDto,
+  ) {
     return this.favouritesService.findAll(req.user.id, query);
   }
 
@@ -81,7 +85,7 @@ export class FavouritesController {
     description: 'Caller does not have the CUSTOMER role',
   })
   add(
-    @Req() req: any,
+    @Req() req: AuthenticatedRequest,
     @Param('artisanProfileId', ParseIntPipe) artisanProfileId: number,
   ) {
     return this.favouritesService.add(req.user.id, artisanProfileId);
@@ -104,7 +108,7 @@ export class FavouritesController {
     description: 'Caller does not have the CUSTOMER role',
   })
   remove(
-    @Req() req: any,
+    @Req() req: AuthenticatedRequest,
     @Param('artisanProfileId', ParseIntPipe) artisanProfileId: number,
   ) {
     return this.favouritesService.remove(req.user.id, artisanProfileId);

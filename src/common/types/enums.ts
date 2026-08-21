@@ -38,6 +38,16 @@ export enum BookingStatus {
   COMPLETED = 'COMPLETED',
   CANCELLED = 'CANCELLED',
   DECLINED = 'DECLINED',
+  /** A5: 24h passed with no artisan response. */
+  EXPIRED = 'EXPIRED',
+  /** A6: either party flagged the other as a no-show after the scheduled end time passed. */
+  NO_SHOW = 'NO_SHOW',
+}
+
+/** A6: who is being flagged as a no-show. Both can independently apply to the same booking. */
+export enum NoShowParty {
+  CUSTOMER = 'CUSTOMER',
+  ARTISAN = 'ARTISAN',
 }
 
 export enum AvailabilityStatus {
@@ -71,6 +81,11 @@ export enum PaymentStatus {
   PENDING = 'PENDING', // payment record created, not yet paid
   HELD = 'HELD', // customer paid; funds sitting in platform account
   PENDING_TRANSFER = 'PENDING_TRANSFER', // payment held but artisan has no payout method yet
+  /** Transfer to the artisan was attempted but Paystack reported transfer.failed /
+   * transfer.reversed, or the transfer API call itself errored. Retryable via
+   * the same retry-transfer endpoint as PENDING_TRANSFER once the underlying
+   * cause (e.g. stale recipient, bank rejection) is resolved. */
+  TRANSFER_FAILED = 'TRANSFER_FAILED',
   RELEASED = 'RELEASED', // transfer to artisan confirmed
   REFUNDED = 'REFUNDED', // customer refunded
   CANCELLED = 'CANCELLED', // job cancelled before payment
@@ -107,6 +122,9 @@ export enum NotificationType {
   BOOKING_DECLINED = 'BOOKING_DECLINED',
   BOOKING_CANCELLED = 'BOOKING_CANCELLED',
   BOOKING_COMPLETED = 'BOOKING_COMPLETED',
+  BOOKING_EXPIRED = 'BOOKING_EXPIRED',
+  BOOKING_NO_SHOW = 'BOOKING_NO_SHOW',
+  BOOKING_REMINDER = 'BOOKING_REMINDER',
   PORTFOLIO_APPROVED = 'PORTFOLIO_APPROVED',
   PORTFOLIO_REJECTED = 'PORTFOLIO_REJECTED',
   SECURITY_ALERT = 'SECURITY_ALERT',

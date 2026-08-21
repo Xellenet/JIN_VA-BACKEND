@@ -30,10 +30,13 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
     if (exception instanceof HttpException) {
       const errorResponse = exception.getResponse();
-      message =
-        (errorResponse as any).message ||
-        exception.message ||
-        'An error occurred';
+      const responseMessage =
+        typeof errorResponse === 'object' &&
+        errorResponse !== null &&
+        'message' in errorResponse
+          ? (errorResponse as { message?: string | string[] }).message
+          : undefined;
+      message = responseMessage || exception.message || 'An error occurred';
       errorName = exception.name;
     } else if (exception instanceof Error) {
       message = exception.message;

@@ -40,6 +40,7 @@ import { OptionalJwtAuthGuard } from '../auth/guards/optional-jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '@common/decorators/roles.decorator';
 import { Role } from '@common/types/enums';
+import type { AuthenticatedRequest } from '@common/types/authenticated-request.type';
 
 const MAX_PORTFOLIO_FILE_BYTES = 50 * 1024 * 1024;
 // Generous multer-level cap, comfortably above the 50MB app-level limit —
@@ -108,7 +109,7 @@ export class PortfolioController {
     description: 'Caller does not have the ARTISAN role',
   })
   create(
-    @Req() req: any,
+    @Req() req: AuthenticatedRequest,
     @UploadedFile(fileSizeValidationPipe()) file: Express.Multer.File,
     @Body() dto: CreatePortfolioItemDto,
   ) {
@@ -126,7 +127,7 @@ export class PortfolioController {
   @ApiOkResponse({ type: [PortfolioItemResponseDto] })
   @ApiNotFoundResponse({ description: 'Artisan profile not found' })
   findByArtisan(
-    @Req() req: any,
+    @Req() req: AuthenticatedRequest,
     @Param('artisanId', ParseIntPipe) artisanId: number,
   ) {
     return this.portfolioService.findByArtisan(artisanId, req.user);
@@ -144,7 +145,10 @@ export class PortfolioController {
   @ApiNotFoundResponse({
     description: 'Item not found or not owned by the caller',
   })
-  remove(@Req() req: any, @Param('id', ParseIntPipe) id: number) {
+  remove(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
     return this.portfolioService.remove(req.user.id, id);
   }
 
@@ -162,7 +166,7 @@ export class PortfolioController {
     description: 'Item not found or not owned by the caller',
   })
   reorder(
-    @Req() req: any,
+    @Req() req: AuthenticatedRequest,
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: ReorderPortfolioItemDto,
   ) {
@@ -191,7 +195,7 @@ export class PortfolioController {
     description: 'Item not found or not owned by the caller',
   })
   resubmit(
-    @Req() req: any,
+    @Req() req: AuthenticatedRequest,
     @Param('id', ParseIntPipe) id: number,
     @UploadedFile(fileSizeValidationPipe()) file: Express.Multer.File,
     @Body() dto: ResubmitPortfolioItemDto,

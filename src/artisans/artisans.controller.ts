@@ -33,6 +33,7 @@ import { GetArtisansQueryDto } from './dto/get-artisans-query.dto';
 import { ArtisanPublicResponseDto } from './dto/artisan-public-response.dto';
 import { UpdateArtisanProfileDto } from '@users/dto/update-artisan-profile.dto';
 import { ArtisanProfileResponseDto } from '@users/dto/artisan-profile-response.dto';
+import type { AuthenticatedRequest } from '@common/types/authenticated-request.type';
 
 /**
  * Public-facing artisan discovery and authenticated artisan self-management.
@@ -113,7 +114,10 @@ export class ArtisansController {
   @ApiForbiddenResponse({
     description: 'Caller does not have the ARTISAN role',
   })
-  updateMe(@Req() req: any, @Body() dto: UpdateArtisanProfileDto) {
+  updateMe(
+    @Req() req: AuthenticatedRequest,
+    @Body() dto: UpdateArtisanProfileDto,
+  ) {
     return this.artisansService.updateMe(req.user.id, dto);
   }
 
@@ -144,7 +148,7 @@ export class ArtisansController {
     description: 'Caller does not have the ARTISAN role',
   })
   addService(
-    @Req() req: any,
+    @Req() req: AuthenticatedRequest,
     @Param('serviceId', ParseIntPipe) serviceId: number,
   ) {
     return this.artisansService.addService(req.user.id, serviceId);
@@ -173,7 +177,7 @@ export class ArtisansController {
     description: 'Caller does not have the ARTISAN role',
   })
   removeService(
-    @Req() req: any,
+    @Req() req: AuthenticatedRequest,
     @Param('serviceId', ParseIntPipe) serviceId: number,
   ) {
     return this.artisansService.removeService(req.user.id, serviceId);

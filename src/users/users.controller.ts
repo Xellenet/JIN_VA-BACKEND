@@ -45,6 +45,7 @@ import { UploadsService } from '../uploads/uploads.service';
 import { CreateAddressDto } from './dto/create-address.dto';
 import { UpdateAddressDto } from './dto/update-address.dto';
 import { AddressResponseDto } from './dto/address-response.dto';
+import type { AuthenticatedRequest } from '@common/types/authenticated-request.type';
 
 /**
  * Handles user management and self-service profile operations.
@@ -99,7 +100,7 @@ export class UsersController {
     type: UserResponseDto,
   })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
-  getMe(@Req() req: any) {
+  getMe(@Req() req: AuthenticatedRequest) {
     return this.usersService.findMe(req.user.id);
   }
 
@@ -121,7 +122,7 @@ export class UsersController {
     type: UserResponseDto,
   })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
-  updateMe(@Req() req: any, @Body() updateMeDto: UpdateMeDto) {
+  updateMe(@Req() req: AuthenticatedRequest, @Body() updateMeDto: UpdateMeDto) {
     return this.usersService.updateMe(req.user.id, updateMeDto);
   }
 
@@ -141,7 +142,7 @@ export class UsersController {
   })
   @ApiOkResponse({ description: 'Account deleted successfully' })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
-  deleteMe(@Req() req: any) {
+  deleteMe(@Req() req: AuthenticatedRequest) {
     return this.usersService.deleteMe(req.user.id);
   }
 
@@ -181,7 +182,7 @@ export class UsersController {
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
   @UseInterceptors(FileInterceptor('avatar', { storage: memoryStorage() }))
   async uploadAvatar(
-    @Req() req: any,
+    @Req() req: AuthenticatedRequest,
     @UploadedFile(
       new ParseFilePipe({
         validators: [new MaxFileSizeValidator({ maxSize: 5 * 1024 * 1024 })],
@@ -215,7 +216,7 @@ export class UsersController {
   @ApiForbiddenResponse({
     description: 'Caller does not have the ARTISAN role',
   })
-  getArtisanProfile(@Req() req: any) {
+  getArtisanProfile(@Req() req: AuthenticatedRequest) {
     return this.usersService.findArtisanProfileByUserId(req.user.id);
   }
 
@@ -243,7 +244,7 @@ export class UsersController {
     description: 'Caller does not have the ARTISAN role',
   })
   updateArtisanProfile(
-    @Req() req: any,
+    @Req() req: AuthenticatedRequest,
     @Body() updateArtisanProfileDto: UpdateArtisanProfileDto,
   ) {
     return this.usersService.updateArtisanProfile(
@@ -274,7 +275,7 @@ export class UsersController {
   @ApiForbiddenResponse({
     description: 'Caller does not have the CUSTOMER role',
   })
-  getCustomerProfile(@Req() req: any) {
+  getCustomerProfile(@Req() req: AuthenticatedRequest) {
     return this.usersService.findCustomerProfileByUserId(req.user.id);
   }
 
@@ -303,7 +304,7 @@ export class UsersController {
     description: 'Caller does not have the CUSTOMER role',
   })
   updateCustomerProfile(
-    @Req() req: any,
+    @Req() req: AuthenticatedRequest,
     @Body() updateCustomerProfileDto: UpdateCustomerProfileDto,
   ) {
     return this.usersService.updateCustomerProfile(
@@ -323,7 +324,7 @@ export class UsersController {
     type: AddressResponseDto,
   })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
-  addAddress(@Req() req: any, @Body() dto: CreateAddressDto) {
+  addAddress(@Req() req: AuthenticatedRequest, @Body() dto: CreateAddressDto) {
     return this.usersService.addAddress(req.user.id, dto);
   }
 
@@ -337,7 +338,7 @@ export class UsersController {
   })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
   updateAddress(
-    @Req() req: any,
+    @Req() req: AuthenticatedRequest,
     @Param('id', ParseIntPipe) addressId: number,
     @Body() dto: UpdateAddressDto,
   ) {
@@ -351,7 +352,10 @@ export class UsersController {
   @ApiOperation({ summary: "Remove one of the authenticated user's addresses" })
   @ApiOkResponse({ description: 'Address removed successfully' })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
-  removeAddress(@Req() req: any, @Param('id', ParseIntPipe) addressId: number) {
+  removeAddress(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseIntPipe) addressId: number,
+  ) {
     return this.usersService.removeAddress(req.user.id, addressId);
   }
 }

@@ -17,6 +17,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { DirectMessagesService } from './direct-messages.service';
 import { SendDirectMessageDto } from './dto/send-direct-message.dto';
+import type { AuthenticatedRequest } from '@common/types/authenticated-request.type';
 
 @ApiTags('Direct Messages')
 @Controller('direct-messages')
@@ -26,13 +27,13 @@ export class DirectMessagesController {
   constructor(private readonly service: DirectMessagesService) {}
 
   @Get('conversations')
-  getConversations(@Req() req: any) {
+  getConversations(@Req() req: AuthenticatedRequest) {
     return this.service.getConversations(req.user.id);
   }
 
   @Get(':userId')
   getMessages(
-    @Req() req: any,
+    @Req() req: AuthenticatedRequest,
     @Param('userId', ParseIntPipe) userId: number,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(30), ParseIntPipe) limit: number,
@@ -42,7 +43,7 @@ export class DirectMessagesController {
 
   @Post(':userId')
   sendMessage(
-    @Req() req: any,
+    @Req() req: AuthenticatedRequest,
     @Param('userId', ParseIntPipe) userId: number,
     @Body() dto: SendDirectMessageDto,
   ) {
@@ -51,7 +52,10 @@ export class DirectMessagesController {
 
   @Patch(':userId/read')
   @HttpCode(HttpStatus.OK)
-  markRead(@Req() req: any, @Param('userId', ParseIntPipe) userId: number) {
+  markRead(
+    @Req() req: AuthenticatedRequest,
+    @Param('userId', ParseIntPipe) userId: number,
+  ) {
     return this.service.markRead(req.user.id, userId);
   }
 }

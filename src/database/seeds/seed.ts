@@ -107,8 +107,12 @@ async function seed() {
     const del = async (table: string) => {
       try {
         await dataSource.query(`DELETE FROM "${table}"`);
-      } catch (e: any) {
-        if (e.code !== '42P01') throw e;
+      } catch (e) {
+        const code =
+          e && typeof e === 'object' && 'code' in e
+            ? (e as { code?: string }).code
+            : undefined;
+        if (code !== '42P01') throw e;
       }
     };
     // Delete in FK-safe order: most-dependent tables first
