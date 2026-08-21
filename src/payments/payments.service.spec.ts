@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { getDataSourceToken } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { PaymentsService } from './payments.service';
 import { Payment } from './entities/payment.entity';
@@ -35,6 +36,8 @@ describe('PaymentsService', () => {
     }),
   };
   const mockDataSource = { transaction: jest.fn() };
+  /** PD1–PD3: PaymentsService now emits notification events. */
+  const mockEventEmitter = { emit: jest.fn() };
 
   beforeEach(async () => {
     paymentRepo = mockRepo();
@@ -50,6 +53,7 @@ describe('PaymentsService', () => {
         { provide: getDataSourceToken(), useValue: mockDataSource },
         { provide: PaystackService, useValue: mockPaystack },
         { provide: ConfigService, useValue: mockConfig },
+        { provide: EventEmitter2, useValue: mockEventEmitter },
       ],
     }).compile();
 

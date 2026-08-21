@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { DataSource, In, Repository } from 'typeorm';
 import { Payment } from './entities/payment.entity';
 import { PaystackService } from './paystack.service';
@@ -13,6 +14,14 @@ import { Job } from '@jobs/entities/job.entity';
 import { User } from '@users/entities/user.entity';
 import { ArtisanProfile } from '@users/entities/artisan-profile.entity';
 import { PaymentStatus, PayoutType } from '@common/types/enums';
+import { APP_EVENTS } from '@common/events/app.events';
+import type {
+  PaymentReceiptPayload,
+  PaymentSecuredPayload,
+  PayoutReleasedPayload,
+  PaymentRefundedPayload,
+  PaymentTransferFailedPayload,
+} from '@common/events/app.events';
 
 /** security-report.md finding #8: hard upper bound on admin list `limit`. */
 const MAX_ADMIN_PAGE_LIMIT = 100;
@@ -41,6 +50,12 @@ export class PaymentsService {
     private readonly dataSource: DataSource,
     private readonly paystack: PaystackService,
     private readonly config: ConfigService,
+    /**
+     * PD1–PD3: this module emitted nothing at all before this round, so the
+     * customer `paymentReceipts` and artisan `paymentReleased` preference
+     * toggles had no trigger behind them.
+     */
+    private readonly eventEmitter: EventEmitter2,
   ) {
     // ConfigService.get() always returns environment variables as strings
     // (process.env is never coerced), whether the value comes from a .env
@@ -58,6 +73,152 @@ export class PaymentsService {
       );
     }
     this.platformFeePercent = feePercent;
+  }
+
+  // ─── Notification emitters (PD1–PD3, PR3) ───────────────────────────────────
+  //
+  // Every emitter below is best-effort: a notification failure must never
+  // roll back or fail a money movement that already succeeded, so each one
+  // resolves its own context and swallows/logs its errors. They are always
+  // called *after* the owning DB transaction has committed, never inside it.
+
+  /**
+   * Resolves the human-readable context a payment notification needs (job
+   * title, the artisan's user id and display name) from a Payment row.
+   * Returns `null` if the artisan side can't be resolved, which callers treat
+   * as "skip the artisan-facing notification" rather than an error.
+   */
+  private async resolvePaymentContext(payment: Payment): Promise<{
+    jobTitle: string;
+    artisanUserId: number | null;
+    artisanName: string;
+  }> {
+    const [job, profile] = await Promise.all([
+      this.jobRepo.findOne({ where: { id: payment.jobId } }),
+      this.profileRepo.findOne({
+        where: { id: payment.artisanProfileId },
+        relations: ['user'],
+      }),
+    ]);
+    const user = profile?.user;
+    return {
+      jobTitle: job?.title ?? `Job #${payment.jobId}`,
+      artisanUserId: user?.id ?? null,
+      artisanName: user ? `${user.firstname} ${user.lastname}` : 'the artisan',
+    };
+  }
+
+  /**
+   * PD1 + PD2: a payment reaching HELD is a single state transition that owes
+   * *two different* notifications — a receipt to the customer ("we got your
+   * money") and a payment-secured notice to the artisan ("money is set aside
+   * for this job"). Deliberately two events rather than one with two
+   * recipients: the copy differs and each side is gated by its own role's
+   * preference toggle.
+   *
+   * Callers must only invoke this on a genuine transition into HELD, so a
+   * replayed `charge.success` webhook cannot double-notify.
+   */
+  private async emitPaymentHeld(payment: Payment): Promise<void> {
+    try {
+      const ctx = await this.resolvePaymentContext(payment);
+
+      this.eventEmitter.emit(APP_EVENTS.PAYMENT_RECEIPT, {
+        customerId: payment.customerId,
+        jobId: payment.jobId,
+        jobTitle: ctx.jobTitle,
+        amount: Number(payment.amount),
+        reference: payment.reference,
+      } as PaymentReceiptPayload);
+
+      if (ctx.artisanUserId) {
+        this.eventEmitter.emit(APP_EVENTS.PAYMENT_SECURED, {
+          artisanUserId: ctx.artisanUserId,
+          jobId: payment.jobId,
+          jobTitle: ctx.jobTitle,
+          artisanAmount: Number(payment.artisanAmount),
+        } as PaymentSecuredPayload);
+      } else {
+        this.logger.warn(
+          `PAYMENT_SECURED not emitted for payment ${payment.id}: artisan profile ${payment.artisanProfileId} has no user.`,
+        );
+      }
+    } catch (err) {
+      this.logger.error(
+        `Failed to emit payment-held notifications for payment ${payment.id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /** PD2: the payout actually left the platform (Paystack transfer.success). */
+  private async emitPayoutReleased(payment: Payment): Promise<void> {
+    try {
+      const ctx = await this.resolvePaymentContext(payment);
+      if (!ctx.artisanUserId) {
+        this.logger.warn(
+          `PAYOUT_RELEASED not emitted for payment ${payment.id}: artisan profile ${payment.artisanProfileId} has no user.`,
+        );
+        return;
+      }
+      this.eventEmitter.emit(APP_EVENTS.PAYOUT_RELEASED, {
+        artisanUserId: ctx.artisanUserId,
+        jobId: payment.jobId,
+        jobTitle: ctx.jobTitle,
+        artisanAmount: Number(payment.artisanAmount),
+      } as PayoutReleasedPayload);
+    } catch (err) {
+      this.logger.error(
+        `Failed to emit PAYOUT_RELEASED for payment ${payment.id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /** PD3: an admin refunded (part of) a payment. */
+  private async emitPaymentRefunded(
+    payment: Payment,
+    refundedNow: number,
+    fullyRefunded: boolean,
+  ): Promise<void> {
+    try {
+      const ctx = await this.resolvePaymentContext(payment);
+      this.eventEmitter.emit(APP_EVENTS.PAYMENT_REFUNDED, {
+        customerId: payment.customerId,
+        jobId: payment.jobId,
+        jobTitle: ctx.jobTitle,
+        refundedAmount: refundedNow,
+        fullyRefunded,
+      } as PaymentRefundedPayload);
+    } catch (err) {
+      this.logger.error(
+        `Failed to emit PAYMENT_REFUNDED for payment ${payment.id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
+   * PR3: a failed payout is an *admin* problem, not something to tell the
+   * artisan they can fix — it needs manual attention (stale recipient, bank
+   * rejection). Routed to admins only.
+   */
+  private async emitTransferFailed(
+    payment: Payment,
+    reason: string,
+  ): Promise<void> {
+    try {
+      const ctx = await this.resolvePaymentContext(payment);
+      this.eventEmitter.emit(APP_EVENTS.PAYMENT_TRANSFER_FAILED, {
+        paymentId: payment.id,
+        jobId: payment.jobId,
+        jobTitle: ctx.jobTitle,
+        artisanName: ctx.artisanName,
+        artisanAmount: Number(payment.artisanAmount),
+        reason,
+      } as PaymentTransferFailedPayload);
+    } catch (err) {
+      this.logger.error(
+        `Failed to emit PAYMENT_TRANSFER_FAILED for payment ${payment.id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   // ─── Called internally by JobsService ────────────────────────────────────────
@@ -153,6 +314,13 @@ export class PaymentsService {
    */
   async capturePayment(reference: string, jobId: number): Promise<void> {
     let captureError: Error | undefined;
+    /**
+     * PR3: set only when the transfer *initiation* itself failed, so the
+     * admin-facing TRANSFER_FAILED notification is emitted after the
+     * transaction commits (never from inside it — an emit that ran and then
+     * got rolled back would notify about a state change that never persisted).
+     */
+    let failedPayment: Payment | undefined;
 
     await this.dataSource.transaction(async (manager) => {
       const paymentRepo = manager.getRepository(Payment);
@@ -239,8 +407,16 @@ export class PaymentsService {
           `Transfer initiation failed: job=${jobId} ref=${transferRef}: ${err instanceof Error ? err.message : String(err)}`,
         );
         captureError = err instanceof Error ? err : new Error(String(err));
+        failedPayment = payment;
       }
     });
+
+    if (failedPayment) {
+      await this.emitTransferFailed(
+        failedPayment,
+        captureError?.message ?? 'Transfer initiation failed.',
+      );
+    }
 
     if (captureError) throw captureError;
   }
@@ -490,6 +666,10 @@ export class PaymentsService {
         payment.channel = remote.channel;
         payment.paidAt = remote.paid_at ? new Date(remote.paid_at) : new Date();
         await this.repo.save(payment);
+        // PD1/PD2: this branch is already guarded to a genuine PENDING → HELD
+        // transition, so reconciling here can't double-notify a customer whose
+        // charge.success webhook also landed.
+        await this.emitPaymentHeld(payment);
       }
     }
 
@@ -575,7 +755,16 @@ export class PaymentsService {
    * independently be approved for up to the full original amount.
    */
   async adminRefund(paymentId: number, amountGhs?: number) {
-    return this.dataSource.transaction(async (manager) => {
+    /**
+     * PD3: captured inside the transaction, emitted after it commits — the
+     * customer must never be told their money is coming back on the strength
+     * of a write that then rolled back.
+     */
+    let refundOutcome:
+      | { payment: Payment; refundedNow: number; fullyRefunded: boolean }
+      | undefined;
+
+    const result = await this.dataSource.transaction(async (manager) => {
       const paymentRepo = manager.getRepository(Payment);
       const payment = await paymentRepo.findOne({
         where: { id: paymentId },
@@ -618,12 +807,24 @@ export class PaymentsService {
 
       await this.paystack.createRefund(payment.reference, refundAmount);
       payment.refundedAmount = +(alreadyRefunded + refundAmount).toFixed(2);
-      if (payment.refundedAmount >= Number(payment.amount)) {
+      const fullyRefunded = payment.refundedAmount >= Number(payment.amount);
+      if (fullyRefunded) {
         payment.status = PaymentStatus.REFUNDED;
       }
       await paymentRepo.save(payment);
+      refundOutcome = { payment, refundedNow: refundAmount, fullyRefunded };
       return { message: 'Refund initiated.' };
     });
+
+    if (refundOutcome) {
+      await this.emitPaymentRefunded(
+        refundOutcome.payment,
+        refundOutcome.refundedNow,
+        refundOutcome.fullyRefunded,
+      );
+    }
+
+    return result;
   }
 
   // ─── Paystack webhook processor ──────────────────────────────────────────────
@@ -675,6 +876,13 @@ export class PaymentsService {
       return;
     }
 
+    // PD1/PD2: Paystack can (and does) redeliver a webhook. Record whether
+    // this call is the one that actually moved the payment into HELD, so a
+    // redelivered charge.success replays the (idempotent) status write without
+    // sending the customer a second receipt and the artisan a second
+    // payment-secured notice.
+    const isFirstHold = payment.status !== PaymentStatus.HELD;
+
     payment.status = PaymentStatus.HELD;
     payment.channel = data.channel as string;
     payment.paidAt = new Date(data.paid_at as string);
@@ -682,6 +890,8 @@ export class PaymentsService {
     this.logger.log(
       `Payment HELD: ref=${reference} channel=${payment.channel}`,
     );
+
+    if (isFirstHold) await this.emitPaymentHeld(payment);
   }
 
   private async onTransferSuccess(data: Record<string, unknown>) {
@@ -690,10 +900,17 @@ export class PaymentsService {
       where: { transferReference: reference },
     });
     if (!payment) return;
+
+    // PD2: same redelivery guard as onChargeSuccess — only a genuine
+    // transition into RELEASED announces a payout to the artisan.
+    const isFirstRelease = payment.status !== PaymentStatus.RELEASED;
+
     payment.status = PaymentStatus.RELEASED;
     payment.releasedAt = new Date();
     await this.repo.save(payment);
     this.logger.log(`Payment RELEASED: job=${payment.jobId}`);
+
+    if (isFirstRelease) await this.emitPayoutReleased(payment);
   }
 
   private async onTransferFailed(event: string, data: Record<string, unknown>) {
@@ -712,11 +929,21 @@ export class PaymentsService {
       return;
     }
 
+    const isFirstFailure = payment.status !== PaymentStatus.TRANSFER_FAILED;
+
     payment.status = PaymentStatus.TRANSFER_FAILED;
     await this.repo.save(payment);
     this.logger.warn(
       `Payment marked TRANSFER_FAILED: job=${payment.jobId} ref=${reference} — retryable via retry-transfer.`,
     );
+
+    if (isFirstFailure) {
+      const providerReason =
+        typeof data.reason === 'string' && data.reason.length > 0
+          ? data.reason
+          : `Paystack reported ${event}`;
+      await this.emitTransferFailed(payment, providerReason);
+    }
   }
 
   // ─── Artisan payout setup ─────────────────────────────────────────────────────

@@ -29,7 +29,11 @@ import { SocialUserProfile } from '@common/types/user-interfaces.type';
 import { SocialAuthStrategyFactory } from './social-auth.factory';
 import { OAuthStateService } from './oauth-state.service';
 import { UnauthorizedException } from '@nestjs/common/exceptions/unauthorized.exception';
-import { APP_EVENTS, SecurityAlertPayload } from '@common/events/app.events';
+import {
+  APP_EVENTS,
+  ArtisanRegisteredPayload,
+  SecurityAlertPayload,
+} from '@common/events/app.events';
 
 const SELF_REGISTERABLE_ROLES = [Role.CUSTOMER, Role.ARTISAN];
 
@@ -105,7 +109,32 @@ export class AuthService {
     this.logger.log(
       `Emitted event for sending registration email to ${user.email}`,
     );
+
+    this.emitIfArtisan(user);
+
     return plainToInstance(UserResponseDto, user);
+  }
+
+  /**
+   * PR3: gives the admin "New Artisan Registered" toggle a real trigger.
+   * Called from both signup paths (password and social) rather than from
+   * `UsersService.createUser`, so seeding and admin-side user creation don't
+   * spam the admin queue — only a genuine public self-registration does.
+   *
+   * Best-effort by design: a notification concern must never fail a signup.
+   */
+  private emitIfArtisan(user: User): void {
+    if (user.role !== Role.ARTISAN) return;
+    try {
+      this.emmitter.emit(APP_EVENTS.ARTISAN_REGISTERED, {
+        artisanUserId: user.id,
+        artisanName: `${user.firstname} ${user.lastname}`,
+      } as ArtisanRegisteredPayload);
+    } catch (err) {
+      this.logger.error(
+        `Failed to emit ARTISAN_REGISTERED for user ${user.id}: ${(err as Error).message}`,
+      );
+    }
   }
 
   /**
@@ -655,6 +684,8 @@ export class AuthService {
       firstname: user.firstname,
       provider: socialProfile.provider,
     });
+
+    this.emitIfArtisan(user);
 
     return user;
   }
