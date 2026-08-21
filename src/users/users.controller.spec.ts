@@ -1,24 +1,29 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { UsersController } from './users.controller';
 import { UsersService } from './users.service';
+import { UploadsService } from '../uploads/uploads.service';
 import { CreateUserDto } from './dto/create-user.dto';
 
 describe('UsersController', () => {
   let controller: UsersController;
-  let usersService: UsersService;
 
   const mockUsersService = {
     createUser: jest.fn(),
+  };
+  const mockUploadsService = {
+    uploadAvatar: jest.fn(),
   };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [UsersController],
-      providers: [{ provide: UsersService, useValue: mockUsersService }],
+      providers: [
+        { provide: UsersService, useValue: mockUsersService },
+        { provide: UploadsService, useValue: mockUploadsService },
+      ],
     }).compile();
 
     controller = module.get<UsersController>(UsersController);
-    usersService = module.get<UsersService>(UsersService);
 
     jest.clearAllMocks();
   });
@@ -38,7 +43,7 @@ describe('UsersController', () => {
 
       const result = await controller.createUser(dto);
 
-      expect(usersService.createUser).toHaveBeenCalledWith(dto);
+      expect(mockUsersService.createUser).toHaveBeenCalledWith(dto);
       expect(result).toEqual(expected);
     });
   });

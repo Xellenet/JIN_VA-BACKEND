@@ -50,7 +50,6 @@ export class AuthService {
    * @returns UserResponseDto - Registered user details
    */
   async registerUser(createUserDto: CreateUserDto): Promise<UserResponseDto> {
-    let user;
     const email = createUserDto.email;
     if (!email) {
       throw new BadRequestException('Provide user email!');
@@ -83,15 +82,13 @@ export class AuthService {
 
     this.logger.log(`Registering User with email ${email}`);
 
-    user = await this.userService.findUserByEmail(email);
-    if (user) {
+    const existingUser = await this.userService.findUserByEmail(email);
+    if (existingUser) {
       throw new UserAlreadyExists(
         ERROR_MESSAGES.USER.EMAIL_ALREADY_EXISTS(email),
       );
     }
-    const { data: createdUser } =
-      await this.userService.createUser(createUserDto);
-    user = createdUser;
+    const { data: user } = await this.userService.createUser(createUserDto);
     this.logger.log(`User registered with email ${user.email}`);
 
     const verificationToken = await this.userTokenService.createToken(
@@ -118,14 +115,13 @@ export class AuthService {
    *   httpOnly cookie and returns only `result` (which never contains the refresh token).
    */
   async loginUser(loginDto: LoginDto): Promise<AuthTokenResult> {
-    let user;
     const { email, password } = loginDto;
     if (!email || !password) {
       throw new BadRequestException('Provide user email and password!');
     }
     this.logger.log(`Logging in User with email ${email}`);
 
-    user = await this.userService.findUserByEmail(email);
+    const user = await this.userService.findUserByEmail(email);
 
     if (!user) {
       this.logger.warn(`Invalid credentials provided for email ${email}`);
@@ -503,7 +499,7 @@ export class AuthService {
    *   Ignored entirely if the callback resolves to an existing account (G6).
    * @returns Authorization URL to redirect to
    */
-  async initiateOAuthFlow(provider: string, role?: string): Promise<string> {
+  initiateOAuthFlow(provider: string, role?: string): Promise<string> {
     this.logger.log(`Initiating OAuth flow for provider: ${provider}`);
 
     const strategy = this.socialAuthStrategyFactory.getStrategy(provider);
@@ -514,7 +510,7 @@ export class AuthService {
     const authUrl = strategy.getAuthorizationUrl(state);
 
     this.logger.log(`OAuth authorization URL generated for ${provider}`);
-    return authUrl;
+    return Promise.resolve(authUrl);
   }
 
   /**

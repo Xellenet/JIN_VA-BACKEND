@@ -9,6 +9,8 @@ import { Token } from '@common/types/enums';
 import { isAfter, subMinutes } from 'date-fns';
 import { VARIABLES } from '@common/constants/variables.constants';
 import { JwtService } from '@nestjs/jwt';
+import type { JwtPayload } from '@common/types/jwt-payload.type';
+import { getErrorMessage, getErrorStack } from '@common/utils/error.util';
 
 @Injectable()
 export class UserTokenService {
@@ -112,7 +114,7 @@ export class UserTokenService {
       this.jwtService.verify(token);
     } catch (error) {
       this.logger.warn(
-        `Refresh token JWT verification failed: ${error.message}`,
+        `Refresh token JWT verification failed: ${getErrorMessage(error)}`,
       );
       return null;
     }
@@ -188,7 +190,11 @@ export class UserTokenService {
     refresh_token: string;
     expires_at: Date;
   }> {
-    const payload = { sub: user.id, email: user.email, role: user.role };
+    const payload: JwtPayload = {
+      sub: user.id,
+      email: user.email,
+      role: user.role,
+    };
 
     // Debug: Log env vars
     const accessExpiresIn = process.env.JWT_ACCESS_EXPIRES_IN || '15m';
@@ -210,8 +216,8 @@ export class UserTokenService {
       this.logger.log('Access token signed successfully');
     } catch (signError) {
       this.logger.error(
-        `Access sign error: ${signError.message}`,
-        signError.stack,
+        `Access sign error: ${getErrorMessage(signError)}`,
+        getErrorStack(signError),
       );
       throw signError;
     }
@@ -223,8 +229,8 @@ export class UserTokenService {
       this.logger.log('Refresh token signed successfully');
     } catch (signError) {
       this.logger.error(
-        `Refresh sign error: ${signError.message}`,
-        signError.stack,
+        `Refresh sign error: ${getErrorMessage(signError)}`,
+        getErrorStack(signError),
       );
       throw signError;
     }
@@ -244,8 +250,8 @@ export class UserTokenService {
 
     await this.tokenRepo.save(refreshEntity);
 
-    const { exp } = this.jwtService.decode(access_token);
-    const expires_at = new Date(exp * 1000);
+    const decoded = this.jwtService.decode<{ exp: number }>(access_token);
+    const expires_at = new Date(decoded.exp * 1000);
 
     return { access_token, refresh_token, expires_at };
   }

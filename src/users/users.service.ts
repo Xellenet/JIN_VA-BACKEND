@@ -61,14 +61,13 @@ export class UsersService {
   async createUser(
     createUserDto: CreateUserDto,
   ): Promise<{ message: string; data: User }> {
-    let user;
     const email = createUserDto.email;
     if (!email) {
       throw new BadRequestException('Provide User Email!');
     }
 
-    user = await this.findUserByEmail(email);
-    if (user) {
+    const existingUser = await this.findUserByEmail(email);
+    if (existingUser) {
       throw new UserAlreadyExists(
         ERROR_MESSAGES.USER.EMAIL_ALREADY_EXISTS(email),
       );
@@ -80,7 +79,7 @@ export class UsersService {
     const hashedPassword = createUserDto.password
       ? await bcrypt.hash(createUserDto.password, VARIABLES.SALT_OR_ROUNDS)
       : null;
-    user = this.usersRepository.create({
+    const user = this.usersRepository.create({
       ...createUserDto,
       password: hashedPassword,
     });

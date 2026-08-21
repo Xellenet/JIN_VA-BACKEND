@@ -2,20 +2,25 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { UsersService } from './users.service';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { User } from './entities/user.entity';
-import { Repository } from 'typeorm';
+import { ArtisanProfile } from './entities/artisan-profile.entity';
+import { CustomerProfile } from './entities/customer-profile.entity';
+import { Address } from './entities/address.entity';
+import { ServiceEntity } from '@services/entities/service.entity';
+import { UserTokenService } from './token.service';
 import { CreateUserDto } from './dto/create-user.dto';
-import { UpdateUserDto } from './dto/update-user.dto';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { UserAlreadyExists } from '@common/exceptions/user-already-exists.exception';
+import { Role } from '@common/types/enums';
+import { SUCCESS_MESSAGES } from '@common/constants/success-messages.constants';
 
 describe('UsersService', () => {
   let service: UsersService;
-  let usersRepository: jest.Mocked<Repository<User>>;
 
   const mockUser = {
     id: 1,
     email: 'test@example.com',
     password: 'hashed',
+    role: Role.CUSTOMER,
   } as User;
 
   const mockUsersRepository = {
@@ -23,21 +28,59 @@ describe('UsersService', () => {
     save: jest.fn(),
     find: jest.fn(),
     findOne: jest.fn(),
+    update: jest.fn(),
+    delete: jest.fn(),
+    softDelete: jest.fn(),
+  };
+  const mockArtisanProfilesRepository = {
+    create: jest.fn(),
+    save: jest.fn(),
+    findOne: jest.fn(),
+  };
+  const mockCustomerProfilesRepository = {
+    create: jest.fn(),
+    save: jest.fn(),
+    findOne: jest.fn(),
+  };
+  const mockAddressesRepository = {
+    create: jest.fn(),
+    save: jest.fn(),
+    findOne: jest.fn(),
+    remove: jest.fn(),
+  };
+  const mockServicesRepository = {
+    findBy: jest.fn(),
+  };
+  const mockUserTokenService = {
+    revokeRefreshTokenForUser: jest.fn(),
   };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         UsersService,
+        { provide: getRepositoryToken(User), useValue: mockUsersRepository },
         {
-          provide: getRepositoryToken(User),
-          useValue: mockUsersRepository,
+          provide: getRepositoryToken(ArtisanProfile),
+          useValue: mockArtisanProfilesRepository,
         },
+        {
+          provide: getRepositoryToken(CustomerProfile),
+          useValue: mockCustomerProfilesRepository,
+        },
+        {
+          provide: getRepositoryToken(Address),
+          useValue: mockAddressesRepository,
+        },
+        {
+          provide: getRepositoryToken(ServiceEntity),
+          useValue: mockServicesRepository,
+        },
+        { provide: UserTokenService, useValue: mockUserTokenService },
       ],
     }).compile();
 
     service = module.get<UsersService>(UsersService);
-    usersRepository = module.get(getRepositoryToken(User));
     jest.clearAllMocks();
   });
 
@@ -57,58 +100,47 @@ describe('UsersService', () => {
       await expect(service.createUser(dto)).rejects.toThrow(UserAlreadyExists);
     });
 
-    it('should create and save a user, and log the action', async () => {
+    it('should create and save a CUSTOMER user with an auto-provisioned customer profile', async () => {
       const dto: CreateUserDto = {
         email: 'new@example.com',
         password: 'pass',
+        role: Role.CUSTOMER,
       } as CreateUserDto;
-      mockUsersRepository.findOne.mockResolvedValueOnce(null);
-      mockUsersRepository.create.mockReturnValueOnce({ ...dto, id: 2 });
-      mockUsersRepository.save.mockResolvedValueOnce({ ...dto, id: 2 });
-      const loggerSpy = jest.spyOn(service['logger'], 'log');
+      const created = { ...dto, id: 2, password: 'hashed' };
+      mockUsersRepository.findOne.mockResolvedValueOnce(null); // no existing user
+      mockUsersRepository.create.mockReturnValueOnce(created);
+      mockUsersRepository.save.mockResolvedValueOnce(created);
+      mockCustomerProfilesRepository.create.mockReturnValueOnce({
+        user: created,
+      });
+      mockCustomerProfilesRepository.save.mockResolvedValueOnce({});
 
       const result = await service.createUser(dto);
 
-      expect(usersRepository.create).toHaveBeenCalledWith({
-        ...dto,
-        password: expect.any(String),
+      expect(mockUsersRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({ email: dto.email }),
+      );
+      expect(mockUsersRepository.save).toHaveBeenCalledWith(created);
+      expect(mockCustomerProfilesRepository.save).toHaveBeenCalled();
+      expect(result).toEqual({
+        message: SUCCESS_MESSAGES.USER.CREATED,
+        data: created,
       });
-      expect(loggerSpy).toHaveBeenCalledWith('Created user with id: 2');
-      expect(usersRepository.save).toHaveBeenCalledWith({ ...dto, id: 2 });
-      expect(result).toEqual({ ...dto, id: 2 });
-    });
-  });
-
-  describe('findUser', () => {
-    it('should log and return all users', async () => {
-      const users = [mockUser];
-      mockUsersRepository.find.mockResolvedValueOnce(users);
-      const loggerSpy = jest.spyOn(service['logger'], 'log');
-
-      const result = await service.findUser();
-
-      expect(loggerSpy).toHaveBeenCalledWith('Retrieving all users');
-      expect(usersRepository.find).toHaveBeenCalled();
-      expect(result).toEqual(users);
     });
   });
 
   describe('findUserByEmail', () => {
     it('should throw NotFoundException if email is missing', async () => {
-      await expect(service.findUserByEmail(undefined as any)).rejects.toThrow(
-        NotFoundException,
-      );
+      await expect(
+        service.findUserByEmail(undefined as unknown as string),
+      ).rejects.toThrow(NotFoundException);
     });
 
-    it('should log and return user if found', async () => {
+    it('should return the user if found', async () => {
       mockUsersRepository.findOne.mockResolvedValueOnce(mockUser);
-      const loggerSpy = jest.spyOn(service['logger'], 'log');
       const result = await service.findUserByEmail(mockUser.email);
 
-      expect(loggerSpy).toHaveBeenCalledWith(
-        `Finding user with email ${mockUser.email}`,
-      );
-      expect(usersRepository.findOne).toHaveBeenCalledWith({
+      expect(mockUsersRepository.findOne).toHaveBeenCalledWith({
         where: { email: mockUser.email },
       });
       expect(result).toEqual(mockUser);
@@ -121,22 +153,57 @@ describe('UsersService', () => {
     });
   });
 
-  describe('findOne', () => {
-    it('should return a user string by id', () => {
-      expect(service.findOne(2)).toBe('This action returns a #2 user');
+  describe('findMe', () => {
+    it('should throw NotFoundException when the user does not exist', async () => {
+      mockUsersRepository.findOne.mockResolvedValueOnce(null);
+      await expect(service.findMe(999)).rejects.toThrow(NotFoundException);
+    });
+
+    it('should return the wrapped user profile when found', async () => {
+      mockUsersRepository.findOne.mockResolvedValueOnce(mockUser);
+      const result = await service.findMe(mockUser.id);
+      expect(result.message).toBe(SUCCESS_MESSAGES.USER.RETRIEVED);
+      expect(result.data.id).toBe(mockUser.id);
     });
   });
 
-  describe('update', () => {
-    it('should return an update string by id', () => {
-      const dto: UpdateUserDto = { name: 'Updated' } as UpdateUserDto;
-      expect(service.update(3, dto)).toBe('This action updates a #3 user');
+  describe('deleteMe', () => {
+    it('should throw NotFoundException when the user does not exist', async () => {
+      mockUsersRepository.findOne.mockResolvedValueOnce(null);
+      await expect(service.deleteMe(999)).rejects.toThrow(NotFoundException);
+    });
+
+    it('should revoke refresh tokens and soft-delete the user', async () => {
+      mockUsersRepository.findOne.mockResolvedValueOnce(mockUser);
+      const result = await service.deleteMe(mockUser.id);
+
+      expect(
+        mockUserTokenService.revokeRefreshTokenForUser,
+      ).toHaveBeenCalledWith(mockUser.id);
+      expect(mockUsersRepository.softDelete).toHaveBeenCalledWith({
+        id: mockUser.id,
+      });
+      expect(result).toEqual({ message: SUCCESS_MESSAGES.USER.DELETED });
+    });
+  });
+
+  describe('findOne', () => {
+    it('should query by id, selecting only the password column', async () => {
+      mockUsersRepository.findOne.mockResolvedValueOnce(mockUser);
+      const result = await service.findOne(mockUser.id);
+
+      expect(mockUsersRepository.findOne).toHaveBeenCalledWith({
+        where: { id: mockUser.id },
+        select: ['password'],
+      });
+      expect(result).toEqual(mockUser);
     });
   });
 
   describe('remove', () => {
-    it('should return a remove string by id', () => {
-      expect(service.remove(4)).toBe('This action removes a #4 user');
+    it('should delete the user by id', async () => {
+      await service.remove(mockUser.id);
+      expect(mockUsersRepository.delete).toHaveBeenCalledWith(mockUser.id);
     });
   });
 });
