@@ -35,9 +35,21 @@ export class ReviewModerationActionResponseDto {
   @Expose()
   actorRole?: string;
 
+  @ApiPropertyOptional({ example: 10 })
+  @Expose()
+  reviewerId?: number;
+
   @ApiPropertyOptional({ example: 'Kwame Asante' })
   @Expose()
   reviewerName?: string;
+
+  @ApiPropertyOptional({
+    example: 5,
+    description:
+      "The ArtisanProfile id — usable to link to the artisan's current profile.",
+  })
+  @Expose()
+  artisanProfileId?: number;
 
   @ApiPropertyOptional({ example: 'Kofi Home Services' })
   @Expose()
