@@ -415,7 +415,13 @@ export class ReviewsService {
       throw new NotFoundException(ERROR_MESSAGES.REVIEW.NOT_FOUND(id));
     }
 
+    // `viewerId !== undefined` must be checked explicitly here: if the
+    // original reviewer's account was later deleted, `review.reviewerUser`
+    // is `undefined` too (SET NULL) — without this guard, an anonymous
+    // caller (`viewerId` also `undefined`) would satisfy
+    // `undefined === undefined` and be wrongly treated as the owner.
     const isOwnFlaggedReview =
+      viewerId !== undefined &&
       review.status === ReviewStatus.FLAGGED &&
       review.reviewerUser?.id === viewerId;
 

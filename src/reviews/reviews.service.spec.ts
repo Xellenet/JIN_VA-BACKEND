@@ -314,6 +314,18 @@ describe('ReviewsService', () => {
       );
     });
 
+    it('404s a FLAGGED review with a deleted reviewer account for an unauthenticated caller (regression: undefined === undefined)', async () => {
+      // `reviewerUser` is `undefined` here (SET NULL, account deleted) — an
+      // anonymous caller (`viewerId` also `undefined`) must not be treated
+      // as the owner just because both sides are `undefined`.
+      mockReviewsRepo.findOne.mockResolvedValueOnce(
+        baseReview({ status: ReviewStatus.FLAGGED, reviewerUser: undefined }),
+      );
+      await expect(service.findOne(1, undefined)).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
     it('still returns a FLAGGED review to its original reviewer', async () => {
       mockReviewsRepo.findOne.mockResolvedValueOnce(
         baseReview({ status: ReviewStatus.FLAGGED }),
