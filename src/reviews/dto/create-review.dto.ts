@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   ArrayMaxSize,
+  IsArray,
   IsInt,
   IsNumber,
   IsOptional,
@@ -54,6 +55,8 @@ export class CreateReviewDto {
       'may be submitted with zero photos.',
   })
   @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
   @IsAttachmentUrl({ each: true })
   @ArrayMaxSize(VARIABLES.REVIEW_MAX_PHOTOS)
   photoUrls?: string[];
