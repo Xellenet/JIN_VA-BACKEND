@@ -39,6 +39,12 @@ import {
 } from '../disputes/dto/resolve-dispute.dto';
 import { PortfolioService } from '../portfolio/portfolio.service';
 import { RejectPortfolioItemDto } from '../portfolio/dto/reject-portfolio-item.dto';
+import { ReviewsService } from '../reviews/reviews.service';
+import {
+  AdminReviewsQueryDto,
+  ModerationLogQueryDto,
+} from '../reviews/dto/admin-reviews-query.dto';
+import { RemoveReviewDto } from '../reviews/dto/remove-review.dto';
 import type { AuthenticatedRequest } from '@common/types/authenticated-request.type';
 
 @ApiTags('Admin')
@@ -52,6 +58,7 @@ export class AdminController {
     private readonly verificationService: VerificationService,
     private readonly disputesService: DisputesService,
     private readonly portfolioService: PortfolioService,
+    private readonly reviewsService: ReviewsService,
   ) {}
 
   // ─── Stats ────────────────────────────────────────────────────────────────────
@@ -268,5 +275,55 @@ export class AdminController {
     @Body() dto: RejectPortfolioItemDto,
   ) {
     return this.portfolioService.reject(id, dto);
+  }
+
+  // ─── Review moderation (AM2–AM5) ────────────────────────────────────────────────
+
+  @Get('reviews/moderation-log')
+  @ApiOperation({
+    summary:
+      'AM5: paginated, append-only log of every flag/remove/restore action — ' +
+      'the only surviving record for reviews that have since been permanently removed',
+  })
+  getReviewModerationLog(@Query() query: ModerationLogQueryDto) {
+    return this.reviewsService.getModerationLog(query);
+  }
+
+  @Get('reviews')
+  @ApiOperation({
+    summary:
+      'AM2: list all reviews for moderation, optionally filtered by status',
+  })
+  listReviews(@Query() query: AdminReviewsQueryDto) {
+    return this.reviewsService.adminFindAll(query);
+  }
+
+  @Patch('reviews/:id/remove')
+  @ApiOperation({
+    summary:
+      'AM3: permanently delete a review with a mandatory logged reason (hard delete — ' +
+      'not reversible). The reason/actor/snapshot survive in the moderation log (AM5).',
+  })
+  @ApiParam({ name: 'id', type: Number })
+  removeReview(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: RemoveReviewDto,
+  ) {
+    return this.reviewsService.adminRemove(req.user, id, dto);
+  }
+
+  @Patch('reviews/:id/restore')
+  @ApiOperation({
+    summary:
+      'AM4: restore a FLAGGED review back to ACTIVE (no-op reason required; ' +
+      'a REMOVED review cannot be restored — it no longer exists)',
+  })
+  @ApiParam({ name: 'id', type: Number })
+  restoreReview(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
+    return this.reviewsService.adminRestore(req.user, id);
   }
 }
