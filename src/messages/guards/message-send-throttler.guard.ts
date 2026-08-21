@@ -4,6 +4,12 @@ import type { ThrottlerLimitDetail } from '@nestjs/throttler';
 import type { ExecutionContext } from '@nestjs/common';
 
 /**
+ * The stable code a client matches on to recognise a send-rate-limit rejection,
+ * published in `api-contract.md` §3.1. Surfaced to the client as `meta.error`.
+ */
+export const MESSAGE_RATE_LIMIT_ERROR_CODE = 'MESSAGE_RATE_LIMIT_EXCEEDED';
+
+/**
  * RL1: per-sender rate limit on `POST /messages`.
  *
  * Two deliberate departures from the stock `ThrottlerGuard`:
@@ -22,6 +28,12 @@ import type { ExecutionContext } from '@nestjs/common';
  *    ("ThrottlerException: Too many requests"), which is exactly the opaque
  *    response the requirement rules out. `retryAfterSeconds` is included so the
  *    UI can tell the user *how long*, rather than just "shortly".
+ *
+ *    The two non-`message` keys are named `errorCode` and `retryAfterSeconds`
+ *    because those are the keys `AllExceptionsFilter` promotes into the error
+ *    envelope's `meta` (as `meta.error` and `meta.retryAfterSeconds`). Any other
+ *    key here would be dropped by that filter before the client ever saw it —
+ *    which is exactly what happened to the earlier `error:` key (QA B1).
  */
 @Injectable()
 export class MessageSendThrottlerGuard extends ThrottlerGuard {
@@ -42,8 +54,7 @@ export class MessageSendThrottlerGuard extends ThrottlerGuard {
     );
     throw new HttpException(
       {
-        statusCode: HttpStatus.TOO_MANY_REQUESTS,
-        error: 'MESSAGE_RATE_LIMIT_EXCEEDED',
+        errorCode: MESSAGE_RATE_LIMIT_ERROR_CODE,
         message: `You're sending messages too fast. Try again in about ${retryAfterSeconds} second${
           retryAfterSeconds === 1 ? '' : 's'
         }.`,

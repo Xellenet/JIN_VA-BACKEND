@@ -97,8 +97,22 @@ export class MessagesController {
   })
   @ApiTooManyRequestsResponse({
     description:
-      'RL1: send rate limit exceeded. Body carries `error: "MESSAGE_RATE_LIMIT_EXCEEDED"`, ' +
-      'a human-readable `message`, and `retryAfterSeconds`.',
+      'RL1: send rate limit exceeded. Match on `meta.error === "MESSAGE_RATE_LIMIT_EXCEEDED"`; ' +
+      '`meta.retryAfterSeconds` is how long to wait and top-level `message` is ready-to-display copy.',
+    schema: {
+      example: {
+        status: 'error',
+        message:
+          "You're sending messages too fast. Try again in about 42 seconds.",
+        meta: {
+          timestamp: '2026-08-21T18:00:00.000Z',
+          path: '/api/v1/messages',
+          statusCode: 429,
+          error: 'MESSAGE_RATE_LIMIT_EXCEEDED',
+          retryAfterSeconds: 42,
+        },
+      },
+    },
   })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
   send(@Req() req: AuthenticatedRequest, @Body() dto: SendMessageDto) {

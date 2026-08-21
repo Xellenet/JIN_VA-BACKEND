@@ -69,11 +69,13 @@ describe('MessageSendThrottlerGuard (RL1)', () => {
         expect(exception.getStatus()).toBe(HttpStatus.TOO_MANY_REQUESTS);
 
         const body = exception.getResponse() as {
-          error: string;
+          errorCode: string;
           message: string;
           retryAfterSeconds: number;
         };
-        expect(body.error).toBe('MESSAGE_RATE_LIMIT_EXCEEDED');
+        // `errorCode`, not `error`: only the former survives
+        // `AllExceptionsFilter` into the client-visible envelope (QA B1).
+        expect(body.errorCode).toBe('MESSAGE_RATE_LIMIT_EXCEEDED');
         expect(body.retryAfterSeconds).toBe(12);
         expect(body.message).toContain('sending messages too fast');
         expect(body.message).not.toBe('ThrottlerException: Too many requests');
