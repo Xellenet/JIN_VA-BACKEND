@@ -10,9 +10,9 @@ import type {
 export class ManualVerificationProvider implements IVerificationProvider {
   readonly providerName = 'manual';
 
-  async initiate(
+  initiate(
     _data: VerificationInitiateData,
   ): Promise<VerificationInitiateResult> {
-    return { initialStatus: VerificationStatus.PENDING };
+    return Promise.resolve({ initialStatus: VerificationStatus.PENDING });
   }
 }
