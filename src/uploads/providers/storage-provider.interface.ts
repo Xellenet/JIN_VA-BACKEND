@@ -1,4 +1,9 @@
-export type UploadFolder = 'avatars' | 'documents' | 'selfies' | 'portfolio';
+export type UploadFolder =
+  | 'avatars'
+  | 'documents'
+  | 'selfies'
+  | 'portfolio'
+  | 'job-attachments';
 
 export interface UploadOptions {
   folder: UploadFolder;
