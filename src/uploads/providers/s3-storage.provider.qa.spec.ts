@@ -13,17 +13,28 @@ import { S3StorageProvider } from './s3-storage.provider';
  * produce this coverage.
  */
 
-const sendMock = jest.fn();
+interface MockCommand {
+  __type: 'Put' | 'Delete';
+  input: Record<string, unknown>;
+}
+
+const sendMock = jest.fn<Promise<unknown>, [MockCommand]>();
 
 jest.mock('@aws-sdk/client-s3', () => {
   return {
     S3Client: jest.fn().mockImplementation(() => ({ send: sendMock })),
     PutObjectCommand: jest
       .fn()
-      .mockImplementation((input) => ({ __type: 'Put', input })),
+      .mockImplementation((input: Record<string, unknown>) => ({
+        __type: 'Put',
+        input,
+      })),
     DeleteObjectCommand: jest
       .fn()
-      .mockImplementation((input) => ({ __type: 'Delete', input })),
+      .mockImplementation((input: Record<string, unknown>) => ({
+        __type: 'Delete',
+        input,
+      })),
   };
 });
 
@@ -61,7 +72,7 @@ describe('S3StorageProvider (QA — mocked S3 client, PF2a)', () => {
     expect(sentCommand.input.ContentType).toBe('image/jpeg');
     expect(result.folder).toBe('portfolio');
     expect(result.url).toBe(
-      `https://jinva-portfolio-test.s3.eu-west-1.amazonaws.com/${sentCommand.input.Key}`,
+      `https://jinva-portfolio-test.s3.eu-west-1.amazonaws.com/${String(sentCommand.input.Key)}`,
     );
   });
 

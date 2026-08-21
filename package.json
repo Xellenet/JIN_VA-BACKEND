@@ -155,7 +155,8 @@
       "^@artisans/(.*)$": "<rootDir>/artisans/$1",
       "^@messages/(.*)$": "<rootDir>/messages/$1",
       "^@notifications/(.*)$": "<rootDir>/notifications/$1",
-      "^mail/(.*)$": "<rootDir>/mail/$1"
+      "^mail/(.*)$": "<rootDir>/mail/$1",
+      "^config/(.*)$": "<rootDir>/config/$1"
     }
   },
   "config": {

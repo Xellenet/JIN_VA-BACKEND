@@ -38,6 +38,7 @@ import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ResendVerificationDto } from './dto/resend-verification.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import type { AuthenticatedRequest } from '@common/types/authenticated-request.type';
 import {
   setRefreshTokenCookie,
   clearRefreshTokenCookie,
@@ -383,7 +384,7 @@ export class AuthController {
   })
   async changePassword(
     @Body() changePasswordDto: ChangePasswordDto,
-    @Req() req: any,
+    @Req() req: AuthenticatedRequest,
     @Res({ passthrough: true }) res: Response,
   ): Promise<LoginResponseDto> {
     const { result, refreshToken } = await this.authService.changePassword(

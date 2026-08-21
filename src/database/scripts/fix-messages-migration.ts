@@ -1,6 +1,7 @@
 import { DataSource } from 'typeorm';
 import { config } from 'dotenv';
 import { SnakeNamingStrategy } from 'typeorm-naming-strategies';
+import { getErrorMessage } from '@common/utils/error.util';
 
 config();
 
@@ -108,7 +109,7 @@ async function fix() {
   );
 }
 
-fix().catch((err) => {
-  console.error('Fix failed:', err.message);
+fix().catch((err: unknown) => {
+  console.error('Fix failed:', getErrorMessage(err));
   process.exit(1);
 });

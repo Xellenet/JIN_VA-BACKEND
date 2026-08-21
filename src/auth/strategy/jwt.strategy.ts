@@ -4,6 +4,7 @@ import { UsersService } from '@users/users.service';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import type { JwtPayload } from '@common/types/jwt-payload.type';
 
 function loadPublicKey(): string {
   if (process.env.JWT_PUBLIC_KEY) {
@@ -23,7 +24,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
   }
 
-  async validate(payload: any) {
+  async validate(payload: JwtPayload) {
     const user = await this.userService.findUserByEmail(payload.email);
     if (user?.isBanned) {
       throw new UnauthorizedException(

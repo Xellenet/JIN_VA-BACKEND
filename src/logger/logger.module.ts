@@ -11,8 +11,16 @@ import * as winston from 'winston';
           format: winston.format.combine(
             winston.format.timestamp(),
             winston.format.colorize(),
-            winston.format.printf(({ level, message, context, timestamp }) => {
-              return `[${timestamp}] ${level} ${context ? '[' + context + ']' : ''}: ${message}`;
+            winston.format.printf((info) => {
+              const { level, message, context, timestamp } = info as {
+                level: string;
+                message: unknown;
+                timestamp: unknown;
+                context?: string;
+              };
+              return `[${String(timestamp)}] ${level} ${
+                context ? '[' + context + ']' : ''
+              }: ${String(message)}`;
             }),
           ),
         }),

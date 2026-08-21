@@ -33,6 +33,7 @@ import { GetJobsQueryDto } from './dto/get-jobs-query.dto';
 import { JobResponseDto } from './dto/job-response.dto';
 import { CreateApplicationDto } from './dto/create-application.dto';
 import { ApplicationResponseDto } from './dto/application-response.dto';
+import type { AuthenticatedRequest } from '@common/types/authenticated-request.type';
 
 /**
  * Manages the full job lifecycle: posting, browsing, artisan applications,
@@ -70,7 +71,7 @@ export class JobsController {
   @ApiForbiddenResponse({
     description: 'Caller does not have the CUSTOMER role',
   })
-  create(@Body() createJobDto: CreateJobDto, @Req() req: any) {
+  create(@Body() createJobDto: CreateJobDto, @Req() req: AuthenticatedRequest) {
     return this.jobsService.create(createJobDto, req.user);
   }
 
@@ -114,7 +115,7 @@ export class JobsController {
   @ApiForbiddenResponse({
     description: 'Caller does not have the CUSTOMER role',
   })
-  findMine(@Req() req: any, @Query() query: GetJobsQueryDto) {
+  findMine(@Req() req: AuthenticatedRequest, @Query() query: GetJobsQueryDto) {
     return this.jobsService.findMine(req.user.id, query);
   }
 
@@ -159,7 +160,7 @@ export class JobsController {
   update(
     @Param('id', ParseIntPipe) id: number,
     @Body() updateJobDto: UpdateJobDto,
-    @Req() req: any,
+    @Req() req: AuthenticatedRequest,
   ) {
     return this.jobsService.update(id, updateJobDto, req.user.id);
   }
@@ -181,7 +182,10 @@ export class JobsController {
   @ApiForbiddenResponse({
     description: 'Caller does not own this job or lacks CUSTOMER role',
   })
-  remove(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+  remove(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() req: AuthenticatedRequest,
+  ) {
     return this.jobsService.remove(id, req.user.id);
   }
 
@@ -212,7 +216,7 @@ export class JobsController {
   applyToJob(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: CreateApplicationDto,
-    @Req() req: any,
+    @Req() req: AuthenticatedRequest,
   ) {
     return this.jobsService.applyToJob(id, req.user.id, dto);
   }
@@ -236,7 +240,10 @@ export class JobsController {
   @ApiForbiddenResponse({
     description: 'Caller does not own this job or lacks CUSTOMER role',
   })
-  getApplications(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+  getApplications(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() req: AuthenticatedRequest,
+  ) {
     return this.jobsService.getApplications(id, req.user.id);
   }
 
@@ -266,7 +273,7 @@ export class JobsController {
   acceptApplication(
     @Param('id', ParseIntPipe) id: number,
     @Param('appId', ParseIntPipe) appId: number,
-    @Req() req: any,
+    @Req() req: AuthenticatedRequest,
   ) {
     return this.jobsService.acceptApplication(id, appId, req.user.id);
   }
@@ -294,7 +301,10 @@ export class JobsController {
   @ApiForbiddenResponse({
     description: 'Caller is not the accepted artisan or lacks ARTISAN role',
   })
-  startJob(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+  startJob(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() req: AuthenticatedRequest,
+  ) {
     return this.jobsService.startJob(id, req.user.id);
   }
 
@@ -321,7 +331,10 @@ export class JobsController {
   @ApiForbiddenResponse({
     description: 'Caller is not the accepted artisan or lacks ARTISAN role',
   })
-  requestCompletion(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+  requestCompletion(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() req: AuthenticatedRequest,
+  ) {
     return this.jobsService.requestCompletion(id, req.user.id);
   }
 
@@ -348,7 +361,10 @@ export class JobsController {
   @ApiForbiddenResponse({
     description: 'Caller does not own this job or lacks CUSTOMER role',
   })
-  confirmCompletion(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+  confirmCompletion(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() req: AuthenticatedRequest,
+  ) {
     return this.jobsService.confirmCompletion(id, req.user.id);
   }
 
@@ -371,7 +387,10 @@ export class JobsController {
   @ApiForbiddenResponse({
     description: 'Caller does not own this job or lacks CUSTOMER role',
   })
-  cancelJob(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+  cancelJob(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() req: AuthenticatedRequest,
+  ) {
     return this.jobsService.cancelJob(id, req.user.id);
   }
 }

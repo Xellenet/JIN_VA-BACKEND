@@ -13,6 +13,7 @@ import {
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
+  ApiExtraModels,
   ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
@@ -26,6 +27,7 @@ import { NotificationResponseDto } from './dto/notification-response.dto';
 import { CustomerNotificationPreferencesResponseDto } from './dto/customer-notification-preferences-response.dto';
 import { ArtisanNotificationPreferencesResponseDto } from './dto/artisan-notification-preferences-response.dto';
 import { UpdateNotificationPreferencesDto } from './dto/update-notification-preferences.dto';
+import type { AuthenticatedRequest } from '@common/types/authenticated-request.type';
 
 /**
  * In-app notification feed for the authenticated user.
@@ -35,6 +37,10 @@ import { UpdateNotificationPreferencesDto } from './dto/update-notification-pref
 @Controller('notifications')
 @UseGuards(JwtAuthGuard)
 @ApiBearerAuth()
+@ApiExtraModels(
+  CustomerNotificationPreferencesResponseDto,
+  ArtisanNotificationPreferencesResponseDto,
+)
 export class NotificationsController {
   constructor(private readonly notificationsService: NotificationsService) {}
 
@@ -66,7 +72,7 @@ export class NotificationsController {
     },
   })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
-  getPreferences(@Req() req: any) {
+  getPreferences(@Req() req: AuthenticatedRequest) {
     return this.notificationsService.getPreferences(req.user.id);
   }
 
@@ -99,7 +105,7 @@ export class NotificationsController {
   })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
   updatePreferences(
-    @Req() req: any,
+    @Req() req: AuthenticatedRequest,
     @Body() dto: UpdateNotificationPreferencesDto,
   ) {
     return this.notificationsService.updatePreferences(req.user.id, dto);
@@ -117,7 +123,7 @@ export class NotificationsController {
     schema: { properties: { count: { type: 'number' } } },
   })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
-  getUnreadCount(@Req() req: any) {
+  getUnreadCount(@Req() req: AuthenticatedRequest) {
     return this.notificationsService.getUnreadCount(req.user.id);
   }
 
@@ -132,7 +138,10 @@ export class NotificationsController {
     type: [NotificationResponseDto],
   })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
-  findAll(@Req() req: any, @Query() query: GetNotificationsQueryDto) {
+  findAll(
+    @Req() req: AuthenticatedRequest,
+    @Query() query: GetNotificationsQueryDto,
+  ) {
     return this.notificationsService.findAll(req.user.id, query);
   }
 
@@ -145,7 +154,7 @@ export class NotificationsController {
   @ApiOperation({ summary: 'Mark all notifications as read' })
   @ApiOkResponse({ description: 'All notifications marked as read' })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
-  markAllRead(@Req() req: any) {
+  markAllRead(@Req() req: AuthenticatedRequest) {
     return this.notificationsService.markAllRead(req.user.id);
   }
 
@@ -158,7 +167,10 @@ export class NotificationsController {
   @ApiOkResponse({ description: 'Notification marked as read' })
   @ApiNotFoundResponse({ description: 'Notification not found' })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
-  markRead(@Req() req: any, @Param('id', ParseIntPipe) id: number) {
+  markRead(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
     return this.notificationsService.markRead(req.user.id, id);
   }
 }

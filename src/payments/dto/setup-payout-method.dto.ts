@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsEnum, IsString, MinLength, Matches } from 'class-validator';
+import { IsEnum, IsString, MinLength } from 'class-validator';
 
 export class SetupPayoutMethodDto {
   @ApiProperty({

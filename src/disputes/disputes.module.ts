@@ -2,11 +2,13 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Dispute } from './entities/dispute.entity';
 import { Booking } from '../bookings/entities/booking.entity';
+import { Job } from '@jobs/entities/job.entity';
+import { Payment } from '../payments/entities/payment.entity';
 import { DisputesService } from './disputes.service';
 import { DisputesController } from './disputes.controller';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Dispute, Booking])],
+  imports: [TypeOrmModule.forFeature([Dispute, Booking, Job, Payment])],
   controllers: [DisputesController],
   providers: [DisputesService],
   exports: [DisputesService],

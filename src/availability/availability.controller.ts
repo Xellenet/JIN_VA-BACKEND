@@ -10,6 +10,7 @@ import {
   Patch,
   Post,
   Put,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -18,10 +19,10 @@ import {
   ApiBearerAuth,
   ApiCreatedResponse,
   ApiForbiddenResponse,
-  ApiNoContentResponse,
   ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
+  ApiQuery,
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
@@ -33,10 +34,14 @@ import { AvailabilityService } from './availability.service';
 import { SetAvailabilityStatusDto } from './dto/set-availability-status.dto';
 import { CreateAvailabilitySlotDto } from './dto/create-availability-slot.dto';
 import { UpdateAvailabilitySlotDto } from './dto/update-availability-slot.dto';
+import { CreateBlockedSlotDto } from './dto/create-blocked-slot.dto';
+import { GetAvailabilityQueryDto } from './dto/get-availability-query.dto';
 import {
   ArtisanAvailabilityResponseDto,
   AvailabilitySlotResponseDto,
+  BlockedSlotResponseDto,
 } from './dto/availability-response.dto';
+import type { AuthenticatedRequest } from '@common/types/authenticated-request.type';
 
 @ApiTags('Availability')
 @Controller('availability')
@@ -58,7 +63,7 @@ export class AvailabilityController {
   @ApiOkResponse({ type: ArtisanAvailabilityResponseDto })
   @ApiForbiddenResponse({ description: 'Caller is not an artisan' })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT' })
-  getMyAvailability(@Req() req: any) {
+  getMyAvailability(@Req() req: AuthenticatedRequest) {
     return this.availabilityService.getMyAvailability(req.user.id);
   }
 
@@ -74,7 +79,10 @@ export class AvailabilityController {
   @ApiOkResponse({ type: ArtisanAvailabilityResponseDto })
   @ApiBadRequestResponse({ description: 'Invalid status value' })
   @ApiForbiddenResponse({ description: 'Caller is not an artisan' })
-  setStatus(@Req() req: any, @Body() dto: SetAvailabilityStatusDto) {
+  setStatus(
+    @Req() req: AuthenticatedRequest,
+    @Body() dto: SetAvailabilityStatusDto,
+  ) {
     return this.availabilityService.setStatus(req.user.id, dto);
   }
 
@@ -93,7 +101,10 @@ export class AvailabilityController {
     description: 'Invalid times or overlap with existing slot',
   })
   @ApiForbiddenResponse({ description: 'Caller is not an artisan' })
-  addSlot(@Req() req: any, @Body() dto: CreateAvailabilitySlotDto) {
+  addSlot(
+    @Req() req: AuthenticatedRequest,
+    @Body() dto: CreateAvailabilitySlotDto,
+  ) {
     return this.availabilityService.addSlot(req.user.id, dto);
   }
 
@@ -112,7 +123,7 @@ export class AvailabilityController {
   })
   @ApiForbiddenResponse({ description: 'Caller is not an artisan' })
   updateSlot(
-    @Req() req: any,
+    @Req() req: AuthenticatedRequest,
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateAvailabilitySlotDto,
   ) {
@@ -129,8 +140,59 @@ export class AvailabilityController {
     description: 'Slot not found (or belongs to another artisan)',
   })
   @ApiForbiddenResponse({ description: 'Caller is not an artisan' })
-  removeSlot(@Req() req: any, @Param('id', ParseIntPipe) id: number) {
+  removeSlot(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
     return this.availabilityService.removeSlot(req.user.id, id);
+  }
+
+  // ─── A1: blocked dates / time-off (ownership-scoped, artisan only) ───────────
+
+  @Post('my/blocks')
+  @UseGuards(RolesGuard)
+  @Roles(Role.ARTISAN)
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    summary: 'A1: block a date range (holiday/time-off) on my own calendar',
+  })
+  @ApiCreatedResponse({ type: BlockedSlotResponseDto })
+  @ApiBadRequestResponse({
+    description: 'endDate before startDate, or range entirely in the past',
+  })
+  @ApiForbiddenResponse({ description: 'Caller is not an artisan' })
+  addBlock(
+    @Req() req: AuthenticatedRequest,
+    @Body() dto: CreateBlockedSlotDto,
+  ) {
+    return this.availabilityService.addBlock(req.user.id, dto);
+  }
+
+  @Get('my/blocks')
+  @UseGuards(RolesGuard)
+  @Roles(Role.ARTISAN)
+  @ApiOperation({ summary: 'A1: list my own blocked date ranges' })
+  @ApiOkResponse({ type: [BlockedSlotResponseDto] })
+  @ApiForbiddenResponse({ description: 'Caller is not an artisan' })
+  listMyBlocks(@Req() req: AuthenticatedRequest) {
+    return this.availabilityService.listMyBlocks(req.user.id);
+  }
+
+  @Delete('my/blocks/:id')
+  @UseGuards(RolesGuard)
+  @Roles(Role.ARTISAN)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'A1: delete one of my own blocked date ranges' })
+  @ApiOkResponse({ description: 'Block removed' })
+  @ApiNotFoundResponse({
+    description: 'Block not found (or belongs to another artisan)',
+  })
+  @ApiForbiddenResponse({ description: 'Caller is not an artisan' })
+  removeBlock(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
+    return this.availabilityService.removeBlock(req.user.id, id);
   }
 
   // ─── Public read ─────────────────────────────────────────────────────────────
@@ -139,14 +201,21 @@ export class AvailabilityController {
   @ApiOperation({
     summary: "Get an artisan's public availability",
     description:
-      "Returns the artisan's status and their active weekly slots. Available to all authenticated users.",
+      "Returns the artisan's status and their active weekly slots. Available to all authenticated users. " +
+      'R1a: pass `?date=YYYY-MM-DD` to additionally receive `bookableSlots` for that date ' +
+      '(weekly hours minus A1 blocks minus PENDING/CONFIRMED bookings). Omitting `date` preserves the legacy shape.',
   })
+  @ApiQuery({ name: 'date', required: false, example: '2026-08-24' })
   @ApiOkResponse({ type: ArtisanAvailabilityResponseDto })
   @ApiNotFoundResponse({ description: 'Artisan profile not found' })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT' })
   getArtisanAvailability(
     @Param('artisanProfileId', ParseIntPipe) artisanProfileId: number,
+    @Query() query: GetAvailabilityQueryDto,
   ) {
-    return this.availabilityService.getArtisanAvailability(artisanProfileId);
+    return this.availabilityService.getArtisanAvailability(
+      artisanProfileId,
+      query.date,
+    );
   }
 }

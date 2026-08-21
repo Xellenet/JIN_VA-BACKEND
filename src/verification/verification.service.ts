@@ -25,6 +25,7 @@ import type {
   ArtisanVerificationSubmittedPayload,
 } from '@common/events/app.events';
 import { ArtisanProfile } from '@users/entities/artisan-profile.entity';
+import { User } from '@users/entities/user.entity';
 
 @Injectable()
 export class VerificationService {
@@ -193,7 +194,7 @@ export class VerificationService {
       );
     }
     verification.status = VerificationStatus.UNDER_REVIEW;
-    verification.reviewedBy = { id: adminUserId } as any;
+    verification.reviewedBy = { id: adminUserId } as User;
     verification.reviewedById = adminUserId;
     await this.repo.save(verification);
     return { message: 'Review started. Status is now UNDER_REVIEW.' };
@@ -218,7 +219,7 @@ export class VerificationService {
 
     verification.status = VerificationStatus.APPROVED;
     verification.reviewedById = adminUserId;
-    verification.reviewedBy = { id: adminUserId } as any;
+    verification.reviewedBy = { id: adminUserId } as User;
     verification.reviewedAt = new Date();
     if (dto.notes) verification.adminNotes = dto.notes;
 
@@ -254,7 +255,7 @@ export class VerificationService {
     verification.status = VerificationStatus.REJECTED;
     verification.rejectionReason = dto.reason;
     verification.reviewedById = adminUserId;
-    verification.reviewedBy = { id: adminUserId } as any;
+    verification.reviewedBy = { id: adminUserId } as User;
     verification.reviewedAt = new Date();
     if (dto.notes) verification.adminNotes = dto.notes;
 

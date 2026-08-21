@@ -5,6 +5,18 @@ import { firstValueFrom } from 'rxjs';
 import { SocialUserProfile } from '@common/types/user-interfaces.type';
 import { VARIABLES } from '@common/constants/variables.constants';
 
+interface GoogleTokenResponse {
+  access_token: string;
+}
+
+interface GoogleUserInfoResponse {
+  email: string;
+  given_name: string;
+  family_name: string;
+  picture: string;
+  sub: string;
+}
+
 @Injectable()
 export class GoogleAuthStrategy implements SocialAuthStrategy {
   private readonly clientId: string;
@@ -53,7 +65,7 @@ export class GoogleAuthStrategy implements SocialAuthStrategy {
     this.logger.log(`Exchanging Google authorization code for access token`);
     try {
       const { data } = await firstValueFrom(
-        this.httpService.post(VARIABLES.GOOGLE_TOKEN_URL, {
+        this.httpService.post<GoogleTokenResponse>(VARIABLES.GOOGLE_TOKEN_URL, {
           code,
           client_id: this.clientId,
           client_secret: this.clientSecret,
@@ -78,7 +90,7 @@ export class GoogleAuthStrategy implements SocialAuthStrategy {
     this.logger.log(`Fetching Google user profile using access token`);
     try {
       const { data } = await firstValueFrom(
-        this.httpService.get(
+        this.httpService.get<GoogleUserInfoResponse>(
           `${VARIABLES.GOOGLE_USERINFO_URL}?access_token=${accessToken}`,
         ),
       );

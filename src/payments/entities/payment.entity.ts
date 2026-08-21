@@ -80,6 +80,23 @@ export class Payment {
   @Column({ name: 'transfer_code', nullable: true })
   transferCode?: string;
 
+  /**
+   * Cumulative amount refunded so far (GHS). Tracked separately from `amount`
+   * so a partial refund can be validated against the *remaining* refundable
+   * balance rather than the original total, and so the actual refunded
+   * amount survives after `status` flips to REFUNDED on a full refund.
+   * See security-report.md finding #4 and qa-report.md's "partial-refund
+   * amount isn't persisted" finding.
+   */
+  @Column({
+    name: 'refunded_amount',
+    type: 'decimal',
+    precision: 10,
+    scale: 2,
+    default: 0,
+  })
+  refundedAmount!: number;
+
   @Column({ name: 'paid_at', type: 'timestamptz', nullable: true })
   paidAt?: Date;
 

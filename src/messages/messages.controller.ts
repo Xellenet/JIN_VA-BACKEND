@@ -29,6 +29,7 @@ import { SendMessageDto } from './dto/send-message.dto';
 import { GetMessagesQueryDto } from './dto/get-messages-query.dto';
 import { MessageResponseDto } from './dto/message-response.dto';
 import { ConversationResponseDto } from './dto/conversation-response.dto';
+import type { AuthenticatedRequest } from '@common/types/authenticated-request.type';
 
 /**
  * Direct messaging between customers and artisans.
@@ -65,7 +66,7 @@ export class MessagesController {
   })
   @ApiNotFoundResponse({ description: 'Recipient user not found' })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
-  send(@Req() req: any, @Body() dto: SendMessageDto) {
+  send(@Req() req: AuthenticatedRequest, @Body() dto: SendMessageDto) {
     return this.messagesService.send(req.user.id, dto);
   }
 
@@ -84,7 +85,10 @@ export class MessagesController {
     type: [ConversationResponseDto],
   })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
-  getConversations(@Req() req: any, @Query() query: GetMessagesQueryDto) {
+  getConversations(
+    @Req() req: AuthenticatedRequest,
+    @Query() query: GetMessagesQueryDto,
+  ) {
     return this.messagesService.getConversations(req.user.id, query);
   }
 
@@ -109,7 +113,7 @@ export class MessagesController {
   })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
   getMessages(
-    @Req() req: any,
+    @Req() req: AuthenticatedRequest,
     @Param('id', ParseIntPipe) id: number,
     @Query() query: GetMessagesQueryDto,
   ) {
@@ -134,7 +138,10 @@ export class MessagesController {
     description: 'Caller is not a participant in this conversation',
   })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
-  markRead(@Req() req: any, @Param('id', ParseIntPipe) id: number) {
+  markRead(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
     return this.messagesService.markRead(req.user.id, id);
   }
 }

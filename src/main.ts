@@ -9,13 +9,14 @@ import { setupSwagger } from './config/swagger.config';
 import { ValidationPipe } from '@nestjs/common';
 import { join } from 'path';
 import cookieParser from 'cookie-parser';
+import type { Logger as WinstonLogger } from 'winston';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     bufferLogs: true,
     rawBody: true, // exposes req.rawBody — required for Paystack webhook signature verification
   });
-  const logger = app.get(WINSTON_MODULE_NEST_PROVIDER);
+  const logger = app.get<WinstonLogger>(WINSTON_MODULE_NEST_PROVIDER);
 
   app.useLogger(logger);
   app.useGlobalFilters(new AllExceptionsFilter(logger), new TypeOrmFilter());
@@ -48,4 +49,4 @@ async function bootstrap() {
   setupSwagger(app);
   await app.listen(process.env.PORT ?? 8000);
 }
-bootstrap();
+void bootstrap();

@@ -27,6 +27,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '@common/decorators/roles.decorator';
 import { Role } from '@common/types/enums';
+import type { AuthenticatedRequest } from '@common/types/authenticated-request.type';
 
 @ApiTags('Bookings')
 @ApiBearerAuth()
@@ -41,7 +42,7 @@ export class BookingsController {
   @UseGuards(RolesGuard)
   @Roles(Role.CUSTOMER)
   @ApiOperation({ summary: 'Create a booking request (customer only)' })
-  create(@Req() req: any, @Body() dto: CreateBookingDto) {
+  create(@Req() req: AuthenticatedRequest, @Body() dto: CreateBookingDto) {
     return this.bookingsService.create(req.user.id, dto);
   }
 
@@ -49,7 +50,10 @@ export class BookingsController {
   @UseGuards(RolesGuard)
   @Roles(Role.CUSTOMER)
   @ApiOperation({ summary: 'List my bookings (customer only)' })
-  getMyBookings(@Req() req: any, @Query() query: GetBookingsQueryDto) {
+  getMyBookings(
+    @Req() req: AuthenticatedRequest,
+    @Query() query: GetBookingsQueryDto,
+  ) {
     return this.bookingsService.getMyBookings(req.user.id, query);
   }
 
@@ -59,7 +63,10 @@ export class BookingsController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Cancel a booking (customer only)' })
   @ApiParam({ name: 'id', type: Number })
-  cancel(@Req() req: any, @Param('id', ParseIntPipe) id: number) {
+  cancel(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
     return this.bookingsService.cancel(req.user.id, id);
   }
 
@@ -68,8 +75,26 @@ export class BookingsController {
   @Roles(Role.CUSTOMER)
   @ApiOperation({ summary: 'Mark a booking as completed (customer only)' })
   @ApiParam({ name: 'id', type: Number })
-  complete(@Req() req: any, @Param('id', ParseIntPipe) id: number) {
+  complete(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
     return this.bookingsService.complete(req.user.id, id);
+  }
+
+  // ─── A6: no-show (either party to the booking) ─────────────────────────────────
+
+  @Patch(':id/no-show')
+  @ApiOperation({
+    summary:
+      'A6: flag the other party as a no-show (callable by either party to this booking, only after the scheduled end time has passed)',
+  })
+  @ApiParam({ name: 'id', type: Number })
+  flagNoShow(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
+    return this.bookingsService.flagNoShow(req.user.id, id);
   }
 
   // ─── Artisan routes ────────────────────────────────────────────────────────────
@@ -80,7 +105,10 @@ export class BookingsController {
   @ApiOperation({
     summary: 'List bookings for my artisan profile (artisan only)',
   })
-  getArtisanBookings(@Req() req: any, @Query() query: GetBookingsQueryDto) {
+  getArtisanBookings(
+    @Req() req: AuthenticatedRequest,
+    @Query() query: GetBookingsQueryDto,
+  ) {
     return this.bookingsService.getArtisanBookings(req.user.id, query);
   }
 
@@ -90,7 +118,7 @@ export class BookingsController {
   @ApiOperation({ summary: 'Confirm a booking request (artisan only)' })
   @ApiParam({ name: 'id', type: Number })
   confirm(
-    @Req() req: any,
+    @Req() req: AuthenticatedRequest,
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: RespondBookingDto,
   ) {
@@ -103,7 +131,7 @@ export class BookingsController {
   @ApiOperation({ summary: 'Decline a booking request (artisan only)' })
   @ApiParam({ name: 'id', type: Number })
   decline(
-    @Req() req: any,
+    @Req() req: AuthenticatedRequest,
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: RespondBookingDto,
   ) {
@@ -117,7 +145,10 @@ export class BookingsController {
     summary: 'Get a single booking (customer or artisan who owns it)',
   })
   @ApiParam({ name: 'id', type: Number })
-  findOne(@Req() req: any, @Param('id', ParseIntPipe) id: number) {
+  findOne(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
     return this.bookingsService.findOne(id, req.user.id);
   }
 }

@@ -19,14 +19,14 @@ export class UserMailListener {
 
   @OnEvent(MailEvent.USER_REGISTERED, { async: true })
   async handleUserRegistered(payload: UserRegisteredPayload) {
-    const verificationLink = `${this.config.get('FRONTEND_URL')}/verify-email?token=${payload.verificationToken}`;
+    const verificationLink = `${this.config.get<string>('FRONTEND_URL')}/verify-email?token=${payload.verificationToken}`;
 
     await this.mailService.sendMail(payload.email, MailEvent.USER_REGISTERED, {
       firstname: payload.firstname,
       verificationLink,
-      appName: this.config.get('APP_NAME'),
+      appName: this.config.get<string>('APP_NAME'),
       year: new Date().getFullYear(),
-      supportEmail: this.config.get('SUPPORT_EMAIL'),
+      supportEmail: this.config.get<string>('SUPPORT_EMAIL'),
     });
   }
 
@@ -34,21 +34,23 @@ export class UserMailListener {
   async handleUserVerified(payload: WelcomeUserPayload) {
     await this.mailService.sendMail(payload.email, MailEvent.WELCOME_USER, {
       firstname: payload.firstname,
-      appName: this.config.get('APP_NAME'),
+      appName: this.config.get<string>('APP_NAME'),
       year: new Date().getFullYear(),
     });
   }
 
   @OnEvent(MailEvent.PASSWORD_RESET, { async: true })
   async handlePasswordReset(payload: PasswordResetPayload) {
-    const resetLink = `${this.config.get('FRONTEND_URL')}/reset-password?token=${payload.resetToken}`;
+    const resetLink = `${this.config.get<string>('FRONTEND_URL')}/reset-password?token=${payload.resetToken}`;
     await this.mailService.sendMail(payload.email, MailEvent.PASSWORD_RESET, {
       firstname: payload.firstname,
       resetLink,
-      expiryMinutes: this.config.get('PASSWORD_RESET_TOKEN_EXPIRES_IN_MINUTES'),
-      appName: this.config.get('APP_NAME'),
+      expiryMinutes: this.config.get<number>(
+        'PASSWORD_RESET_TOKEN_EXPIRES_IN_MINUTES',
+      ),
+      appName: this.config.get<string>('APP_NAME'),
       year: new Date().getFullYear(),
-      supportEmail: this.config.get('SUPPORT_EMAIL'),
+      supportEmail: this.config.get<string>('SUPPORT_EMAIL'),
     });
   }
   @OnEvent(MailEvent.PASSWORD_RESET_SUCCESS, { async: true })
@@ -58,9 +60,9 @@ export class UserMailListener {
       MailEvent.PASSWORD_RESET_SUCCESS,
       {
         firstname: payload.firstname,
-        appName: this.config.get('APP_NAME'),
+        appName: this.config.get<string>('APP_NAME'),
         year: new Date().getFullYear(),
-        supportEmail: this.config.get('SUPPORT_EMAIL'),
+        supportEmail: this.config.get<string>('SUPPORT_EMAIL'),
       },
     );
   }
@@ -69,9 +71,9 @@ export class UserMailListener {
   async handlePasswordChanged(payload: PasswordResetSuccessPayload) {
     await this.mailService.sendMail(payload.email, MailEvent.PASSWORD_CHANGED, {
       firstname: payload.firstname,
-      appName: this.config.get('APP_NAME'),
+      appName: this.config.get<string>('APP_NAME'),
       year: new Date().getFullYear(),
-      supportEmail: this.config.get('SUPPORT_EMAIL'),
+      supportEmail: this.config.get<string>('SUPPORT_EMAIL'),
     });
   }
 }

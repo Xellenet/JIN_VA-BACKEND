@@ -20,6 +20,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '@common/decorators/roles.decorator';
 import { Role } from '@common/types/enums';
+import type { AuthenticatedRequest } from '@common/types/authenticated-request.type';
 
 @ApiTags('Disputes')
 @ApiBearerAuth()
@@ -33,20 +34,23 @@ export class DisputesController {
   @ApiOperation({
     summary: 'Raise a dispute on a booking (customer or artisan)',
   })
-  raise(@Req() req: any, @Body() dto: CreateDisputeDto) {
+  raise(@Req() req: AuthenticatedRequest, @Body() dto: CreateDisputeDto) {
     return this.disputesService.raise(req.user.id, dto);
   }
 
   @Get('my')
   @ApiOperation({ summary: 'List all disputes I have raised' })
-  getMyDisputes(@Req() req: any) {
+  getMyDisputes(@Req() req: AuthenticatedRequest) {
     return this.disputesService.getMyDisputes(req.user.id);
   }
 
   @Get('my/:id')
   @ApiOperation({ summary: 'Get a specific dispute I raised' })
   @ApiParam({ name: 'id', type: Number })
-  getMyDispute(@Req() req: any, @Param('id', ParseIntPipe) id: number) {
+  getMyDispute(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
     return this.disputesService.getMyDispute(req.user.id, id);
   }
 }

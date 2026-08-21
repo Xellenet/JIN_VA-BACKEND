@@ -72,6 +72,12 @@ export class ArtisanNotificationPreferencesResponseDto {
   bookingCompletedArtisan!: boolean;
 
   @Expose()
+  @ApiProperty({
+    description: '24h/2h pre-appointment reminders for your confirmed bookings',
+  })
+  bookingReminders!: boolean;
+
+  @Expose()
   @ApiProperty({ description: 'New direct message received' })
   messageReceived!: boolean;
 

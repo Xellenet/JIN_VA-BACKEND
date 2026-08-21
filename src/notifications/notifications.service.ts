@@ -31,6 +31,9 @@ import type {
   BookingDeclinedPayload,
   BookingCancelledPayload,
   BookingCompletedPayload,
+  BookingExpiredPayload,
+  BookingNoShowPayload,
+  BookingReminderPayload,
   SecurityAlertPayload,
   PortfolioApprovedPayload,
   PortfolioRejectedPayload,
@@ -65,6 +68,9 @@ const CUSTOMER_PREF_KEY: Partial<
   [NotificationType.JOB_EXPIRED]: 'jobExpired',
   [NotificationType.BOOKING_CONFIRMED]: 'bookingConfirmed',
   [NotificationType.BOOKING_DECLINED]: 'bookingDeclined',
+  [NotificationType.BOOKING_EXPIRED]: 'bookingDeclined',
+  [NotificationType.BOOKING_NO_SHOW]: 'bookingConfirmations',
+  [NotificationType.BOOKING_REMINDER]: 'serviceReminders',
   [NotificationType.MESSAGE_RECEIVED]: 'messageReceived',
 };
 
@@ -82,6 +88,8 @@ const ARTISAN_PREF_KEY: Partial<
   [NotificationType.BOOKING_RECEIVED]: 'bookingReceived',
   [NotificationType.BOOKING_CANCELLED]: 'bookingCancelled',
   [NotificationType.BOOKING_COMPLETED]: 'bookingCompletedArtisan',
+  [NotificationType.BOOKING_NO_SHOW]: 'bookingCancelled',
+  [NotificationType.BOOKING_REMINDER]: 'bookingReminders',
   [NotificationType.MESSAGE_RECEIVED]: 'messageReceived',
   [NotificationType.PORTFOLIO_APPROVED]: 'portfolioApproved',
   [NotificationType.PORTFOLIO_REJECTED]: 'portfolioRejected',
@@ -118,6 +126,7 @@ const ARTISAN_UPDATABLE = new Set<keyof NotificationPreferences>([
   'bookingReceived',
   'bookingCancelled',
   'bookingCompletedArtisan',
+  'bookingReminders',
   'messageReceived',
   'portfolioApproved',
   'portfolioRejected',
@@ -325,6 +334,49 @@ export class NotificationsService {
     );
   }
 
+  @OnEvent(APP_EVENTS.BOOKING_EXPIRED)
+  async handleBookingExpired(payload: BookingExpiredPayload) {
+    await this.persist(
+      payload.customerId,
+      NotificationType.BOOKING_EXPIRED,
+      'Booking Request Expired',
+      `Your booking request for ${payload.scheduledDate} expired without a response from the artisan.`,
+      { bookingId: payload.bookingId },
+    );
+  }
+
+  @OnEvent(APP_EVENTS.BOOKING_NO_SHOW)
+  async handleBookingNoShow(payload: BookingNoShowPayload) {
+    await this.persist(
+      payload.recipientUserId,
+      NotificationType.BOOKING_NO_SHOW,
+      'No-Show Reported',
+      `${payload.flaggedByName} reported you as a no-show for the ${payload.scheduledDate} appointment.`,
+      { bookingId: payload.bookingId },
+    );
+  }
+
+  @OnEvent(APP_EVENTS.BOOKING_REMINDER_24H)
+  async handleBookingReminder24h(payload: BookingReminderPayload) {
+    await this.persistReminder(payload);
+  }
+
+  @OnEvent(APP_EVENTS.BOOKING_REMINDER_2H)
+  async handleBookingReminder2h(payload: BookingReminderPayload) {
+    await this.persistReminder(payload);
+  }
+
+  private async persistReminder(payload: BookingReminderPayload) {
+    const hours = payload.milestone === '24H' ? '24 hours' : '2 hours';
+    await this.persist(
+      payload.recipientUserId,
+      NotificationType.BOOKING_REMINDER,
+      'Upcoming Appointment Reminder',
+      `Reminder: you have an appointment on ${payload.scheduledDate} at ${payload.startTime}, in about ${hours}.`,
+      { bookingId: payload.bookingId, milestone: payload.milestone },
+    );
+  }
+
   @OnEvent(APP_EVENTS.ARTISAN_VERIFICATION_REJECTED)
   async handleVerificationRejected(
     payload: ArtisanVerificationRejectedPayload,
@@ -480,12 +532,15 @@ export class NotificationsService {
     const allowedKeys =
       prefs.user.role === Role.ARTISAN ? ARTISAN_UPDATABLE : CUSTOMER_UPDATABLE;
 
-    for (const [key, value] of Object.entries(dto)) {
+    for (const [key, value] of Object.entries(dto) as [
+      string,
+      boolean | undefined,
+    ][]) {
       if (
         allowedKeys.has(key as keyof NotificationPreferences) &&
         value !== undefined
       ) {
-        (prefs as any)[key] = value;
+        (prefs as unknown as Record<string, boolean>)[key] = value;
       }
     }
 

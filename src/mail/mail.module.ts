@@ -6,9 +6,13 @@ import { MailTemplateService } from './mail.template';
 import { UserMailListener } from './listeners/user-mail.listener';
 import { DomainMailListener } from './listeners/domain-mail.listener';
 import { User } from '../users/entities/user.entity';
+import { NotificationPreferences } from '../notifications/entities/notification-preferences.entity';
 
 @Module({
-  imports: [ConfigModule, TypeOrmModule.forFeature([User])],
+  imports: [
+    ConfigModule,
+    TypeOrmModule.forFeature([User, NotificationPreferences]),
+  ],
   providers: [
     MailService,
     MailTemplateService,

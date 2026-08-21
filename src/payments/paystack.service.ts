@@ -62,13 +62,26 @@ export class PaystackService {
     return json.data;
   }
 
-  /** Verify that a webhook request genuinely came from Paystack */
+  /**
+   * Verify that a webhook request genuinely came from Paystack.
+   *
+   * security-report.md finding #7: uses `crypto.timingSafeEqual` rather than
+   * `===`, which short-circuits on the first differing character — a
+   * textbook timing side-channel shape for a signature comparison that MUST
+   * NOT be forgeable.
+   */
   verifyWebhookSignature(rawBody: string, signature: string): boolean {
     const hash = crypto
       .createHmac('sha512', this.secretKey)
       .update(rawBody)
       .digest('hex');
-    return hash === signature;
+
+    const expected = Buffer.from(hash, 'hex');
+    const provided = Buffer.from(signature ?? '', 'hex');
+    return (
+      expected.length === provided.length &&
+      crypto.timingSafeEqual(expected, provided)
+    );
   }
 
   /**

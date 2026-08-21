@@ -102,4 +102,25 @@ export class UploadsController {
   ) {
     return this.uploadsService.uploadSelfie(file);
   }
+
+  @Post('job-attachment')
+  @HttpCode(HttpStatus.OK)
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage() }))
+  @ApiOperation({
+    summary:
+      'J4: upload a job/booking photo attachment (any authenticated user, ≤ 10 MB, JPEG/PNG/WebP). ' +
+      'Returns a URL to reference in POST /jobs or POST /bookings.',
+  })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody(fileField)
+  uploadJobAttachment(
+    @UploadedFile(
+      new ParseFilePipe({
+        validators: [new MaxFileSizeValidator({ maxSize: 10 * MB })],
+      }),
+    )
+    file: Express.Multer.File,
+  ) {
+    return this.uploadsService.uploadJobAttachment(file);
+  }
 }

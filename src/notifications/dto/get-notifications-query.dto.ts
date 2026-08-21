@@ -21,7 +21,7 @@ export class GetNotificationsQueryDto {
   @ApiPropertyOptional({ description: 'Filter by read status' })
   @IsOptional()
   @IsBoolean()
-  @Transform(({ value }) => {
+  @Transform(({ value }: { value: unknown }) => {
     if (value === 'true') return true;
     if (value === 'false') return false;
     return value;

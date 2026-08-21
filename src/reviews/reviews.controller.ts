@@ -26,6 +26,7 @@ import { Review } from './entities/review.entity';
 import { ReviewsService } from './reviews.service';
 import { CreateReviewDto } from './dto/create-review.dto';
 import { GetReviewsQueryDto } from './dto/get-reviews-query.dto';
+import type { AuthenticatedRequest } from '@common/types/authenticated-request.type';
 
 /**
  * Manages reviews left by customers after a job is completed.
@@ -63,7 +64,10 @@ export class ReviewsController {
   @ApiForbiddenResponse({
     description: 'Caller does not have the CUSTOMER role',
   })
-  create(@Req() req: any, @Body() createReviewDto: CreateReviewDto) {
+  create(
+    @Req() req: AuthenticatedRequest,
+    @Body() createReviewDto: CreateReviewDto,
+  ) {
     return this.reviewsService.create(req.user.id, createReviewDto);
   }
 

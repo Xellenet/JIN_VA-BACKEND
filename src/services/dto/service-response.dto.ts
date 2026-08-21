@@ -21,6 +21,14 @@ export class ServiceResponseDto {
   @Expose()
   price?: number;
 
+  @ApiProperty({
+    description:
+      'A2: estimated duration in minutes, used to derive a booking endTime.',
+    example: 60,
+  })
+  @Expose()
+  estimatedDurationMins!: number;
+
   @ApiProperty()
   @Expose()
   createdAt!: Date;
