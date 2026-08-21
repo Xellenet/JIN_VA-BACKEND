@@ -25,6 +25,7 @@ describe('FavouritesService', () => {
   };
 
   const mockQb = {
+    innerJoin: jest.fn().mockReturnThis(),
     innerJoinAndSelect: jest.fn().mockReturnThis(),
     leftJoinAndSelect: jest.fn().mockReturnThis(),
     where: jest.fn().mockReturnThis(),

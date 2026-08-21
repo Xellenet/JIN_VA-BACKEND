@@ -181,6 +181,13 @@ export class FavouritesService {
    * same definition `ArtisansService.getCompletedJobsCount` uses for
    * search/profile: `Job` rows where this user is `acceptedArtisan` and
    * `status = COMPLETED`.
+   *
+   * Mirrors `ArtisansService.getCompletedJobsCountsByUserId` exactly,
+   * including its join: `acceptedArtisanId` is a `@RelationId()` virtual
+   * property on `Job`, not a real column, so referencing it directly in a
+   * raw select/groupBy string doesn't translate correctly. Joining the
+   * `acceptedArtisan` relation and referencing the joined alias's `id` is
+   * the proven-correct pattern already established there.
    */
   private async getCompletedJobsCounts(
     artisanUserIds: number[],
@@ -190,14 +197,15 @@ export class FavouritesService {
 
     const rows = await this.jobsRepository
       .createQueryBuilder('job')
-      .select('job.accepted_artisan_id', 'artisanUserId')
+      .innerJoin('job.acceptedArtisan', 'acceptedArtisan')
+      .select('acceptedArtisan.id', 'artisanUserId')
       .addSelect('COUNT(*)', 'count')
-      .where('job.accepted_artisan_id IN (:...artisanUserIds)', {
+      .where('acceptedArtisan.id IN (:...artisanUserIds)', {
         artisanUserIds,
       })
       .andWhere('job.status = :status', { status: Status.COMPLETED })
-      .groupBy('job.accepted_artisan_id')
-      .getRawMany<{ artisanUserId: string; count: string }>();
+      .groupBy('acceptedArtisan.id')
+      .getRawMany<{ artisanUserId: number; count: string }>();
 
     for (const row of rows) {
       map.set(Number(row.artisanUserId), Number(row.count));
