@@ -192,6 +192,42 @@ export class UpdateNotificationPreferencesDto {
   @IsOptional()
   bookingDeclined?: boolean;
 
+  // ─── Admin notification types (PR3) ───────────────────────────────────────
+  @ApiPropertyOptional({
+    description: '[Admin] A new dispute was filed and needs review',
+  })
+  @IsBoolean()
+  @IsOptional()
+  disputeFiled?: boolean;
+
+  @ApiPropertyOptional({
+    description: '[Admin] An artisan payout failed and needs manual attention',
+  })
+  @IsBoolean()
+  @IsOptional()
+  paymentTransferFailed?: boolean;
+
+  @ApiPropertyOptional({
+    description: '[Admin] An artisan submitted verification documents',
+  })
+  @IsBoolean()
+  @IsOptional()
+  verificationSubmitted?: boolean;
+
+  @ApiPropertyOptional({
+    description: '[Admin] A review was flagged for moderation',
+  })
+  @IsBoolean()
+  @IsOptional()
+  reviewFlagged?: boolean;
+
+  @ApiPropertyOptional({
+    description: '[Admin] A new artisan registered on the platform',
+  })
+  @IsBoolean()
+  @IsOptional()
+  artisanRegistered?: boolean;
+
   // ─── Shared ───────────────────────────────────────────────────────────────
   @ApiPropertyOptional({ description: 'New direct message received' })
   @IsBoolean()
