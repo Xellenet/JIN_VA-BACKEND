@@ -14,7 +14,6 @@ import { Review } from '../../reviews/entities/review.entity';
 import { Favourite } from '../../favourites/entities/favourite.entity';
 import { Conversation } from '../../messages/entities/conversation.entity';
 import { Message } from '../../messages/entities/message.entity';
-import { DirectMessage } from '../../direct-messages/entities/direct-message.entity';
 import { Notification } from '../../notifications/entities/notification.entity';
 import { NotificationPreferences } from '../../notifications/entities/notification-preferences.entity';
 import { ArtisanAvailability } from '../../availability/entities/artisan-availability.entity';
@@ -58,7 +57,6 @@ const dataSource = new DataSource({
     Favourite,
     Conversation,
     Message,
-    DirectMessage,
     Notification,
     NotificationPreferences,
     ArtisanAvailability,
@@ -85,7 +83,6 @@ async function seed() {
   const favouriteRepo = dataSource.getRepository(Favourite);
   const conversationRepo = dataSource.getRepository(Conversation);
   const messageRepo = dataSource.getRepository(Message);
-  const directMessageRepo = dataSource.getRepository(DirectMessage);
   const notificationRepo = dataSource.getRepository(Notification);
   const notifPrefsRepo = dataSource.getRepository(NotificationPreferences);
   const availabilityRepo = dataSource.getRepository(ArtisanAvailability);
@@ -122,7 +119,11 @@ async function seed() {
     await del('artisan_verifications');
     await del('messages');
     await del('conversations');
-    await del('direct_messages');
+    // MB1: `direct_messages` is dropped by migration
+    // 1783130000000-DropDirectMessagesTable, so it is deliberately absent
+    // here. `del()` already tolerates a missing table (Postgres 42P01), so a
+    // database that hasn't run that migration yet is still handled — it just
+    // isn't listed as an expected table any more.
     await del('favourites');
     await del('reviews');
     await del('job_applications');
@@ -839,64 +840,12 @@ async function seed() {
   }
   console.log(`✔  Created ${favouriteData.length} favourites`);
 
-  // ── DirectMessages ─────────────────────────────────────────────────────────────
-  const dmData = [
-    {
-      sender: ama,
-      receiver: yaw,
-      content: 'Hi Yaw, are you available next week for a pipe inspection?',
-    },
-    {
-      sender: yaw,
-      receiver: ama,
-      content:
-        'Hello Ama! Yes, I am free Monday and Tuesday. Which day works best?',
-    },
-    {
-      sender: kofi,
-      receiver: akua,
-      content:
-        'Good afternoon Akua, can you install a solar inverter for a 4-bedroom house?',
-    },
-    {
-      sender: akua,
-      receiver: kofi,
-      content:
-        'Absolutely! I specialise in residential solar systems. When would you like to discuss details?',
-    },
-    {
-      sender: abena,
-      receiver: efua,
-      content:
-        'Hi Efua! I love your work. I would like to book a knotless braiding session.',
-    },
-    {
-      sender: efua,
-      receiver: abena,
-      content:
-        'Thank you Abena! I have slots this Saturday from 9am. Does that work for you?',
-    },
-    {
-      sender: kwame,
-      receiver: kweku,
-      content:
-        'Kweku, I need a custom floor-to-ceiling bookshelf built. Can you come for a consultation?',
-    },
-  ];
-
-  for (const dm of dmData) {
-    await directMessageRepo.save(
-      directMessageRepo.create({
-        sender: dm.sender,
-        receiver: dm.receiver,
-        content: dm.content,
-        isRead: false,
-      }),
-    );
-  }
-  console.log(`✔  Created ${dmData.length} direct messages`);
-
   // ── Conversations & Messages ───────────────────────────────────────────────────
+  // MB1: the retired `direct_messages` seed block used to live here and seeded
+  // the same four pairs a second time, in the module that emitted no events.
+  // Its two pairs that weren't already covered below (abena↔efua and
+  // kwame↔kweku) are seeded as canonical conversations instead, so fixture
+  // coverage is unchanged.
   const conv1 = await conversationRepo.save(
     conversationRepo.create({
       participantA: ama,
@@ -967,7 +916,58 @@ async function seed() {
       }),
     );
   }
-  console.log('✔  Created 2 conversations with 7 messages');
+
+  const conv3 = await conversationRepo.save(
+    conversationRepo.create({ participantA: abena, participantB: efua }),
+  );
+  for (const m of [
+    {
+      sender: abena,
+      content:
+        'Hi Efua! I love your work. I would like to book a knotless braiding session.',
+    },
+    {
+      sender: efua,
+      content:
+        'Thank you Abena! I have slots this Saturday from 9am. Does that work for you?',
+    },
+  ]) {
+    await messageRepo.save(
+      messageRepo.create({
+        conversation: conv3,
+        sender: m.sender,
+        content: m.content,
+        isRead: false,
+      }),
+    );
+  }
+
+  const conv4 = await conversationRepo.save(
+    conversationRepo.create({ participantA: kwame, participantB: kweku }),
+  );
+  await messageRepo.save(
+    messageRepo.create({
+      conversation: conv4,
+      sender: kwame,
+      content:
+        'Kweku, I need a custom floor-to-ceiling bookshelf built. Can you come for a consultation?',
+      isRead: false,
+    }),
+  );
+  // MC4: one image-only message so the attachment rendering path (and the
+  // nullable `content` case) has fixture coverage.
+  await messageRepo.save(
+    messageRepo.create({
+      conversation: conv4,
+      sender: kwame,
+      content: null,
+      attachmentUrl: '/uploads/messages/seed-bookshelf-reference.jpg',
+      attachmentType: 'image/jpeg',
+      isRead: false,
+    }),
+  );
+
+  console.log('✔  Created 4 conversations with 11 messages');
 
   // ── Bookings ───────────────────────────────────────────────────────────────────
   const bookingData = [
@@ -1263,8 +1263,7 @@ async function seed() {
   console.log(`  Artisan Verifications : 5`);
   console.log(`  Reviews               : 2`);
   console.log(`  Favourites            : ${favouriteData.length}`);
-  console.log(`  Direct Messages       : ${dmData.length}`);
-  console.log(`  Conversations         : 2  |  Messages : 7`);
+  console.log(`  Conversations         : 4  |  Messages : 11`);
   console.log(`  Bookings              : ${bookingData.length}`);
   console.log(`  Device Tokens         : ${deviceTokenData.length}`);
   console.log(`  Notifications         : ${notificationData.length}`);

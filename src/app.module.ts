@@ -18,7 +18,6 @@ import { JobsModule } from './jobs/jobs.module';
 import { ArtisansModule } from './artisans/artisans.module';
 import { FavouritesModule } from './favourites/favourites.module';
 import { MessagesModule } from './messages/messages.module';
-import { DirectMessagesModule } from './direct-messages/direct-messages.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { AvailabilityModule } from './availability/availability.module';
 import { VerificationModule } from './verification/verification.module';
@@ -49,8 +48,12 @@ import { PortfolioModule } from './portfolio/portfolio.module';
     JobsModule,
     ArtisansModule,
     FavouritesModule,
+    // MB1: `MessagesModule` is the platform's single messaging backend. The
+    // former `DirectMessagesModule` was retired here — running both meant the
+    // frontend talked to the one that emitted no events, so sending a message
+    // notified nobody. Re-registering a second messaging module would
+    // reintroduce exactly that bug.
     MessagesModule,
-    DirectMessagesModule,
     NotificationsModule,
     AvailabilityModule,
     VerificationModule,
