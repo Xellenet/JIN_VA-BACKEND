@@ -144,4 +144,26 @@ export class UploadsController {
   ) {
     return this.uploadsService.uploadReviewPhoto(file);
   }
+
+  @Post('message-attachment')
+  @HttpCode(HttpStatus.OK)
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage() }))
+  @ApiOperation({
+    summary:
+      'MC4: upload an image to attach to a direct message (any authenticated user, ' +
+      '≤ 5 MB, JPEG/PNG only). Returns a URL to pass as `attachmentUrl` on ' +
+      'POST /messages (one image per message).',
+  })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody(fileField)
+  uploadMessageAttachment(
+    @UploadedFile(
+      new ParseFilePipe({
+        validators: [new MaxFileSizeValidator({ maxSize: 5 * MB })],
+      }),
+    )
+    file: Express.Multer.File,
+  ) {
+    return this.uploadsService.uploadMessageAttachment(file);
+  }
 }

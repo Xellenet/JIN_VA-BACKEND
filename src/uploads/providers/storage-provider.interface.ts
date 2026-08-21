@@ -4,7 +4,9 @@ export type UploadFolder =
   | 'selfies'
   | 'portfolio'
   | 'job-attachments'
-  | 'reviews';
+  | 'reviews'
+  /** MC4: image attachments on direct messages. */
+  | 'messages';
 
 export interface UploadOptions {
   folder: UploadFolder;

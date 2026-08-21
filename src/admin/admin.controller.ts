@@ -11,6 +11,9 @@ import {
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
+  ApiForbiddenResponse,
+  ApiNotFoundResponse,
+  ApiOkResponse,
   ApiOperation,
   ApiParam,
   ApiTags,
@@ -45,6 +48,7 @@ import {
   ModerationLogQueryDto,
 } from '../reviews/dto/admin-reviews-query.dto';
 import { RemoveReviewDto } from '../reviews/dto/remove-review.dto';
+import { DisputeConversationResponseDto } from '@messages/dto/dispute-conversation-response.dto';
 import type { AuthenticatedRequest } from '@common/types/authenticated-request.type';
 
 @ApiTags('Admin')
@@ -213,6 +217,52 @@ export class AdminController {
   @ApiParam({ name: 'id', type: Number })
   getDispute(@Param('id', ParseIntPipe) id: number) {
     return this.disputesService.findOne(id);
+  }
+
+  /**
+   * AD1/AD2: the *only* way an admin can read a conversation they are not a
+   * participant of.
+   *
+   * The scope boundary is enforced server-side, not by omitting a general
+   * endpoint from the UI:
+   *  - admin-only (the controller-level `@Roles(Role.ADMIN)`);
+   *  - the two participants are derived from this dispute's booking — the
+   *    request accepts no user id or conversation id, so there is nothing an
+   *    admin could substitute to reach an unrelated thread;
+   *  - refused with 403 once the dispute is no longer open work
+   *    (RESOLVED/CLOSED), so a settled dispute doesn't become a permanent
+   *    read tap on two users' private messages.
+   *
+   * Read-only by construction: no admin write path into a customer↔artisan
+   * thread exists anywhere in this API.
+   */
+  @Get('disputes/:id/conversation')
+  @ApiOperation({
+    summary:
+      "AD1: read-only view of the conversation between a dispute's two parties",
+    description:
+      "Resolves the dispute's booking to its customer/artisan pair and returns their " +
+      'message thread (most recent 200 messages, oldest-first), for evidence during ' +
+      'dispute resolution. Returns `data: null` with an explanatory message when the ' +
+      'two parties have never messaged — an expected case, not an error. ' +
+      'Scoped strictly to disputes that are still OPEN or UNDER_REVIEW.',
+  })
+  @ApiParam({ name: 'id', type: Number })
+  @ApiOkResponse({
+    description:
+      'Conversation retrieved, or `data: null` when no conversation exists between the parties',
+    type: DisputeConversationResponseDto,
+  })
+  @ApiForbiddenResponse({
+    description:
+      'Caller is not an admin, or the dispute is already RESOLVED/CLOSED so conversation access is out of scope',
+  })
+  @ApiNotFoundResponse({
+    description:
+      "Dispute not found, or its booking's participants could not be resolved",
+  })
+  getDisputeConversation(@Param('id', ParseIntPipe) id: number) {
+    return this.disputesService.getConversationForDispute(id);
   }
 
   @Patch('disputes/:id/start-review')
