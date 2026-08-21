@@ -60,6 +60,24 @@ export class ArtisanProfile {
   @Column({ name: 'total_reviews', type: 'int', default: 0 })
   totalReviews!: number;
 
+  /**
+   * RA2: Bayesian weighted rating (IMDb-style), recalculated alongside
+   * `averageRating` on every review create/edit/remove/restore. Used
+   * **only** for ranking/sorting artisans against each other (search
+   * `sortBy=rating`, Top Artisans widget) — never displayed to a customer as
+   * "the" rating on a single profile (that's always `averageRating`, the
+   * honest plain average). See `ReviewsService.refreshArtisanRatings` and
+   * `docs/team/reviews-ratings-favourites/api-contract.md`.
+   */
+  @Column({
+    name: 'weighted_rating',
+    type: 'decimal',
+    precision: 3,
+    scale: 2,
+    default: 0,
+  })
+  weightedRating!: number;
+
   @Column({ name: 'availability_status', default: 'AVAILABLE' })
   availabilityStatus!: string;
 

@@ -3,7 +3,8 @@ export type UploadFolder =
   | 'documents'
   | 'selfies'
   | 'portfolio'
-  | 'job-attachments';
+  | 'job-attachments'
+  | 'reviews';
 
 export interface UploadOptions {
   folder: UploadFolder;

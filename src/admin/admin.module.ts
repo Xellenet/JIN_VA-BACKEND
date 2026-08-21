@@ -12,6 +12,7 @@ import { JobsModule } from '@jobs/jobs.module';
 import { VerificationModule } from '../verification/verification.module';
 import { DisputesModule } from '../disputes/disputes.module';
 import { PortfolioModule } from '../portfolio/portfolio.module';
+import { ReviewsModule } from '../reviews/reviews.module';
 
 @Module({
   imports: [
@@ -27,6 +28,7 @@ import { PortfolioModule } from '../portfolio/portfolio.module';
     VerificationModule,
     DisputesModule,
     PortfolioModule,
+    ReviewsModule,
   ],
   controllers: [AdminController],
   providers: [AdminService],

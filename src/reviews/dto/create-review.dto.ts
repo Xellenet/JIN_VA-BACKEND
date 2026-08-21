@@ -1,5 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  ArrayMaxSize,
+  IsArray,
   IsInt,
   IsNumber,
   IsOptional,
@@ -9,6 +11,8 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
+import { IsAttachmentUrl } from '@common/validators/is-attachment-url.decorator';
+import { VARIABLES } from '@common/constants/variables.constants';
 
 export class CreateReviewDto {
   @ApiProperty({
@@ -41,4 +45,19 @@ export class CreateReviewDto {
   @MinLength(20)
   @MaxLength(2000)
   review?: string;
+
+  @ApiPropertyOptional({
+    type: [String],
+    example: ['/uploads/reviews/uuid1.jpg', '/uploads/reviews/uuid2.jpg'],
+    description:
+      `RP1: up to ${VARIABLES.REVIEW_MAX_PHOTOS} photo URLs, each pre-uploaded via ` +
+      'POST /uploads/review-photo (JPEG/PNG, max 5MB each). Optional — a review ' +
+      'may be submitted with zero photos.',
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @IsAttachmentUrl({ each: true })
+  @ArrayMaxSize(VARIABLES.REVIEW_MAX_PHOTOS)
+  photoUrls?: string[];
 }
