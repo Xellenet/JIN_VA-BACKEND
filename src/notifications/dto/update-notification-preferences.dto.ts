@@ -179,6 +179,14 @@ export class UpdateNotificationPreferencesDto {
   bookingCompletedArtisan?: boolean;
 
   @ApiPropertyOptional({
+    description:
+      '[Artisan] 24h/2h reminders before a confirmed booking appointment',
+  })
+  @IsBoolean()
+  @IsOptional()
+  bookingReminders?: boolean;
+
+  @ApiPropertyOptional({
     description: '[Customer] Artisan confirmed your booking',
   })
   @IsBoolean()

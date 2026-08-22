@@ -148,6 +148,25 @@ describe('NotificationsService', () => {
       expect(prefs.paymentReceipts).toBe(true);
     });
 
+    // QA M1: the key the update DTO used to omit, which 400'd every artisan
+    // save. Asserts the write half — that it reaches the row once accepted.
+    it('lets an artisan set bookingReminders alongside another artisan toggle', async () => {
+      const prefs = prefsFor(Role.ARTISAN, {
+        bookingReminders: true,
+        bookingReceived: true,
+      });
+      prefsRepo.findOne.mockResolvedValue(prefs);
+
+      await service.updatePreferences(99, {
+        bookingReminders: false,
+        bookingReceived: false,
+      });
+
+      expect(prefs.bookingReminders).toBe(false);
+      expect(prefs.bookingReceived).toBe(false);
+      expect(prefsRepo.save).toHaveBeenCalledWith(prefs);
+    });
+
     it('ignores an admin-only flag sent by a customer', async () => {
       const prefs = prefsFor(Role.CUSTOMER);
       prefsRepo.findOne.mockResolvedValue(prefs);
