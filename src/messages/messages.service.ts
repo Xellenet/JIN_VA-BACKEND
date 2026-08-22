@@ -42,7 +42,11 @@ type ConversationList = {
   pagination: Pagination;
 };
 
-/** MC4: extension → display MIME, mirroring `ReviewsService.guessMimeFromUrl`. */
+/**
+ * MC4: extension → display MIME. Exhaustive on purpose: anything not listed
+ * here is rejected rather than reported as a JPEG (see
+ * `resolveAttachmentType`).
+ */
 const ATTACHMENT_MIME_BY_EXT: Record<string, string> = {
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
@@ -190,7 +194,7 @@ export class MessagesService {
         content: text,
         attachmentUrl: attachmentUrl ?? null,
         attachmentType: attachmentUrl
-          ? this.guessMimeFromUrl(attachmentUrl)
+          ? this.resolveAttachmentType(attachmentUrl)
           : null,
         jobId: dto.jobId ?? null,
         bookingId: dto.bookingId ?? null,
@@ -456,15 +460,26 @@ export class MessagesService {
   }
 
   /**
-   * MC4: infers a display MIME type from an already-uploaded, already
-   * MIME-sniffed attachment URL's extension. Not a security control — the real
-   * content-type check happened at upload time in
-   * `UploadsService.uploadMessageAttachment`. Metadata only, same precedent as
-   * `ReviewsService.guessMimeFromUrl`.
+   * MC4: resolves the display MIME type for an attachment from the extension
+   * `POST /uploads/message-attachment` minted for it (the provider derives that
+   * extension from the sniffed bytes, never from the client's filename).
+   *
+   * Not the primary security control — the real content-type check happens at
+   * upload time in `UploadsService.uploadMessageAttachment`, and
+   * `@IsAttachmentUrl('messages')` then pins the value to
+   * `/uploads/messages/<uuid>.jpg|.png`. But it no longer *defaults* to
+   * `image/jpeg`: QA (`qa-report.md` B2) found that an unexpected extension —
+   * a `.pdf` or `.svg` reference — was being announced to clients as a JPEG.
+   * An extension we cannot honestly name is now a 400 rather than a lie in the
+   * response body.
    */
-  private guessMimeFromUrl(url: string): string {
+  private resolveAttachmentType(url: string): string {
     const ext = url.slice(url.lastIndexOf('.')).toLowerCase();
-    return ATTACHMENT_MIME_BY_EXT[ext] ?? 'image/jpeg';
+    const mime = ATTACHMENT_MIME_BY_EXT[ext];
+    if (!mime) {
+      throw new BadRequestException('Message attachments must be JPEG or PNG.');
+    }
+    return mime;
   }
 
   /** MC2: the sender must be the job's customer or its accepted artisan. */

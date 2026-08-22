@@ -616,6 +616,45 @@ describe('Messaging & Notifications — full lifecycle (e2e)', () => {
     expect(res.status).toBe(400);
   });
 
+  /**
+   * QA `qa-report.md` B2: `attachmentUrl` was validated by a bare
+   * `startsWith('/uploads/')`, so any path under the uploads tree was accepted,
+   * persisted and rendered — including in the admin dispute-evidence viewer.
+   * This is QA's accepted/rejected table, run against the live API so the
+   * guarantee in `api-contract.md` §3 is enforced in CI rather than by reading
+   * the validator.
+   */
+  it.each([
+    ['another folder (KYC documents)', '/uploads/documents/some-kyc-doc.pdf'],
+    ['another folder (profiles)', '/uploads/profiles/ama-mensah.jpg'],
+    [
+      'another folder (portfolio)',
+      '/uploads/portfolio/3f1e6c1a-1c2b-4d8e-9a7f-0b1c2d3e4f56.jpg',
+    ],
+    ['a traversal string', '/uploads/messages/../documents/secret.pdf'],
+    [
+      'an encoded traversal string',
+      '/uploads/messages/%2e%2e/documents/secret.pdf',
+    ],
+    ['a filename we never minted', '/uploads/messages/does-not-exist.jpg'],
+    [
+      'an extension the upload endpoint cannot produce',
+      '/uploads/messages/3f1e6c1a-1c2b-4d8e-9a7f-0b1c2d3e4f56.svg',
+    ],
+    [
+      'a smuggled query string',
+      '/uploads/messages/3f1e6c1a-1c2b-4d8e-9a7f-0b1c2d3e4f56.jpg?<script>alert(1)</script>',
+    ],
+    ['a protocol-relative host', '//evil.example/x.png'],
+  ])('MC4/QA-B2: %s is rejected as an attachmentUrl', async (_label, url) => {
+    const res = await send(customer1Token, {
+      recipientId: artisanUser.id,
+      content: 'probe',
+      attachmentUrl: url,
+    });
+    expect(res.status).toBe(400);
+  });
+
   // ── MC2: job/booking context ──────────────────────────────────────────────
 
   it('MC2: a jobId the sender participates in is stored on the message; a job they do not is 403', async () => {

@@ -36,15 +36,18 @@ export class SendMessageDto {
   content?: string;
 
   @ApiPropertyOptional({
-    example: '/uploads/messages/uuid.jpg',
+    example: '/uploads/messages/3f1e6c1a-1c2b-4d8e-9a7f-0b1c2d3e4f56.jpg',
     description:
       'MC4: URL of one image, pre-uploaded via POST /uploads/message-attachment ' +
       '(JPEG/PNG, max 5MB). One image per message — to send several images, ' +
-      'send several messages.',
+      'send several messages. Must be a URL that endpoint returned: only ' +
+      '/uploads/messages/<uuid>.jpg|.png is accepted, so another folder ' +
+      '(documents, profiles, portfolio…), a traversal string or a query ' +
+      'string is rejected with a 400.',
   })
   @IsOptional()
   @IsString()
-  @IsAttachmentUrl()
+  @IsAttachmentUrl('messages')
   attachmentUrl?: string;
 
   @ApiPropertyOptional({

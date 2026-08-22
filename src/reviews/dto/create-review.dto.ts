@@ -57,7 +57,7 @@ export class CreateReviewDto {
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
-  @IsAttachmentUrl({ each: true })
+  @IsAttachmentUrl('reviews', { each: true })
   @ArrayMaxSize(VARIABLES.REVIEW_MAX_PHOTOS)
   photoUrls?: string[];
 }

@@ -124,7 +124,7 @@ export class CreateJobDto {
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
-  @IsAttachmentUrl({ each: true })
+  @IsAttachmentUrl('job-attachments', { each: true })
   @ArrayMaxSize(10)
   attachmentUrls?: string[];
 }

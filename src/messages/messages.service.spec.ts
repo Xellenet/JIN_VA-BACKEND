@@ -24,6 +24,9 @@ import { APP_EVENTS } from '@common/events/app.events';
 describe('MessagesService', () => {
   let service: MessagesService;
 
+  /** A filename in the shape `POST /uploads/message-attachment` actually mints. */
+  const UUID = '3f1e6c1a-1c2b-4d8e-9a7f-0b1c2d3e4f56';
+
   const customer = {
     id: 1,
     firstname: 'Ama',
@@ -216,18 +219,39 @@ describe('MessagesService', () => {
       conversationsRepo.findOne.mockResolvedValueOnce({ id: 7 });
       messagesRepo.findOne.mockResolvedValueOnce({ id: 101, sender: customer });
 
+      const url = `/uploads/messages/${UUID}.png`;
       await service.send(customer.id, {
         recipientId: artisan.id,
-        attachmentUrl: '/uploads/messages/pipe.png',
+        attachmentUrl: url,
       });
 
       expect(messagesRepo.create).toHaveBeenCalledWith(
         expect.objectContaining({
           content: null,
-          attachmentUrl: '/uploads/messages/pipe.png',
+          attachmentUrl: url,
           attachmentType: 'image/png',
         }),
       );
+    });
+
+    /**
+     * QA B2: `attachmentType` used to default to `image/jpeg` for any
+     * unrecognised extension, so a `.pdf`/`.svg` reference was announced to
+     * clients — and to the admin dispute viewer — as a JPEG. The DTO's
+     * `@IsAttachmentUrl('messages')` now rejects those before the service is
+     * reached; this asserts the service does not lie if one ever gets past it.
+     */
+    it('refuses an extension it cannot honestly name rather than defaulting to image/jpeg', async () => {
+      mockUsers(customer, artisan);
+      conversationsRepo.findOne.mockResolvedValueOnce({ id: 7 });
+
+      await expect(
+        service.send(customer.id, {
+          recipientId: artisan.id,
+          attachmentUrl: `/uploads/messages/${UUID}.svg`,
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(messagesRepo.save).not.toHaveBeenCalled();
     });
 
     it('previews an image-only message as "Sent a photo" rather than an empty notification body', async () => {
@@ -237,7 +261,7 @@ describe('MessagesService', () => {
 
       await service.send(customer.id, {
         recipientId: artisan.id,
-        attachmentUrl: '/uploads/messages/pipe.jpg',
+        attachmentUrl: `/uploads/messages/${UUID}.jpg`,
       });
 
       expect(emitter.emit).toHaveBeenCalledWith(

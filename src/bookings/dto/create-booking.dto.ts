@@ -101,13 +101,14 @@ export class CreateBookingDto {
   @ApiPropertyOptional({
     type: [String],
     description:
-      'J4: photo URLs uploaded beforehand via the existing upload storage abstraction ' +
-      '(e.g. POST /uploads/... equivalent). Copied onto the linked Job when the artisan confirms this booking.',
+      'J4: photo URLs uploaded beforehand via POST /uploads/job-attachment ' +
+      '(bookings and jobs share that endpoint and its folder). Copied onto the ' +
+      'linked Job when the artisan confirms this booking.',
   })
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
-  @IsAttachmentUrl({ each: true })
+  @IsAttachmentUrl('job-attachments', { each: true })
   @ArrayMaxSize(10)
   attachmentUrls?: string[];
 }
