@@ -20,6 +20,9 @@ import { ArtisanAvailability } from '../../availability/entities/artisan-availab
 import { ArtisanVerification } from '../../verification/entities/artisan-verification.entity';
 import { Booking } from '../../bookings/entities/booking.entity';
 import { DeviceToken } from '../../push-notifications/entities/device-token.entity';
+import { JobStatusHistory } from '../../jobs/entities/job-status-history.entity';
+import { Payment } from '../../payments/entities/payment.entity';
+import { Dispute } from '../../disputes/entities/dispute.entity';
 import {
   Gender,
   Role,
@@ -30,6 +33,9 @@ import {
   VerificationStatus,
   DevicePlatform,
   NotificationType,
+  PaymentStatus,
+  DisputeStatus,
+  DisputeCategory,
 } from '../../common/types/enums';
 
 config();
@@ -63,6 +69,11 @@ const dataSource = new DataSource({
     ArtisanVerification,
     Booking,
     DeviceToken,
+    // DR3: the seed now produces the booking → job → payment → dispute chain
+    // the admin Linked Payment panel walks, so it has something real to show.
+    JobStatusHistory,
+    Payment,
+    Dispute,
   ],
   synchronize: false,
   namingStrategy: new SnakeNamingStrategy(),
@@ -89,6 +100,9 @@ async function seed() {
   const verificationRepo = dataSource.getRepository(ArtisanVerification);
   const bookingRepo = dataSource.getRepository(Booking);
   const deviceTokenRepo = dataSource.getRepository(DeviceToken);
+  const jobHistoryRepo = dataSource.getRepository(JobStatusHistory);
+  const paymentRepo = dataSource.getRepository(Payment);
+  const disputeRepo = dataSource.getRepository(Dispute);
 
   const existingCount = await userRepo.count();
   if (existingCount > 0) {
@@ -1047,23 +1061,145 @@ async function seed() {
     },
   ];
 
+  const bookings: Booking[] = [];
   for (const b of bookingData) {
-    await bookingRepo.save(
-      bookingRepo.create({
-        customer: b.customer,
-        artisanProfile: b.artisanProfile,
-        availabilitySlot: b.availabilitySlot,
-        scheduledDate: b.scheduledDate,
-        startTime: b.startTime,
-        endTime: b.endTime,
-        status: b.status,
-        agreedPrice: b.agreedPrice,
-        notes: b.notes,
-        artisanNotes: b.artisanNotes,
-      }),
+    bookings.push(
+      await bookingRepo.save(
+        bookingRepo.create({
+          customer: b.customer,
+          artisanProfile: b.artisanProfile,
+          availabilitySlot: b.availabilitySlot,
+          scheduledDate: b.scheduledDate,
+          startTime: b.startTime,
+          endTime: b.endTime,
+          status: b.status,
+          agreedPrice: b.agreedPrice,
+          notes: b.notes,
+          artisanNotes: b.artisanNotes,
+        }),
+      ),
     );
   }
   console.log(`✔  Created ${bookingData.length} bookings`);
+
+  // ── DR3: a booking → job → payment → dispute chain that actually resolves ────
+  //
+  // The admin dispute screen's Linked Payment panel walks
+  // `Dispute → Booking → Job → Payment` (`DisputesService.findLinkedWork`).
+  // `BookingsService.confirm()` does write `Job.booking` (guarded by
+  // `bookings.job-link.spec.ts`), but the seed previously created bookings and
+  // jobs as two disconnected sets and no payments at all — so there was no row
+  // anywhere in a seeded database where that chain could resolve, and the panel
+  // could only ever render its empty state no matter what QA did.
+  //
+  // This gives QA the reproducible end-to-end case DR3 asks for: a completed
+  // booking whose job holds a real payment, with a dispute on it that an admin
+  // can rule on and watch the money move.
+  //
+  // NOTE for the payments follow-up: production `confirm()` deliberately does
+  // *not* call `PaymentsService.holdPayment`, so a real booking-derived job
+  // holds no money yet. This seeded payment represents the state that wiring
+  // will produce. Until it lands, a genuinely booking-derived dispute in
+  // production will legitimately show "no payment on file" — see
+  // `api-contract.md` under DR3.
+  const disputedBooking = bookings[2]; // abena ↔ efua, COMPLETED, GH₵ 80
+  const bookingDerivedJob = await jobRepo.save(
+    jobRepo.create({
+      customer: abena,
+      service: hairBraiding,
+      title: `Hair Braiding — booking #${disputedBooking.id}`,
+      description:
+        'Waist-length knotless box braids, booked directly with the artisan.',
+      location: 'East Legon, Accra',
+      currency: 'GHS',
+      budgetMin: 80,
+      budgetMax: 80,
+      status: Status.COMPLETED,
+      acceptedArtisan: efua,
+      booking: disputedBooking,
+    }),
+  );
+  await jobHistoryRepo.save([
+    jobHistoryRepo.create({
+      jobId: bookingDerivedJob.id,
+      fromStatus: null,
+      toStatus: Status.PENDING,
+      changedBy: String(efua.id),
+      reason: `Created from confirmed booking #${disputedBooking.id}`,
+    }),
+    jobHistoryRepo.create({
+      jobId: bookingDerivedJob.id,
+      fromStatus: Status.PENDING,
+      toStatus: Status.IN_PROGRESS,
+      changedBy: String(efua.id),
+      reason: 'Artisan started the work',
+    }),
+    jobHistoryRepo.create({
+      jobId: bookingDerivedJob.id,
+      fromStatus: Status.IN_PROGRESS,
+      toStatus: Status.COMPLETED,
+      changedBy: String(abena.id),
+      reason: 'Customer confirmed completion',
+    }),
+  ]);
+
+  // HELD ("Withheld"), so both money verdicts are genuinely available on the
+  // dispute below: REFUND_CLIENT can refund it, RELEASE_ARTISAN can release it.
+  // Platform fee is 5% of 80, matching `PLATFORM_FEE_PERCENT`'s default.
+  const disputedPayment = await paymentRepo.save(
+    paymentRepo.create({
+      jobId: bookingDerivedJob.id,
+      customerId: abena.id,
+      artisanProfileId: efuaProfile.id,
+      amount: 80,
+      platformFee: 4,
+      artisanAmount: 76,
+      currency: 'GHS',
+      status: PaymentStatus.HELD,
+      reference: `jinva-${bookingDerivedJob.id}-${abena.id}-seed`,
+      channel: 'mobile_money',
+      paidAt: new Date('2026-06-10T13:30:00Z'),
+    }),
+  );
+
+  // Two disputes on one booking, one per raiser — the uniqueness rule is one
+  // dispute per booking *per raiser* (Open Question 14, kept as-is). This is
+  // the exact shape QA needs to verify the double-refund hard guard: rule on
+  // one, then try to move money again from the other.
+  const disputeData = [
+    {
+      booking: disputedBooking,
+      raisedBy: abena,
+      category: DisputeCategory.WORK_QUALITY,
+      status: DisputeStatus.OPEN,
+      reason:
+        'The braids started unravelling within three days and two sections were left uneven. I would like a refund of what I paid.',
+    },
+    {
+      booking: disputedBooking,
+      raisedBy: efua,
+      category: DisputeCategory.PAYMENT_AMOUNT,
+      status: DisputeStatus.UNDER_REVIEW,
+      reason:
+        'I completed the full session as agreed and supplied the extensions myself. The payment is still being withheld and I would like it released.',
+    },
+  ];
+  for (const d of disputeData) {
+    await disputeRepo.save(
+      disputeRepo.create({
+        booking: d.booking,
+        bookingId: d.booking.id,
+        raisedBy: d.raisedBy,
+        raisedById: d.raisedBy.id,
+        category: d.category,
+        status: d.status,
+        reason: d.reason,
+      }),
+    );
+  }
+  console.log(
+    `✔  Created the DR3 chain: job #${bookingDerivedJob.id} → payment #${disputedPayment.id} (HELD) → ${disputeData.length} disputes on booking #${disputedBooking.id}`,
+  );
 
   // ── DeviceTokens ───────────────────────────────────────────────────────────────
   const deviceTokenData = [
@@ -1265,6 +1401,8 @@ async function seed() {
   console.log(`  Favourites            : ${favouriteData.length}`);
   console.log(`  Conversations         : 4  |  Messages : 11`);
   console.log(`  Bookings              : ${bookingData.length}`);
+  console.log(`  Payments              : 1 (HELD, on the DR3 dispute chain)`);
+  console.log(`  Disputes              : ${disputeData.length}`);
   console.log(`  Device Tokens         : ${deviceTokenData.length}`);
   console.log(`  Notifications         : ${notificationData.length}`);
   console.log('══════════════════════════════════════════════════════════\n');
