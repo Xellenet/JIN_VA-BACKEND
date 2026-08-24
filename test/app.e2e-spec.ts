@@ -16,10 +16,16 @@ describe('AppController (e2e)', () => {
     await app.init();
   });
 
-  it('/ (GET)', () => {
+  it('/ (GET) returns the uptime health-check payload', () => {
+    // Pre-existing stale assertion: this was still the Nest scaffold's
+    // `'Hello World!'` long after `AppController.healthCheck()` was changed to
+    // return `{ status: 'ok' }` (commit "fix: uptime health check"), so the
+    // e2e suite had a permanently red test unrelated to any feature. Aligned
+    // with the real contract — `/` is excluded from the `api/v1` global prefix
+    // and is what uptime monitoring polls.
     return request(app.getHttpServer())
       .get('/')
       .expect(200)
-      .expect('Hello World!');
+      .expect({ status: 'ok' });
   });
 });

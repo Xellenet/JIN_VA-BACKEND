@@ -9,10 +9,13 @@ import { GetNotificationsQueryDto } from './dto/get-notifications-query.dto';
 import { NotificationResponseDto } from './dto/notification-response.dto';
 import { CustomerNotificationPreferencesResponseDto } from './dto/customer-notification-preferences-response.dto';
 import { ArtisanNotificationPreferencesResponseDto } from './dto/artisan-notification-preferences-response.dto';
+import { AdminNotificationPreferencesResponseDto } from './dto/admin-notification-preferences-response.dto';
 import { UpdateNotificationPreferencesDto } from './dto/update-notification-preferences.dto';
+import { User } from '@users/entities/user.entity';
 import { NotificationType, Role } from '@common/types/enums';
 import { SUCCESS_MESSAGES } from '@common/constants/success-messages.constants';
 import { APP_EVENTS } from '@common/events/app.events';
+import { formatGhs } from '@common/utils/currency.util';
 import type {
   JobApplicationAcceptedPayload,
   JobApplicationReceivedPayload,
@@ -37,6 +40,16 @@ import type {
   SecurityAlertPayload,
   PortfolioApprovedPayload,
   PortfolioRejectedPayload,
+  PaymentReceiptPayload,
+  PaymentSecuredPayload,
+  PayoutReleasedPayload,
+  PaymentRefundedPayload,
+  PaymentTransferFailedPayload,
+  DisputeFiledPayload,
+  DisputeOutcomePayload,
+  ReviewFlaggedPayload,
+  ArtisanRegisteredPayload,
+  ArtisanVerificationSubmittedPayload,
 } from '@common/events/app.events';
 
 type Pagination = {
@@ -52,7 +65,8 @@ type NotificationList = {
 };
 type PrefsData =
   | CustomerNotificationPreferencesResponseDto
-  | ArtisanNotificationPreferencesResponseDto;
+  | ArtisanNotificationPreferencesResponseDto
+  | AdminNotificationPreferencesResponseDto;
 type PrefsResponse = { message: string; data: PrefsData };
 
 // ─── Role-aware preference key maps ──────────────────────────────────────────
@@ -72,6 +86,17 @@ const CUSTOMER_PREF_KEY: Partial<
   [NotificationType.BOOKING_NO_SHOW]: 'bookingConfirmations',
   [NotificationType.BOOKING_REMINDER]: 'serviceReminders',
   [NotificationType.MESSAGE_RECEIVED]: 'messageReceived',
+  // PD1/PD3/PD5: `paymentReceipts` was a dead toggle until now — no event
+  // ever mapped to it, because the Payments module emitted nothing at all.
+  [NotificationType.PAYMENT_RECEIPT]: 'paymentReceipts',
+  [NotificationType.PAYMENT_REFUNDED]: 'paymentReceipts',
+  // PD4/PD5: dispute outcomes deliberately have no per-type key. The gating
+  // pattern this service already uses is "no entry for the recipient's role →
+  // always delivered", and no customer/artisan-facing dispute toggle exists
+  // (the design spec only introduces an admin-side "Dispute Filed" toggle).
+  // Inventing one here would be exactly the bespoke gating logic PD5 forbids;
+  // dispute outcomes still honour the global all-channels-off suppression in
+  // `persist`, like every other type.
 };
 
 const ARTISAN_PREF_KEY: Partial<
@@ -80,7 +105,15 @@ const ARTISAN_PREF_KEY: Partial<
   [NotificationType.JOB_APPLICATION_ACCEPTED]: 'applicationUpdates',
   [NotificationType.JOB_APPLICATION_REJECTED]: 'applicationRejected',
   [NotificationType.JOB_CANCELLED]: 'artisanJobUpdates',
-  [NotificationType.JOB_COMPLETED]: 'paymentReleased',
+  /**
+   * PD2: re-pointed from `paymentReleased` to `artisanJobUpdates`.
+   * `JOB_COMPLETED` is a job-lifecycle notification, not a payment one — it
+   * was only borrowing the payment toggle because no real payout event
+   * existed. `paymentReleased` now gates the genuine `PAYOUT_RELEASED` event
+   * below, so an artisan who turns off payment notifications no longer loses
+   * their job-completion notification too (and vice versa).
+   */
+  [NotificationType.JOB_COMPLETED]: 'artisanJobUpdates',
   [NotificationType.JOB_EXPIRED]: 'appliedJobExpired',
   [NotificationType.REVIEW_RECEIVED]: 'reviewsAndRatings',
   [NotificationType.ARTISAN_PROFILE_VERIFIED]: 'profileVerified',
@@ -93,6 +126,26 @@ const ARTISAN_PREF_KEY: Partial<
   [NotificationType.MESSAGE_RECEIVED]: 'messageReceived',
   [NotificationType.PORTFOLIO_APPROVED]: 'portfolioApproved',
   [NotificationType.PORTFOLIO_REJECTED]: 'portfolioRejected',
+  // PD2/PD5: both real payment-state notifications for the artisan now sit
+  // behind the `paymentReleased` toggle that previously gated nothing real.
+  [NotificationType.PAYMENT_SECURED]: 'paymentReleased',
+  [NotificationType.PAYOUT_RELEASED]: 'paymentReleased',
+};
+
+/**
+ * PR3: gates the five admin-facing notification types. Admin accounts
+ * previously fell through to `CUSTOMER_PREF_KEY` (they aren't artisans), so
+ * every admin-relevant type was ungated and every customer toggle in their
+ * settings response was meaningless.
+ */
+const ADMIN_PREF_KEY: Partial<
+  Record<NotificationType, keyof NotificationPreferences>
+> = {
+  [NotificationType.DISPUTE_FILED]: 'disputeFiled',
+  [NotificationType.PAYMENT_TRANSFER_FAILED]: 'paymentTransferFailed',
+  [NotificationType.ARTISAN_VERIFICATION_SUBMITTED]: 'verificationSubmitted',
+  [NotificationType.REVIEW_FLAGGED]: 'reviewFlagged',
+  [NotificationType.ARTISAN_REGISTERED]: 'artisanRegistered',
 };
 
 // Fields each role is allowed to update — prevents artisans from setting customer flags
@@ -135,6 +188,18 @@ const ARTISAN_UPDATABLE = new Set<keyof NotificationPreferences>([
   'pushEnabled',
 ]);
 
+/** PR3: the five real admin toggles, plus the shared channel switches. */
+const ADMIN_UPDATABLE = new Set<keyof NotificationPreferences>([
+  'disputeFiled',
+  'paymentTransferFailed',
+  'verificationSubmitted',
+  'reviewFlagged',
+  'artisanRegistered',
+  'emailEnabled',
+  'smsEnabled',
+  'pushEnabled',
+]);
+
 @Injectable()
 export class NotificationsService {
   private readonly logger = new Logger(NotificationsService.name);
@@ -144,6 +209,8 @@ export class NotificationsService {
     private readonly notificationsRepository: Repository<Notification>,
     @InjectRepository(NotificationPreferences)
     private readonly prefsRepository: Repository<NotificationPreferences>,
+    @InjectRepository(User)
+    private readonly usersRepository: Repository<User>,
   ) {}
 
   // ─── Event listeners ────────────────────────────────────────────────────────
@@ -192,13 +259,20 @@ export class NotificationsService {
     );
   }
 
+  /**
+   * PD2: the body no longer claims "your payment has been released". Job
+   * completion only *triggers* a payout attempt — the transfer can land in
+   * PENDING_TRANSFER (no payout method on file) or TRANSFER_FAILED, in which
+   * case the old wording was simply false. The real release is announced by
+   * {@link handlePayoutReleased}, driven by the payment record's actual state.
+   */
   @OnEvent(APP_EVENTS.JOB_COMPLETED)
   async handleJobCompleted(payload: JobCompletedPayload) {
     await this.persist(
       payload.artisanId,
       NotificationType.JOB_COMPLETED,
       'Job Confirmed Complete',
-      `"${payload.jobTitle}" has been confirmed as complete. Your payment has been released.`,
+      `"${payload.jobTitle}" has been confirmed as complete. Your payout is being processed — you'll be notified as soon as it's released.`,
       { jobId: payload.jobId },
     );
   }
@@ -411,6 +485,170 @@ export class NotificationsService {
     );
   }
 
+  // ─── Payments (PD1–PD3) ─────────────────────────────────────────────────────
+
+  /** PD1: the customer's receipt, fired when their payment reaches HELD. */
+  @OnEvent(APP_EVENTS.PAYMENT_RECEIPT)
+  async handlePaymentReceipt(payload: PaymentReceiptPayload) {
+    await this.persist(
+      payload.customerId,
+      NotificationType.PAYMENT_RECEIPT,
+      'Payment Received',
+      `We've received your payment of ${formatGhs(payload.amount)} for "${payload.jobTitle}". It's held securely until you confirm the work is complete.`,
+      { jobId: payload.jobId, reference: payload.reference },
+    );
+  }
+
+  /**
+   * PD2: the artisan's side of the same HELD transition — a distinct message
+   * from the customer's receipt, and gated by a different toggle.
+   */
+  @OnEvent(APP_EVENTS.PAYMENT_SECURED)
+  async handlePaymentSecured(payload: PaymentSecuredPayload) {
+    await this.persist(
+      payload.artisanUserId,
+      NotificationType.PAYMENT_SECURED,
+      'Payment Secured',
+      `${formatGhs(payload.artisanAmount)} is secured for "${payload.jobTitle}". It's released to you once the customer confirms the work is complete.`,
+      { jobId: payload.jobId },
+    );
+  }
+
+  /** PD2: the real payout-released notification, driven by transfer.success. */
+  @OnEvent(APP_EVENTS.PAYOUT_RELEASED)
+  async handlePayoutReleased(payload: PayoutReleasedPayload) {
+    await this.persist(
+      payload.artisanUserId,
+      NotificationType.PAYOUT_RELEASED,
+      'Payout Released',
+      `${formatGhs(payload.artisanAmount)} has been released to your payout account for "${payload.jobTitle}".`,
+      { jobId: payload.jobId },
+    );
+  }
+
+  /** PD3: the customer gets a real signal when their money comes back. */
+  @OnEvent(APP_EVENTS.PAYMENT_REFUNDED)
+  async handlePaymentRefunded(payload: PaymentRefundedPayload) {
+    const scope = payload.fullyRefunded ? 'Refund Issued' : 'Partial Refund';
+    await this.persist(
+      payload.customerId,
+      NotificationType.PAYMENT_REFUNDED,
+      scope,
+      `${formatGhs(payload.refundedAmount)} has been refunded for "${payload.jobTitle}". It should reach your original payment method shortly.`,
+      { jobId: payload.jobId, fullyRefunded: payload.fullyRefunded },
+    );
+  }
+
+  /** PR3: routed to every admin, not to either party of the payment. */
+  @OnEvent(APP_EVENTS.PAYMENT_TRANSFER_FAILED)
+  async handlePaymentTransferFailed(payload: PaymentTransferFailedPayload) {
+    await this.persistForAdmins(
+      NotificationType.PAYMENT_TRANSFER_FAILED,
+      'Payout Transfer Failed',
+      `A payout of ${formatGhs(payload.artisanAmount)} to ${payload.artisanName} for "${payload.jobTitle}" failed and needs manual attention. Reason: ${payload.reason}`,
+      { paymentId: payload.paymentId, jobId: payload.jobId },
+    );
+  }
+
+  // ─── Disputes (PD4) ─────────────────────────────────────────────────────────
+
+  /** PR3: admin-queue notification when a dispute is opened. */
+  @OnEvent(APP_EVENTS.DISPUTE_FILED)
+  async handleDisputeFiled(payload: DisputeFiledPayload) {
+    await this.persistForAdmins(
+      NotificationType.DISPUTE_FILED,
+      'New Dispute Filed',
+      `${payload.raisedByName} (${payload.raisedByRole.toLowerCase()}) opened a dispute on booking #${payload.bookingId}. It's waiting for review.`,
+      { disputeId: payload.disputeId, bookingId: payload.bookingId },
+    );
+  }
+
+  /** PD4: PRD §5.13 — "both parties notified automatically" on the outcome. */
+  @OnEvent(APP_EVENTS.DISPUTE_RESOLVED)
+  async handleDisputeResolved(payload: DisputeOutcomePayload) {
+    await this.notifyDisputeOutcome(
+      payload,
+      NotificationType.DISPUTE_RESOLVED,
+      'Dispute Resolved',
+      payload.resolution
+        ? `The dispute on booking #${payload.bookingId} has been resolved. Outcome: ${payload.resolution}`
+        : `The dispute on booking #${payload.bookingId} has been resolved.`,
+    );
+  }
+
+  /** PD4: same treatment for the "closed" outcome. */
+  @OnEvent(APP_EVENTS.DISPUTE_CLOSED)
+  async handleDisputeClosed(payload: DisputeOutcomePayload) {
+    await this.notifyDisputeOutcome(
+      payload,
+      NotificationType.DISPUTE_CLOSED,
+      'Dispute Closed',
+      `The dispute on booking #${payload.bookingId} has been closed. If you still need help, contact support.`,
+    );
+  }
+
+  /**
+   * Notifies both sides of a dispute outcome. De-duplicates on user id so a
+   * malformed payload where both ids resolve to the same person can't produce
+   * two identical rows.
+   */
+  private async notifyDisputeOutcome(
+    payload: DisputeOutcomePayload,
+    type: NotificationType,
+    title: string,
+    body: string,
+  ): Promise<void> {
+    const recipients = new Set(
+      [payload.raisedByUserId, payload.counterpartyUserId].filter(
+        (id): id is number => typeof id === 'number' && id > 0,
+      ),
+    );
+    for (const userId of recipients) {
+      await this.persist(userId, type, title, body, {
+        disputeId: payload.disputeId,
+        bookingId: payload.bookingId,
+        outcome: payload.outcome,
+      });
+    }
+  }
+
+  // ─── Admin moderation queue (PR3) ───────────────────────────────────────────
+
+  @OnEvent(APP_EVENTS.REVIEW_FLAGGED)
+  async handleReviewFlagged(payload: ReviewFlaggedPayload) {
+    await this.persistForAdmins(
+      NotificationType.REVIEW_FLAGGED,
+      'Review Flagged for Moderation',
+      `${payload.flaggedByName} flagged a review of ${payload.artisanName}. Reason: ${payload.reason}`,
+      { reviewId: payload.reviewId },
+    );
+  }
+
+  @OnEvent(APP_EVENTS.ARTISAN_VERIFICATION_SUBMITTED)
+  async handleVerificationSubmitted(
+    payload: ArtisanVerificationSubmittedPayload,
+  ) {
+    await this.persistForAdmins(
+      NotificationType.ARTISAN_VERIFICATION_SUBMITTED,
+      'Verification Submitted',
+      `${payload.artisanName} submitted identity documents for verification. The submission is waiting for review.`,
+      {
+        verificationId: payload.verificationId,
+        artisanUserId: payload.artisanUserId,
+      },
+    );
+  }
+
+  @OnEvent(APP_EVENTS.ARTISAN_REGISTERED)
+  async handleArtisanRegistered(payload: ArtisanRegisteredPayload) {
+    await this.persistForAdmins(
+      NotificationType.ARTISAN_REGISTERED,
+      'New Artisan Registered',
+      `${payload.artisanName} created an artisan account on the platform.`,
+      { artisanUserId: payload.artisanUserId },
+    );
+  }
+
   @OnEvent(APP_EVENTS.SECURITY_ALERT)
   async handleSecurityAlert(payload: SecurityAlertPayload) {
     // Security alerts bypass preferences — always persisted regardless of user settings
@@ -529,8 +767,7 @@ export class NotificationsService {
     dto: UpdateNotificationPreferencesDto,
   ): Promise<PrefsResponse> {
     const prefs = await this.findOrCreatePrefs(userId);
-    const allowedKeys =
-      prefs.user.role === Role.ARTISAN ? ARTISAN_UPDATABLE : CUSTOMER_UPDATABLE;
+    const allowedKeys = this.updatableKeysFor(prefs.user.role);
 
     for (const [key, value] of Object.entries(dto) as [
       string,
@@ -553,15 +790,41 @@ export class NotificationsService {
 
   // ─── Private helpers ────────────────────────────────────────────────────────
 
+  /** PR3: admins get their own shape rather than falling through to customer. */
   private toPrefsDto(prefs: NotificationPreferences): PrefsData {
     if (prefs.user.role === Role.ARTISAN) {
       return plainToInstance(ArtisanNotificationPreferencesResponseDto, prefs, {
         excludeExtraneousValues: true,
       });
     }
+    if (prefs.user.role === Role.ADMIN) {
+      return plainToInstance(AdminNotificationPreferencesResponseDto, prefs, {
+        excludeExtraneousValues: true,
+      });
+    }
     return plainToInstance(CustomerNotificationPreferencesResponseDto, prefs, {
       excludeExtraneousValues: true,
     });
+  }
+
+  /**
+   * The write-side counterpart of {@link toPrefsDto} — an admin can only set
+   * admin toggles, so a stray customer/artisan flag in the request body is
+   * ignored rather than silently persisted onto an admin's row.
+   */
+  private updatableKeysFor(role: Role): Set<keyof NotificationPreferences> {
+    if (role === Role.ARTISAN) return ARTISAN_UPDATABLE;
+    if (role === Role.ADMIN) return ADMIN_UPDATABLE;
+    return CUSTOMER_UPDATABLE;
+  }
+
+  /** Picks the per-type gating map that applies to a recipient's role. */
+  private prefKeyMapFor(
+    role: Role,
+  ): Partial<Record<NotificationType, keyof NotificationPreferences>> {
+    if (role === Role.ARTISAN) return ARTISAN_PREF_KEY;
+    if (role === Role.ADMIN) return ADMIN_PREF_KEY;
+    return CUSTOMER_PREF_KEY;
   }
 
   private async findOrCreatePrefs(
@@ -583,6 +846,42 @@ export class NotificationsService {
     return prefs!;
   }
 
+  /**
+   * PR3: fans an admin-queue notification out to every admin account, each one
+   * still individually preference-gated by the normal {@link persist} path —
+   * one admin muting "Dispute Filed" does not mute it for the others.
+   *
+   * Failures are logged, never thrown: these are triggered from inside domain
+   * flows (a dispute being filed, a payout failing) and must never fail the
+   * originating request.
+   */
+  private async persistForAdmins(
+    type: NotificationType,
+    title: string,
+    body: string,
+    payload?: Record<string, unknown>,
+  ): Promise<void> {
+    try {
+      const admins = await this.usersRepository.find({
+        where: { role: Role.ADMIN },
+        select: ['id'],
+      });
+      if (admins.length === 0) {
+        this.logger.warn(
+          `No admin accounts found — ${type} notification not delivered to anyone.`,
+        );
+        return;
+      }
+      for (const admin of admins) {
+        await this.persist(admin.id, type, title, body, payload);
+      }
+    } catch (err) {
+      this.logger.error(
+        `Failed to fan out ${type} notification to admins: ${(err as Error).message}`,
+      );
+    }
+  }
+
   private async persist(
     userId: number,
     type: NotificationType,
@@ -597,10 +896,7 @@ export class NotificationsService {
       });
 
       if (prefs) {
-        const prefMap =
-          prefs.user.role === Role.ARTISAN
-            ? ARTISAN_PREF_KEY
-            : CUSTOMER_PREF_KEY;
+        const prefMap = this.prefKeyMapFor(prefs.user.role);
         const prefKey = prefMap[type];
         // Skip if the user has explicitly disabled this notification type
         if (prefKey && prefs[prefKey] === false) return;

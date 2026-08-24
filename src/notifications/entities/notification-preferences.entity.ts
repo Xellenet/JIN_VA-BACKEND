@@ -129,6 +129,31 @@ export class NotificationPreferences {
   @Column({ name: 'booking_reminders', type: 'boolean', default: true })
   bookingReminders!: boolean;
 
+  // ─── Admin notification types (PR3) ───────────────────────────────────────
+  // The five real toggles that replace admin's previously-decorative
+  // "system notification settings" tab. Each one gates an event that is
+  // actually emitted somewhere in this codebase — no dead toggles.
+
+  /** [Admin] A customer or artisan opened a new dispute needing review. */
+  @Column({ name: 'dispute_filed', type: 'boolean', default: true })
+  disputeFiled!: boolean;
+
+  /** [Admin] An artisan payout failed and needs manual attention. */
+  @Column({ name: 'payment_transfer_failed', type: 'boolean', default: true })
+  paymentTransferFailed!: boolean;
+
+  /** [Admin] An artisan submitted documents for identity verification. */
+  @Column({ name: 'verification_submitted', type: 'boolean', default: true })
+  verificationSubmitted!: boolean;
+
+  /** [Admin] A review was flagged (FL1) and entered the moderation queue. */
+  @Column({ name: 'review_flagged', type: 'boolean', default: true })
+  reviewFlagged!: boolean;
+
+  /** [Admin] A new artisan account was created on the platform. */
+  @Column({ name: 'artisan_registered', type: 'boolean', default: true })
+  artisanRegistered!: boolean;
+
   // ─── Shared ───────────────────────────────────────────────────────────────
   @Column({ name: 'message_received', type: 'boolean', default: true })
   messageReceived!: boolean;

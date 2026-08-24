@@ -26,6 +26,7 @@ import { GetNotificationsQueryDto } from './dto/get-notifications-query.dto';
 import { NotificationResponseDto } from './dto/notification-response.dto';
 import { CustomerNotificationPreferencesResponseDto } from './dto/customer-notification-preferences-response.dto';
 import { ArtisanNotificationPreferencesResponseDto } from './dto/artisan-notification-preferences-response.dto';
+import { AdminNotificationPreferencesResponseDto } from './dto/admin-notification-preferences-response.dto';
 import { UpdateNotificationPreferencesDto } from './dto/update-notification-preferences.dto';
 import type { AuthenticatedRequest } from '@common/types/authenticated-request.type';
 
@@ -40,6 +41,7 @@ import type { AuthenticatedRequest } from '@common/types/authenticated-request.t
 @ApiExtraModels(
   CustomerNotificationPreferencesResponseDto,
   ArtisanNotificationPreferencesResponseDto,
+  AdminNotificationPreferencesResponseDto,
 )
 export class NotificationsController {
   constructor(private readonly notificationsService: NotificationsService) {}
@@ -55,8 +57,10 @@ export class NotificationsController {
     description:
       "Returns the caller's notification preferences. " +
       'The shape differs by role — customers see booking/job/payment toggles; ' +
-      'artisans see opportunity/application/payment-released toggles. ' +
-      'Both roles see the channel toggles (email, SMS, push).',
+      'artisans see opportunity/application/payment toggles; ' +
+      'admins see the five platform-queue toggles (dispute filed, payout transfer failed, ' +
+      'verification submitted, review flagged, new artisan registered). ' +
+      'Every role sees the channel toggles (email, SMS, push).',
   })
   @ApiOkResponse({
     description: 'Preferences retrieved (shape varies by role)',
@@ -67,6 +71,9 @@ export class NotificationsController {
         },
         {
           $ref: '#/components/schemas/ArtisanNotificationPreferencesResponseDto',
+        },
+        {
+          $ref: '#/components/schemas/AdminNotificationPreferencesResponseDto',
         },
       ],
     },
@@ -87,7 +94,8 @@ export class NotificationsController {
     summary: 'Update notification preferences',
     description:
       'Toggle individual notification types or channels on or off. ' +
-      'Only role-relevant fields are applied — artisan-only flags are ignored for customers and vice versa. ' +
+      'Only role-relevant fields are applied — artisan-only flags are ignored for customers, ' +
+      'admin-only flags are ignored for both, and vice versa. ' +
       'Send only the fields you want to change; omitted fields remain as-is.',
   })
   @ApiOkResponse({
@@ -99,6 +107,9 @@ export class NotificationsController {
         },
         {
           $ref: '#/components/schemas/ArtisanNotificationPreferencesResponseDto',
+        },
+        {
+          $ref: '#/components/schemas/AdminNotificationPreferencesResponseDto',
         },
       ],
     },

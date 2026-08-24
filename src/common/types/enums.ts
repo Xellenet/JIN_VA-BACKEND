@@ -128,6 +128,31 @@ export enum NotificationType {
   PORTFOLIO_APPROVED = 'PORTFOLIO_APPROVED',
   PORTFOLIO_REJECTED = 'PORTFOLIO_REJECTED',
   SECURITY_ALERT = 'SECURITY_ALERT',
+
+  /** PD1: [Customer] payment reached the held/secured state. */
+  PAYMENT_RECEIPT = 'PAYMENT_RECEIPT',
+  /** PD2: [Artisan] payment for a job is secured on the platform. */
+  PAYMENT_SECURED = 'PAYMENT_SECURED',
+  /** PD2: [Artisan] payout actually released to the artisan. */
+  PAYOUT_RELEASED = 'PAYOUT_RELEASED',
+  /** PD3: [Customer] an admin refunded a payment. */
+  PAYMENT_REFUNDED = 'PAYMENT_REFUNDED',
+  /** PR3: [Admin] an artisan payout failed and needs manual attention. */
+  PAYMENT_TRANSFER_FAILED = 'PAYMENT_TRANSFER_FAILED',
+
+  /** PR3: [Admin] a new dispute was filed and awaits review. */
+  DISPUTE_FILED = 'DISPUTE_FILED',
+  /** PD4: [Both parties] a dispute was resolved by an admin. */
+  DISPUTE_RESOLVED = 'DISPUTE_RESOLVED',
+  /** PD4: [Both parties] a dispute was closed by an admin. */
+  DISPUTE_CLOSED = 'DISPUTE_CLOSED',
+
+  /** PR3: [Admin] a review was flagged and entered the moderation queue. */
+  REVIEW_FLAGGED = 'REVIEW_FLAGGED',
+  /** PR3: [Admin] an artisan submitted verification documents. */
+  ARTISAN_VERIFICATION_SUBMITTED = 'ARTISAN_VERIFICATION_SUBMITTED',
+  /** PR3: [Admin] a new artisan account was created. */
+  ARTISAN_REGISTERED = 'ARTISAN_REGISTERED',
 }
 
 /** PF1: moderation status of an artisan's portfolio (photo/video) upload. */

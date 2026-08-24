@@ -44,7 +44,11 @@ import { ModerationAction, ReviewStatus, Status } from '@common/types/enums';
 import { SUCCESS_MESSAGES } from '@common/constants/success-messages.constants';
 import { ERROR_MESSAGES } from '@common/constants/error-messages.constants';
 import { VARIABLES } from '@common/constants/variables.constants';
-import { APP_EVENTS, ReviewReceivedPayload } from '@common/events/app.events';
+import {
+  APP_EVENTS,
+  ReviewFlaggedPayload,
+  ReviewReceivedPayload,
+} from '@common/events/app.events';
 
 const REVIEW_PHOTO_MIME_BY_EXT: Record<string, string> = {
   '.jpg': 'image/jpeg',
@@ -384,6 +388,22 @@ export class ReviewsService {
     }
 
     this.logger.log(`Review ${id} flagged by user ${actor.id}`);
+
+    /**
+     * PR3: gives the admin "Review Flagged for Moderation" toggle a real
+     * trigger. FL1's flagging capability already existed in this codebase —
+     * what was missing was any signal to admin that the moderation queue had
+     * grown, so a flagged review sat unseen until someone opened the queue.
+     */
+    this.eventEmitter.emit(APP_EVENTS.REVIEW_FLAGGED, {
+      reviewId: review.id,
+      flaggedByName: `${actor.firstname} ${actor.lastname}`,
+      reason: dto.reason,
+      artisanName: review.reviewedUser
+        ? `${review.reviewedUser.firstname} ${review.reviewedUser.lastname}`
+        : 'an artisan',
+    } as ReviewFlaggedPayload);
+
     return { message: SUCCESS_MESSAGES.REVIEW.FLAGGED };
   }
 

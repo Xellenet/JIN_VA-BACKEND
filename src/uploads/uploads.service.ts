@@ -12,6 +12,8 @@ const ALLOWED_DOCUMENT_TYPES = new Set([
 ]);
 /** RP1: reviews are explicitly JPEG/PNG only — no WebP, unlike other image uploads. */
 const ALLOWED_REVIEW_PHOTO_TYPES = new Set(['image/jpeg', 'image/png']);
+/** MC4: message attachments are JPEG/PNG only, same call as review photos. */
+const ALLOWED_MESSAGE_ATTACHMENT_TYPES = new Set(['image/jpeg', 'image/png']);
 
 @Injectable()
 export class UploadsService {
@@ -74,6 +76,25 @@ export class UploadsService {
       'Review photos must be JPEG or PNG.',
     );
     return this.store(file, 'reviews', mimetype);
+  }
+
+  /**
+   * MC4: the image attached to a direct message. Same "upload first, attach
+   * the URL later" pattern as job attachments and review photos — any
+   * authenticated user may upload, and the message-level rules (one image per
+   * message, must accompany a valid customer↔artisan send) are enforced where
+   * the URL is attached, in `MessagesService.send`.
+   *
+   * JPEG/PNG only, matching the design spec; the 5MB ceiling is enforced by
+   * the controller's `MaxFileSizeValidator`, not here.
+   */
+  async uploadMessageAttachment(file: Express.Multer.File) {
+    const mimetype = await this.assertMime(
+      file,
+      ALLOWED_MESSAGE_ATTACHMENT_TYPES,
+      'Message attachments must be JPEG or PNG.',
+    );
+    return this.store(file, 'messages', mimetype);
   }
 
   private async store(
