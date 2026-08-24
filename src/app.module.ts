@@ -29,6 +29,7 @@ import { PushNotificationsModule } from './push-notifications/push-notifications
 import { DisputesModule } from './disputes/disputes.module';
 import { PaymentsModule } from './payments/payments.module';
 import { PortfolioModule } from './portfolio/portfolio.module';
+import { AdminAuditModule } from './admin-audit/admin-audit.module';
 
 @Module({
   imports: [
@@ -65,6 +66,9 @@ import { PortfolioModule } from './portfolio/portfolio.module';
     DisputesModule,
     PaymentsModule,
     PortfolioModule,
+    // AT5: leaf module owning the append-only `admin_actions` log. Imported by
+    // every module that performs an auditable admin action.
+    AdminAuditModule,
   ],
   controllers: [AppController],
   providers: [AppService],

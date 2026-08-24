@@ -10,6 +10,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import {
+  ApiBadRequestResponse,
   ApiBearerAuth,
   ApiForbiddenResponse,
   ApiNotFoundResponse,
@@ -23,7 +24,12 @@ import {
   AdminJobsQueryDto,
   AdminUsersQueryDto,
   AdminBookingsQueryDto,
+  AdminSearchQueryDto,
+  BanUserDto,
+  SuspendUserDto,
 } from './dto/admin-query.dto';
+import { AdminAuditService } from '../admin-audit/admin-audit.service';
+import { GetAdminActionsQueryDto } from '../admin-audit/dto/get-admin-actions-query.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '@common/decorators/roles.decorator';
@@ -63,6 +69,7 @@ export class AdminController {
     private readonly disputesService: DisputesService,
     private readonly portfolioService: PortfolioService,
     private readonly reviewsService: ReviewsService,
+    private readonly auditService: AdminAuditService,
   ) {}
 
   // ─── Stats ────────────────────────────────────────────────────────────────────
@@ -73,10 +80,77 @@ export class AdminController {
     return this.adminService.getStats();
   }
 
+  /**
+   * AT9: the platform fee percentage the backend actually applies, so the
+   * Settings screen can stop showing a value that disagrees with production.
+   */
+  @Get('platform-config')
+  @ApiOperation({
+    summary: 'AT9: the platform fee percentage the backend actually applies',
+    description:
+      'Read-only. Runtime configuration of the fee is deliberately out of scope — this ' +
+      'endpoint exists so the displayed value stops contradicting the value used to ' +
+      'compute every payment split.',
+  })
+  getPlatformConfig() {
+    return this.adminService.getPlatformConfig();
+  }
+
+  // ─── AT6: cross-entity search ─────────────────────────────────────────────────
+
+  /**
+   * AT6: one admin-only lookup across users, jobs and disputes.
+   *
+   * This deliberately crosses user boundaries, which is why it is admin-only
+   * and enforced here by the controller-level `RolesGuard` — a non-admin
+   * hitting this route directly gets a 403, not an empty result set.
+   */
+  @Get('search')
+  @ApiOperation({
+    summary: 'AT6: find users, jobs and disputes by name, email or id',
+    description:
+      'Not a general full-text search — scoped to the three entity types an admin needs ' +
+      'to navigate to. Each type is capped independently by `limit`.',
+  })
+  @ApiForbiddenResponse({ description: 'Caller is not an admin' })
+  search(@Query() query: AdminSearchQueryDto) {
+    return this.adminService.search(query);
+  }
+
+  // ─── AT5: admin action audit log ──────────────────────────────────────────────
+
+  /**
+   * AT5: paginated, newest-first, filterable by action type and acting admin.
+   *
+   * Separate from `GET /admin/reviews/moderation-log`, which the reviews round
+   * built and which stays exactly as it is — this log neither replaces nor
+   * absorbs it.
+   */
+  @Get('actions')
+  @ApiOperation({
+    summary:
+      'AT5: append-only log of every consequential admin action — bans, suspensions, ' +
+      'verification and portfolio decisions, dispute rulings (with verdict and money ' +
+      'action), refunds and fraud flags',
+    description:
+      'Rows have no foreign keys and snapshot the actor and target, so they survive ' +
+      'deletion of whatever they describe. Retention is indefinite.',
+  })
+  getAdminActions(@Query() query: GetAdminActionsQueryDto) {
+    return this.auditService.findAll(query);
+  }
+
   // ─── Users ────────────────────────────────────────────────────────────────────
 
   @Get('users')
-  @ApiOperation({ summary: 'List all users with optional role/ban filters' })
+  @ApiOperation({
+    summary:
+      'List all users, filterable by role, account status (AT3) and join date',
+    description:
+      '`status` distinguishes ACTIVE / SUSPENDED / BANNED and takes precedence over the ' +
+      'older boolean `isBanned` filter, which still works. `joinedFrom`/`joinedTo` are ' +
+      'inclusive; a bare `YYYY-MM-DD` in `joinedTo` covers the whole day.',
+  })
   listUsers(@Query() query: AdminUsersQueryDto) {
     return this.adminService.listUsers(query);
   }
@@ -89,20 +163,67 @@ export class AdminController {
   }
 
   @Patch('users/:id/ban')
-  @ApiOperation({ summary: 'Ban a user — blocks all future logins' })
+  @ApiOperation({
+    summary: 'Ban a user permanently — blocks all future logins',
+    description:
+      'AT2: the acting admin is now recorded on the user row and in the audit log. ' +
+      'Self-ban is rejected.',
+  })
   @ApiParam({ name: 'id', type: Number })
   banUser(
     @Req() req: AuthenticatedRequest,
     @Param('id', ParseIntPipe) id: number,
+    @Body() dto: BanUserDto,
   ) {
-    return this.adminService.banUser(req.user.id, id);
+    return this.adminService.banUser(req.user, id, dto);
   }
 
   @Patch('users/:id/unban')
   @ApiOperation({ summary: 'Unban a previously banned user' })
   @ApiParam({ name: 'id', type: Number })
-  unbanUser(@Param('id', ParseIntPipe) id: number) {
-    return this.adminService.unbanUser(id);
+  unbanUser(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
+    return this.adminService.unbanUser(req.user, id);
+  }
+
+  /**
+   * AT3: reversible suspension, distinct from the permanent ban.
+   *
+   * A suspended user can still sign in, but cannot transact (bookings, jobs,
+   * applications, messages) and is excluded from public artisan search.
+   * Indefinite until reactivated. Self-suspension is rejected, matching the
+   * existing self-ban guard.
+   */
+  @Patch('users/:id/suspend')
+  @ApiOperation({
+    summary:
+      'AT3: suspend an account (reversible) — can still sign in, cannot transact or be found in search',
+  })
+  @ApiParam({ name: 'id', type: Number })
+  @ApiBadRequestResponse({
+    description:
+      'Already suspended, already permanently banned, or the admin tried to suspend themselves',
+  })
+  suspendUser(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: SuspendUserDto,
+  ) {
+    return this.adminService.suspendUser(req.user, id, dto);
+  }
+
+  @Patch('users/:id/activate')
+  @ApiOperation({
+    summary: 'AT3: reactivate a suspended account — fully restores it',
+  })
+  @ApiParam({ name: 'id', type: Number })
+  activateUser(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
+    return this.adminService.activateUser(req.user, id);
   }
 
   // ─── Jobs ────────────────────────────────────────────────────────────────────
@@ -188,7 +309,7 @@ export class AdminController {
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: ApproveVerificationDto,
   ) {
-    return this.verificationService.approve(req.user.id, id, dto);
+    return this.verificationService.approve(req.user, id, dto);
   }
 
   @Patch('verifications/:id/reject')
@@ -199,20 +320,49 @@ export class AdminController {
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: RejectVerificationDto,
   ) {
-    return this.verificationService.reject(req.user.id, id, dto);
+    return this.verificationService.reject(req.user, id, dto);
   }
 
   // ─── Disputes ─────────────────────────────────────────────────────────────────
 
   @Get('disputes')
-  @ApiOperation({ summary: 'List all disputes with optional status filter' })
+  @ApiOperation({
+    summary:
+      'DQ1: list disputes with server-side status, category and free-text filtering',
+    description:
+      '`q` searches the whole dispute set (not just the loaded page) across dispute id, ' +
+      "booking id, and the raiser's name and email. Paginated; `limit` is capped at 100.",
+  })
   listDisputes(@Query() query: GetDisputesQueryDto) {
     return this.disputesService.findAll(query);
   }
 
+  /**
+   * DQ2: whole-set aggregate counts for the queue's four counter cards, plus
+   * DR6's SLA figures.
+   *
+   * Declared **before** `disputes/:id` on purpose — route matching is
+   * declaration-ordered, and `ParseIntPipe` on `:id` would otherwise reject
+   * "summary" with a 400.
+   */
+  @Get('disputes/summary')
+  @ApiOperation({
+    summary:
+      'DQ2/DR6: whole-set dispute counts by status, plus average resolution time and the count open past 48h',
+    description:
+      'Counts honour the `category` and `q` filters so the cards describe the active ' +
+      'filter, and deliberately ignore `status` (a per-status breakdown filtered to one ' +
+      'status is just that status). Replaces the page-local arithmetic that went quietly ' +
+      'wrong past row 100.',
+  })
+  getDisputeSummary(@Query() query: GetDisputesQueryDto) {
+    return this.disputesService.getQueueSummary(query);
+  }
+
   @Get('disputes/:id')
   @ApiOperation({
-    summary: 'Get a single dispute with full booking and participant details',
+    summary:
+      'Get a single dispute with participants, job/booking detail (DQ3), the linked payment, sibling disputes and the money actions actually available',
   })
   @ApiParam({ name: 'id', type: Number })
   getDispute(@Param('id', ParseIntPipe) id: number) {
@@ -275,15 +425,39 @@ export class AdminController {
     return this.disputesService.startReview(req.user.id, id);
   }
 
+  /**
+   * DR1 + DR2: resolving records a **verdict** and carries out the money
+   * action that verdict implies.
+   *
+   * `outcome` is mandatory. `REFUND_CLIENT` refunds the linked payment (full
+   * by default, or the partial `refundAmountGhs`); `RELEASE_ARTISAN` releases
+   * a withheld payment to the artisan; `MUTUAL` records the ruling and moves
+   * no money.
+   *
+   * If the money action fails, the dispute is **not** resolved — the ruling is
+   * rolled back, the provider's specific error is surfaced, and the dispute
+   * stays actionable. If the action is impossible (no linked payment, already
+   * refunded/released, a sibling dispute already moved money on the same
+   * payment) the verdict is still recorded, `moneyAction` is `NONE`, and
+   * `moneySkippedReason` states why — no clawback is attempted.
+   */
   @Patch('disputes/:id/resolve')
-  @ApiOperation({ summary: 'Resolve a dispute with a resolution statement' })
+  @ApiOperation({
+    summary:
+      'DR1/DR2: resolve a dispute with one of the three verdicts, carrying out the money action it implies',
+  })
   @ApiParam({ name: 'id', type: Number })
+  @ApiBadRequestResponse({
+    description:
+      'Already resolved/closed (including losing a concurrent race), an invalid refund amount, ' +
+      'or the money action failed — in which case the dispute is left unresolved and actionable',
+  })
   resolveDispute(
     @Req() req: AuthenticatedRequest,
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: ResolveDisputeDto,
   ) {
-    return this.disputesService.resolve(req.user.id, id, dto);
+    return this.disputesService.resolve(req.user, id, dto);
   }
 
   @Patch('disputes/:id/close')
@@ -294,7 +468,7 @@ export class AdminController {
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: CloseDisputeDto,
   ) {
-    return this.disputesService.close(req.user.id, id, dto);
+    return this.disputesService.close(req.user, id, dto);
   }
 
   // ─── Portfolio moderation (PF4) ────────────────────────────────────────────────
@@ -313,18 +487,24 @@ export class AdminController {
       "Approve a portfolio item — makes it visible in the artisan's public gallery",
   })
   @ApiParam({ name: 'id', type: Number })
-  approvePortfolioItem(@Param('id', ParseIntPipe) id: number) {
-    return this.portfolioService.approve(id);
+  approvePortfolioItem(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
+    // AT2/AT5: portfolio moderation previously received no admin id at all, so
+    // an approval was entirely unattributable.
+    return this.portfolioService.approve(req.user, id);
   }
 
   @Patch('portfolio/:id/reject')
   @ApiOperation({ summary: 'Reject a portfolio item with a mandatory reason' })
   @ApiParam({ name: 'id', type: Number })
   rejectPortfolioItem(
+    @Req() req: AuthenticatedRequest,
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: RejectPortfolioItemDto,
   ) {
-    return this.portfolioService.reject(id, dto);
+    return this.portfolioService.reject(req.user, id, dto);
   }
 
   // ─── Review moderation (AM2–AM5) ────────────────────────────────────────────────

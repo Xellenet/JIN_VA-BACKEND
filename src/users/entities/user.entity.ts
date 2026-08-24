@@ -88,6 +88,33 @@ export class User {
   @Column({ name: 'banned_at', type: 'timestamp', nullable: true })
   bannedAt?: Date;
 
+  /** AT2: the admin who applied the ban. Nothing recorded an actor before. */
+  @Column({ name: 'banned_by_id', type: 'int', nullable: true })
+  bannedById?: number;
+
+  /**
+   * AT3: reversible suspension, distinct from the permanent ban (Open
+   * Question 4, resolved): a suspended user **can** still log in, but cannot
+   * transact (no new bookings, jobs, applications or messages) and is not
+   * publicly discoverable in artisan search. Indefinite until an admin
+   * reactivates.
+   *
+   * Deliberately independent of `isBanned` rather than a single status enum —
+   * the two can coexist and `isBanned` already gates login in `JwtStrategy`.
+   */
+  @Column({ name: 'is_suspended', type: 'boolean', default: false })
+  isSuspended!: boolean;
+
+  @Column({ name: 'suspended_at', type: 'timestamp', nullable: true })
+  suspendedAt?: Date;
+
+  @Column({ name: 'suspended_by_id', type: 'int', nullable: true })
+  suspendedById?: number;
+
+  /** AT3: the reason an admin gave; shown to the admin, not to the user. */
+  @Column({ name: 'suspension_reason', type: 'text', nullable: true })
+  suspensionReason?: string;
+
   @OneToMany(() => Address, (address) => address.user, { cascade: true })
   addresses: Address[];
 

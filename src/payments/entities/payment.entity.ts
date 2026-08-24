@@ -97,6 +97,28 @@ export class Payment {
   })
   refundedAmount!: number;
 
+  /**
+   * AT7: manual fraud-review marker set by an admin with a mandatory reason.
+   *
+   * Deliberately kept **separate from `status`**: a payment can be both
+   * `RELEASED` and flagged, and folding this into `status` would fork the
+   * settled payment-status vocabulary the frontend's shared
+   * `paymentStatusConfig` map is the single source for. Marking, visibility
+   * and auditing only — the flag has no enforcement effect on payouts or
+   * refunds (Open Question 9, resolved).
+   */
+  @Column({ name: 'fraud_flagged', type: 'boolean', default: false })
+  fraudFlagged!: boolean;
+
+  @Column({ name: 'fraud_flag_reason', type: 'text', nullable: true })
+  fraudFlagReason?: string | null;
+
+  @Column({ name: 'fraud_flagged_at', type: 'timestamptz', nullable: true })
+  fraudFlaggedAt?: Date | null;
+
+  @Column({ name: 'fraud_flagged_by_id', type: 'int', nullable: true })
+  fraudFlaggedById?: number | null;
+
   @Column({ name: 'paid_at', type: 'timestamptz', nullable: true })
   paidAt?: Date;
 

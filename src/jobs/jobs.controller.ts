@@ -24,6 +24,7 @@ import {
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
+import { NotSuspendedGuard } from '@common/guards/not-suspended.guard';
 import { Roles } from '@common/decorators/roles.decorator';
 import { Role } from '@common/types/enums';
 import { JobsService } from './jobs.service';
@@ -60,7 +61,8 @@ export class JobsController {
    */
   @Post()
   @HttpCode(201)
-  @UseGuards(RolesGuard)
+  // AT3: a suspended customer cannot post new jobs.
+  @UseGuards(RolesGuard, NotSuspendedGuard)
   @Roles(Role.CUSTOMER)
   @ApiOperation({ summary: 'Post a new job (CUSTOMER only)' })
   @ApiCreatedResponse({
@@ -201,7 +203,8 @@ export class JobsController {
    */
   @Post(':id/apply')
   @HttpCode(201)
-  @UseGuards(RolesGuard)
+  // AT3: a suspended artisan cannot apply for new work.
+  @UseGuards(RolesGuard, NotSuspendedGuard)
   @Roles(Role.ARTISAN)
   @ApiOperation({ summary: 'Apply to a job (ARTISAN only)' })
   @ApiCreatedResponse({

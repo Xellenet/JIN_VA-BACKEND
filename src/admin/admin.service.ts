@@ -16,9 +16,19 @@ import {
   AdminUsersQueryDto,
   AdminJobsQueryDto,
   AdminBookingsQueryDto,
+  AdminSearchQueryDto,
+  BanUserDto,
+  SuspendUserDto,
 } from './dto/admin-query.dto';
+import { Dispute } from '../disputes/entities/dispute.entity';
+import { AdminAuditService } from '../admin-audit/admin-audit.service';
+import { PaymentsService } from '../payments/payments.service';
 import {
+  AdminActionTarget,
+  AdminActionType,
+  AdminUserStatus,
   BookingStatus,
+  DisputeCategory,
   Role,
   Status,
   VerificationStatus,
@@ -46,7 +56,14 @@ export class AdminService {
     private readonly verificationsRepo: Repository<ArtisanVerification>,
     @InjectRepository(Booking)
     private readonly bookingsRepo: Repository<Booking>,
+    /** AT6: the third entity type the cross-entity admin search covers. */
+    @InjectRepository(Dispute)
+    private readonly disputesRepo: Repository<Dispute>,
     private readonly jobsService: JobsService,
+    /** AT5: ban/unban and suspend/activate each write an audit row. */
+    private readonly auditService: AdminAuditService,
+    /** AT9: exposes the platform fee percentage the backend actually applies. */
+    private readonly paymentsService: PaymentsService,
   ) {}
 
   // ─── Users ───────────────────────────────────────────────────────────────────
@@ -60,8 +77,40 @@ export class AdminService {
       .orderBy('u.createdAt', 'DESC');
 
     if (query.role) qb.andWhere('u.role = :role', { role: query.role });
-    if (query.isBanned !== undefined)
+
+    // AT3: `status` distinguishes suspended from banned and takes precedence
+    // over the older boolean-only `isBanned` filter, which is kept working for
+    // existing callers.
+    if (query.status) {
+      switch (query.status) {
+        case AdminUserStatus.BANNED:
+          qb.andWhere('u.isBanned = true');
+          break;
+        case AdminUserStatus.SUSPENDED:
+          // A banned account is reported as BANNED, never as SUSPENDED, even
+          // when both flags are set — so the two filters partition the set.
+          qb.andWhere('u.isSuspended = true').andWhere('u.isBanned = false');
+          break;
+        case AdminUserStatus.ACTIVE:
+          qb.andWhere('u.isBanned = false').andWhere('u.isSuspended = false');
+          break;
+      }
+    } else if (query.isBanned !== undefined) {
       qb.andWhere('u.isBanned = :isBanned', { isBanned: query.isBanned });
+    }
+
+    // AT3: join-date filter. `joinedTo` is treated as inclusive of the whole
+    // day when a bare date is supplied, so "up to 31 Aug" includes 31 Aug.
+    if (query.joinedFrom) {
+      qb.andWhere('u.createdAt >= :joinedFrom', {
+        joinedFrom: new Date(query.joinedFrom),
+      });
+    }
+    if (query.joinedTo) {
+      qb.andWhere('u.createdAt <= :joinedTo', {
+        joinedTo: this.endOfDayIfBareDate(query.joinedTo),
+      });
+    }
 
     const [users, total] = await qb
       .skip((page - 1) * limit)
@@ -84,25 +133,103 @@ export class AdminService {
     return { message: 'User retrieved.', data: this.sanitizeUser(user) };
   }
 
-  async banUser(adminId: number, userId: number) {
-    if (adminId === userId)
+  /**
+   * AT2: the acting admin is now captured on the row (`bannedById`) and in the
+   * audit log. Before this round only `bannedAt` was stored, so a ban was
+   * completely unattributable after the fact.
+   */
+  async banUser(admin: User, userId: number, dto?: BanUserDto) {
+    if (admin.id === userId)
       throw new BadRequestException('You cannot ban yourself.');
     const user = await this.loadUserOrFail(userId);
     if (user.isBanned) throw new BadRequestException('User is already banned.');
     user.isBanned = true;
     user.bannedAt = new Date();
+    user.bannedById = admin.id;
     await this.usersRepo.save(user);
+
+    await this.recordUserAction(
+      admin,
+      user,
+      AdminActionType.USER_BAN,
+      dto?.reason ?? null,
+    );
     return { message: `User ${user.email} has been banned.` };
   }
 
-  async unbanUser(userId: number) {
+  async unbanUser(admin: User, userId: number) {
     const user = await this.loadUserOrFail(userId);
     if (!user.isBanned)
       throw new BadRequestException('User is not currently banned.');
     user.isBanned = false;
     user.bannedAt = undefined;
+    user.bannedById = undefined;
     await this.usersRepo.save(user);
+
+    await this.recordUserAction(admin, user, AdminActionType.USER_UNBAN, null);
     return { message: `User ${user.email} has been unbanned.` };
+  }
+
+  /**
+   * AT3: reversible suspension, distinct from the permanent ban.
+   *
+   * Behaviour (Open Question 4, resolved): a suspended user **can still log
+   * in** — `JwtStrategy` blocks only `isBanned` — but cannot transact (no new
+   * bookings, jobs, applications or messages; enforced by `NotSuspendedGuard`
+   * on those routes) and is excluded from public artisan search. Indefinite
+   * until an admin reactivates; there is deliberately no duration.
+   *
+   * Self-suspension is blocked, matching the existing self-ban guard — an
+   * admin locking themselves out of the tools they'd need to undo it is not a
+   * recoverable state.
+   */
+  async suspendUser(admin: User, userId: number, dto: SuspendUserDto) {
+    if (admin.id === userId)
+      throw new BadRequestException('You cannot suspend yourself.');
+    const user = await this.loadUserOrFail(userId);
+    if (user.isSuspended)
+      throw new BadRequestException('User is already suspended.');
+    if (user.isBanned)
+      throw new BadRequestException(
+        'User is permanently banned, which is stricter than a suspension. Unban them first if you meant to suspend instead.',
+      );
+
+    user.isSuspended = true;
+    user.suspendedAt = new Date();
+    user.suspendedById = admin.id;
+    user.suspensionReason = dto.reason;
+    await this.usersRepo.save(user);
+
+    await this.recordUserAction(
+      admin,
+      user,
+      AdminActionType.USER_SUSPEND,
+      dto.reason,
+    );
+    return {
+      message: `User ${user.email} has been suspended. They can still sign in but cannot transact or be found in search until reactivated.`,
+    };
+  }
+
+  /** AT3: full reactivation — every restriction the suspension applied is lifted. */
+  async activateUser(admin: User, userId: number) {
+    const user = await this.loadUserOrFail(userId);
+    if (!user.isSuspended)
+      throw new BadRequestException('User is not currently suspended.');
+
+    user.isSuspended = false;
+    user.suspendedAt = undefined;
+    user.suspendedById = undefined;
+    user.suspensionReason = undefined;
+    await this.usersRepo.save(user);
+
+    await this.recordUserAction(
+      admin,
+      user,
+      AdminActionType.USER_ACTIVATE,
+      null,
+    );
+    return { message: `User ${user.email} has been reactivated.` };
   }
 
   // ─── Jobs ────────────────────────────────────────────────────────────────────
@@ -263,7 +390,191 @@ export class AdminService {
     };
   }
 
+  // ─── AT6: cross-entity admin search ───────────────────────────────────────────
+
+  /**
+   * AT6: one admin-only lookup across the three entity types an admin actually
+   * needs to jump to — users, jobs and disputes — by the identifiers they
+   * realistically have (name, email, numeric id).
+   *
+   * Scope boundary, deliberate: this is **not** a general full-text search
+   * over messages, reviews or payment records. It crosses user boundaries by
+   * design, which is exactly why the route is admin-only and enforced
+   * server-side by `RolesGuard` on `AdminController`, not by the frontend
+   * simply not offering it.
+   *
+   * Each entity type is capped independently (`limit`, max 25) so one noisy
+   * match set can't crowd out the others.
+   */
+  async search(query: AdminSearchQueryDto) {
+    const term = query.q.trim();
+    const limit = query.limit ?? 5;
+    const like = `%${term.toLowerCase()}%`;
+    const numeric = /^\d+$/.test(term) ? Number(term) : null;
+
+    const usersQb = this.usersRepo
+      .createQueryBuilder('u')
+      .where(
+        "(LOWER(u.firstname || ' ' || u.lastname) LIKE :like OR LOWER(u.email) LIKE :like)",
+        { like },
+      );
+    if (numeric !== null) {
+      usersQb.orWhere('u.id = :numeric', { numeric });
+    }
+    usersQb.orderBy('u.createdAt', 'DESC').take(limit);
+
+    const jobsQb = this.jobsRepo
+      .createQueryBuilder('j')
+      .withDeleted()
+      .leftJoinAndSelect('j.customer', 'customer')
+      .leftJoinAndSelect('j.service', 'service')
+      .where('(LOWER(j.title) LIKE :like OR LOWER(j.location) LIKE :like)', {
+        like,
+      });
+    if (numeric !== null) {
+      jobsQb.orWhere('j.id = :numeric', { numeric });
+    }
+    jobsQb.orderBy('j.createdAt', 'DESC').take(limit);
+
+    const disputesQb = this.disputesRepo
+      .createQueryBuilder('d')
+      .leftJoinAndSelect('d.raisedBy', 'raisedBy')
+      .where(
+        "(LOWER(raisedBy.firstname || ' ' || raisedBy.lastname) LIKE :like OR LOWER(raisedBy.email) LIKE :like)",
+        { like },
+      );
+    if (numeric !== null) {
+      disputesQb
+        .orWhere('d.id = :numeric', { numeric })
+        .orWhere('d.booking_id = :numeric', { numeric });
+    }
+    disputesQb.orderBy('d.createdAt', 'DESC').take(limit);
+
+    const [users, jobs, disputes] = await Promise.all([
+      usersQb.getMany(),
+      jobsQb.getMany(),
+      disputesQb.getMany(),
+    ]);
+
+    return {
+      message:
+        users.length + jobs.length + disputes.length > 0
+          ? 'Search results retrieved.'
+          : 'No users, jobs or disputes match that search.',
+      data: {
+        query: term,
+        users: users.map((u) => ({
+          id: u.id,
+          name: `${u.firstname} ${u.lastname}`,
+          email: u.email,
+          role: u.role,
+          status: this.accountStatus(u),
+          createdAt: u.createdAt,
+        })),
+        jobs: jobs.map((j) => ({
+          id: j.id,
+          title: j.title ?? null,
+          status: j.status,
+          location: j.location,
+          service: j.service
+            ? { id: j.service.id, name: j.service.name }
+            : null,
+          customer: j.customer
+            ? {
+                id: j.customer.id,
+                name: `${j.customer.firstname} ${j.customer.lastname}`,
+              }
+            : null,
+          deletedAt: j.deletedAt ?? null,
+          createdAt: j.createdAt,
+        })),
+        disputes: disputes.map((d) => ({
+          id: d.id,
+          bookingId: d.bookingId,
+          status: d.status,
+          category: d.category ?? DisputeCategory.OTHER,
+          outcome: d.outcome ?? null,
+          raisedBy: d.raisedBy
+            ? {
+                id: d.raisedBy.id,
+                name: `${d.raisedBy.firstname} ${d.raisedBy.lastname}`,
+              }
+            : null,
+          createdAt: d.createdAt,
+        })),
+        counts: {
+          users: users.length,
+          jobs: jobs.length,
+          disputes: disputes.length,
+        },
+      },
+    };
+  }
+
+  // ─── AT9: platform configuration the frontend must display truthfully ────────
+
+  /**
+   * AT9: the platform fee percentage the backend **actually applies** in
+   * `PaymentsService.holdPayment`. The admin Settings screen displayed a
+   * hardcoded 15 against a backend default of 5 — a 3× disagreement an admin
+   * could reasonably have acted on.
+   *
+   * Read-only: making the fee runtime-configurable has retroactive-pricing
+   * consequences for in-flight jobs and is deliberately out of scope (Open
+   * Question 11, resolved).
+   */
+  getPlatformConfig() {
+    return {
+      message: 'Platform configuration retrieved.',
+      data: {
+        platformFeePercent: this.paymentsService.getPlatformFeePercent(),
+        /** Tells the frontend to render the field read-only rather than editable. */
+        platformFeeEditable: false,
+        currency: 'GHS',
+      },
+    };
+  }
+
   // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+  /** AT3: the single derivation of account status, used by search and reads. */
+  private accountStatus(user: User): AdminUserStatus {
+    if (user.isBanned) return AdminUserStatus.BANNED;
+    if (user.isSuspended) return AdminUserStatus.SUSPENDED;
+    return AdminUserStatus.ACTIVE;
+  }
+
+  /**
+   * A bare `YYYY-MM-DD` parses as midnight UTC, which would exclude everything
+   * that happened *on* the end date. Push it to the end of that day.
+   */
+  private endOfDayIfBareDate(value: string): Date {
+    const parsed = new Date(value);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value.trim())) {
+      parsed.setUTCHours(23, 59, 59, 999);
+    }
+    return parsed;
+  }
+
+  /** AT5: one audit row per account action, with the target snapshotted. */
+  private async recordUserAction(
+    admin: User,
+    target: User,
+    action: AdminActionType,
+    reason: string | null,
+  ): Promise<void> {
+    await this.auditService.record({
+      action,
+      targetType: AdminActionTarget.USER,
+      targetId: target.id,
+      targetLabel: `${target.firstname} ${target.lastname} (${target.email})`,
+      reason,
+      actorId: admin.id,
+      actorName: `${admin.firstname} ${admin.lastname}`,
+      actorEmail: admin.email,
+      metadata: { role: target.role },
+    });
+  }
 
   private async loadUserOrFail(id: number): Promise<User> {
     const user = await this.usersRepo.findOne({ where: { id } });
@@ -273,7 +584,9 @@ export class AdminService {
 
   private sanitizeUser(user: User) {
     const { password: _password, ...safe } = user;
-    return safe;
+    // AT3: one derived field so every surface that displays account state
+    // agrees, instead of each one re-deriving BANNED-wins-over-SUSPENDED.
+    return { ...safe, accountStatus: this.accountStatus(user) };
   }
 
   private paginate(total: number, page: number, limit: number): Pagination {

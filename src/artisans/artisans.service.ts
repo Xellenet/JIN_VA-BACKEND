@@ -353,6 +353,13 @@ export class ArtisansService {
         .where('user.deletedAt IS NULL')
         // F3: profiles missing required fields never appear in customer-facing search.
         .andWhere('ap.isProfileComplete = true')
+        // AT3: a suspended artisan is not publicly discoverable — that is half
+        // of what suspension means (Open Question 4, resolved). A *banned*
+        // artisan is excluded here too: they can no longer log in at all, so
+        // surfacing them to customers could only ever produce a booking
+        // nobody can fulfil.
+        .andWhere('user.isSuspended = false')
+        .andWhere('user.isBanned = false')
     );
   }
 

@@ -19,6 +19,7 @@ import { Role } from '@common/types/enums';
 import { InitializePaymentDto } from './dto/initialize-payment.dto';
 import { SetupPayoutMethodDto } from './dto/setup-payout-method.dto';
 import { AdminRefundDto } from './dto/admin-refund.dto';
+import { FraudFlagDto } from './dto/fraud-flag.dto';
 import type { AuthenticatedRequest } from '@common/types/authenticated-request.type';
 import type { Request } from 'express';
 
@@ -149,9 +150,49 @@ export class PaymentsController {
     summary: 'Admin: issue a (partial) refund on any HELD payment',
   })
   adminRefund(
+    @Req() req: AuthenticatedRequest,
     @Param('paymentId', ParseIntPipe) paymentId: number,
     @Body() dto: AdminRefundDto,
   ) {
-    return this.paymentsService.adminRefund(paymentId, dto.amountGhs);
+    // AT5: the acting admin is threaded through so the refund writes an audit
+    // row. It previously recorded no actor at all.
+    return this.paymentsService.adminRefund(paymentId, dto.amountGhs, req.user);
+  }
+
+  // ─── AT7: fraud flagging ──────────────────────────────────────────────────────
+
+  @Post('admin/:paymentId/fraud-flag')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Admin: flag a transaction for fraud review, with a reason',
+    description:
+      'AT7: marking, visibility and auditing only — the flag has no enforcement effect ' +
+      'on payouts, refunds or the account. Kept entirely separate from `status`, so a ' +
+      'payment can be both RELEASED and flagged and the settled payment-status ' +
+      'vocabulary is never forked.',
+  })
+  flagPaymentForFraud(
+    @Req() req: AuthenticatedRequest,
+    @Param('paymentId', ParseIntPipe) paymentId: number,
+    @Body() dto: FraudFlagDto,
+  ) {
+    return this.paymentsService.setFraudFlag(req.user, paymentId, dto.reason);
+  }
+
+  @Post('admin/:paymentId/fraud-flag/clear')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Admin: clear a fraud-review flag, with a reason',
+  })
+  clearPaymentFraudFlag(
+    @Req() req: AuthenticatedRequest,
+    @Param('paymentId', ParseIntPipe) paymentId: number,
+    @Body() dto: FraudFlagDto,
+  ) {
+    return this.paymentsService.clearFraudFlag(req.user, paymentId, dto.reason);
   }
 }

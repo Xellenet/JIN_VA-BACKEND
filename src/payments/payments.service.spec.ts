@@ -10,6 +10,7 @@ import { Job } from '@jobs/entities/job.entity';
 import { User } from '@users/entities/user.entity';
 import { ArtisanProfile } from '@users/entities/artisan-profile.entity';
 import { PaystackService } from './paystack.service';
+import { AdminAuditService } from '../admin-audit/admin-audit.service';
 import { PaymentStatus } from '@common/types/enums';
 
 describe('PaymentsService', () => {
@@ -38,6 +39,8 @@ describe('PaymentsService', () => {
   const mockDataSource = { transaction: jest.fn() };
   /** PD1–PD3: PaymentsService now emits notification events. */
   const mockEventEmitter = { emit: jest.fn() };
+  /** AT5: admin refunds and fraud flags now append an admin audit row. */
+  const mockAuditService = { record: jest.fn().mockResolvedValue(undefined) };
 
   beforeEach(async () => {
     paymentRepo = mockRepo();
@@ -54,6 +57,7 @@ describe('PaymentsService', () => {
         { provide: PaystackService, useValue: mockPaystack },
         { provide: ConfigService, useValue: mockConfig },
         { provide: EventEmitter2, useValue: mockEventEmitter },
+        { provide: AdminAuditService, useValue: mockAuditService },
       ],
     }).compile();
 

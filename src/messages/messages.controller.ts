@@ -26,6 +26,7 @@ import {
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { MessageSendThrottlerGuard } from './guards/message-send-throttler.guard';
+import { NotSuspendedGuard } from '@common/guards/not-suspended.guard';
 import { MessagesService } from './messages.service';
 import { SendMessageDto } from './dto/send-message.dto';
 import { GetMessagesQueryDto } from './dto/get-messages-query.dto';
@@ -68,7 +69,8 @@ export class MessagesController {
    */
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  @UseGuards(MessageSendThrottlerGuard)
+  // AT3: a suspended user cannot start or continue conversations.
+  @UseGuards(MessageSendThrottlerGuard, NotSuspendedGuard)
   @ApiOperation({
     summary: 'Send a message to a user',
     description:
