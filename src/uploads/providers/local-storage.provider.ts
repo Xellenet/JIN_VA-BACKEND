@@ -54,6 +54,15 @@ export class LocalStorageProvider implements IStorageProvider {
     }
   }
 
+  /**
+   * BI1: local disk needs no environment configuration — the upload root is
+   * derived from `process.cwd()` and created on demand — so there is never
+   * anything missing to report.
+   */
+  missingConfiguration(): string[] {
+    return [];
+  }
+
   private mimeToExt(mimetype: string): string {
     const map: Record<string, string> = {
       'image/jpeg': '.jpg',
