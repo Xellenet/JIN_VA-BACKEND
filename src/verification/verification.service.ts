@@ -17,7 +17,12 @@ import {
 } from './dto/review-verification.dto';
 import { GetVerificationsQueryDto } from './dto/get-verifications-query.dto';
 import { VerificationResponseDto } from './dto/verification-response.dto';
-import { VerificationStatus } from '@common/types/enums';
+import {
+  AdminActionTarget,
+  AdminActionType,
+  VerificationStatus,
+} from '@common/types/enums';
+import { AdminAuditService } from '../admin-audit/admin-audit.service';
 import { APP_EVENTS } from '@common/events/app.events';
 import type {
   ArtisanProfileVerifiedPayload,
@@ -38,6 +43,8 @@ export class VerificationService {
     private readonly profileRepo: Repository<ArtisanProfile>,
     private readonly providerFactory: VerificationProviderFactory,
     private readonly eventEmitter: EventEmitter2,
+    /** AT5: approve/reject each write an append-only audit row. */
+    private readonly auditService: AdminAuditService,
   ) {}
 
   async submit(userId: number, dto: SubmitVerificationDto) {
@@ -200,7 +207,13 @@ export class VerificationService {
     return { message: 'Review started. Status is now UNDER_REVIEW.' };
   }
 
-  async approve(adminUserId: number, id: number, dto: ApproveVerificationDto) {
+  /**
+   * AT5: takes the acting admin as a `User` (not just an id) so the audit row
+   * can snapshot their name and email — the log has to stay readable after an
+   * admin account is removed, which an id alone doesn't achieve.
+   */
+  async approve(admin: User, id: number, dto: ApproveVerificationDto) {
+    const adminUserId = admin.id;
     const verification = await this.loadOrFail(id, [
       'artisanProfile',
       'artisanProfile.user',
@@ -233,12 +246,20 @@ export class VerificationService {
       artisanUserId: verification.artisanProfile.user.id,
     } as ArtisanProfileVerifiedPayload);
 
+    await this.recordDecision(
+      admin,
+      verification,
+      AdminActionType.VERIFICATION_APPROVE,
+      dto.notes ?? null,
+    );
+
     return {
       message: 'Verification approved. Artisan profile is now verified.',
     };
   }
 
-  async reject(adminUserId: number, id: number, dto: RejectVerificationDto) {
+  async reject(admin: User, id: number, dto: RejectVerificationDto) {
+    const adminUserId = admin.id;
     const verification = await this.loadOrFail(id, [
       'artisanProfile',
       'artisanProfile.user',
@@ -266,7 +287,40 @@ export class VerificationService {
       reason: dto.reason,
     } as ArtisanVerificationRejectedPayload);
 
+    await this.recordDecision(
+      admin,
+      verification,
+      AdminActionType.VERIFICATION_REJECT,
+      dto.reason,
+    );
+
     return { message: 'Verification rejected. Artisan has been notified.' };
+  }
+
+  /** AT5: one audit row per verification decision. */
+  private async recordDecision(
+    admin: User,
+    verification: ArtisanVerification,
+    action: AdminActionType,
+    reason: string | null,
+  ): Promise<void> {
+    const artisan = verification.artisanProfile?.user;
+    await this.auditService.record({
+      action,
+      targetType: AdminActionTarget.VERIFICATION,
+      targetId: verification.id,
+      targetLabel: artisan
+        ? `Verification #${verification.id} · ${artisan.firstname} ${artisan.lastname} (${artisan.email})`
+        : `Verification #${verification.id}`,
+      reason,
+      actorId: admin.id,
+      actorName: `${admin.firstname} ${admin.lastname}`,
+      actorEmail: admin.email,
+      metadata: {
+        artisanProfileId: verification.artisanProfile?.id,
+        artisanUserId: artisan?.id,
+      },
+    });
   }
 
   private async loadOrFail(

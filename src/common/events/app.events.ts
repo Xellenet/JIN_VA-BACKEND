@@ -1,4 +1,9 @@
-import type { Role } from '@common/types/enums';
+import type {
+  DisputeCategory,
+  DisputeMoneyAction,
+  DisputeOutcome,
+  Role,
+} from '@common/types/enums';
 
 export const APP_EVENTS = {
   JOB_APPLICATION_RECEIVED: 'job.application.received',
@@ -165,12 +170,25 @@ export interface PaymentTransferFailedPayload {
 
 // ─── Disputes (PD4, PR3) ──────────────────────────────────────────────────────
 
-/** PR3: admin-facing "a new dispute needs review". */
+/**
+ * PR3: "a new dispute needs review" — fanned out to admins.
+ *
+ * DR4: also carries `counterpartyUserId` so the *other party* is told a
+ * dispute was filed against their booking. Before this round the filing
+ * notification went to admins only, so the first the counterparty heard of
+ * anything was the resolution notice — and they had no way to respond in
+ * between. Optional because the emitter can fail to resolve the booking's two
+ * participants, in which case the admin fan-out must still happen.
+ */
 export interface DisputeFiledPayload {
   disputeId: number;
   bookingId: number;
   raisedByName: string;
   raisedByRole: Role;
+  /** DR4: the participant who did *not* file it. */
+  counterpartyUserId?: number;
+  /** DR5: the fixed-list category the raiser chose. */
+  category?: DisputeCategory;
 }
 
 /**
@@ -194,6 +212,26 @@ export interface DisputeOutcomePayload {
   outcome: 'RESOLVED' | 'CLOSED';
   /** Admin's resolution statement. Always set for RESOLVED; absent for CLOSED. */
   resolution?: string;
+
+  // ─── DR1/DR2: the verdict and its money consequence ─────────────────────────
+
+  /**
+   * DR1: which of the three PRD verdicts the admin ruled. Present on every
+   * `resolve`; absent on `close`, which records no verdict.
+   */
+  verdict?: DisputeOutcome;
+  /** DR2: `NONE` when no money moved — a real, common answer, not an absence. */
+  moneyAction?: DisputeMoneyAction;
+  /** DR2: GHS amount actually moved. Present only when `moneyAction !== NONE`. */
+  moneyAmount?: number;
+  /**
+   * The customer on the underlying booking, i.e. who a refund goes back to.
+   * Carried so each recipient's copy can be written from *their* side ("Refunded
+   * to you" vs "refunded to the client") rather than restating an enum name.
+   */
+  customerUserId?: number;
+  /** The artisan's user id, i.e. who a release pays out to. */
+  artisanUserId?: number;
 }
 
 // ─── Admin moderation queue (PR3) ─────────────────────────────────────────────

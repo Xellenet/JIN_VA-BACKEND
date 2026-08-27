@@ -1,6 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { AdminAuditService } from '../admin-audit/admin-audit.service';
+import type { User } from '@users/entities/user.entity';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { PortfolioService } from './portfolio.service';
 import { PortfolioItem } from './entities/portfolio-item.entity';
@@ -56,6 +58,22 @@ describe('PortfolioService', () => {
     emit: jest.fn(),
   };
 
+  /** AT5: portfolio approve/reject now append an admin audit row. */
+  const mockAuditService = {
+    record: jest.fn().mockResolvedValue(undefined),
+  };
+
+  /**
+   * AT2: moderation now takes the acting admin — before this round it received
+   * no admin id at all, so an approval was entirely unattributable.
+   */
+  const actingAdmin = {
+    id: 99,
+    firstname: 'Admin',
+    lastname: 'One',
+    email: 'admin@jinva.test',
+  } as User;
+
   // Real JPEG magic-number bytes (FF D8 FF E0 ... "JFIF") — assertValidFile
   // now sniffs actual file content (via `file-type`), not just the
   // client-declared mimetype, so a placeholder buffer like `Buffer.from
@@ -84,6 +102,7 @@ describe('PortfolioService', () => {
         },
         { provide: StorageProviderFactory, useValue: mockStorageFactory },
         { provide: EventEmitter2, useValue: mockEventEmitter },
+        { provide: AdminAuditService, useValue: mockAuditService },
       ],
     }).compile();
 
@@ -267,7 +286,7 @@ describe('PortfolioService', () => {
       });
       mockPortfolioRepo.save.mockResolvedValueOnce({});
 
-      await service.approve(1);
+      await service.approve(actingAdmin, 1);
 
       expect(mockEventEmitter.emit).toHaveBeenCalledWith(
         'portfolio.approved',
@@ -282,7 +301,9 @@ describe('PortfolioService', () => {
       });
       mockPortfolioRepo.save.mockResolvedValueOnce({});
 
-      await service.reject(1, { rejectionReason: 'Too blurry to evaluate' });
+      await service.reject(actingAdmin, 1, {
+        rejectionReason: 'Too blurry to evaluate',
+      });
 
       expect(mockEventEmitter.emit).toHaveBeenCalledWith(
         'portfolio.rejected',

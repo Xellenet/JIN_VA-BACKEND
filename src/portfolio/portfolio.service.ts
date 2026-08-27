@@ -18,7 +18,14 @@ import { ReorderPortfolioItemDto } from './dto/reorder-portfolio-item.dto';
 import { RejectPortfolioItemDto } from './dto/reject-portfolio-item.dto';
 import { PortfolioItemResponseDto } from './dto/portfolio-item-response.dto';
 import { AdminPortfolioQueueItemResponseDto } from './dto/admin-portfolio-queue-item-response.dto';
-import { PortfolioStatus, Role } from '@common/types/enums';
+import {
+  AdminActionTarget,
+  AdminActionType,
+  PortfolioStatus,
+  Role,
+} from '@common/types/enums';
+import { AdminAuditService } from '../admin-audit/admin-audit.service';
+import { User } from '@users/entities/user.entity';
 import { APP_EVENTS } from '@common/events/app.events';
 import type {
   PortfolioApprovedPayload,
@@ -57,6 +64,8 @@ export class PortfolioService {
     private readonly profileRepo: Repository<ArtisanProfile>,
     private readonly storageFactory: StorageProviderFactory,
     private readonly eventEmitter: EventEmitter2,
+    /** AT5: approve/reject each write an append-only audit row. */
+    private readonly auditService: AdminAuditService,
   ) {}
 
   // ─── Artisan-facing ──────────────────────────────────────────────────────────
@@ -259,7 +268,12 @@ export class PortfolioService {
     };
   }
 
-  async approve(id: number): Promise<{ message: string }> {
+  /**
+   * AT2/AT5: now takes the acting admin. Portfolio moderation previously
+   * received **no admin id at all**, so an approval was completely
+   * unattributable — there was no actor on the row and no audit trail.
+   */
+  async approve(admin: User, id: number): Promise<{ message: string }> {
     const item = await this.loadForModerationOrFail(id);
     if (item.status === PortfolioStatus.APPROVED) {
       throw new BadRequestException('This item is already approved.');
@@ -276,10 +290,18 @@ export class PortfolioService {
       portfolioItemId: item.id,
     } as PortfolioApprovedPayload);
 
+    await this.recordDecision(
+      admin,
+      item,
+      AdminActionType.PORTFOLIO_APPROVE,
+      null,
+    );
+
     return { message: 'Portfolio item approved. Artisan has been notified.' };
   }
 
   async reject(
+    admin: User,
     id: number,
     dto: RejectPortfolioItemDto,
   ): Promise<{ message: string }> {
@@ -298,7 +320,40 @@ export class PortfolioService {
       reason: dto.rejectionReason,
     } as PortfolioRejectedPayload);
 
+    await this.recordDecision(
+      admin,
+      item,
+      AdminActionType.PORTFOLIO_REJECT,
+      dto.rejectionReason,
+    );
+
     return { message: 'Portfolio item rejected. Artisan has been notified.' };
+  }
+
+  /** AT5: one audit row per portfolio moderation decision. */
+  private async recordDecision(
+    admin: User,
+    item: PortfolioItem,
+    action: AdminActionType,
+    reason: string | null,
+  ): Promise<void> {
+    const artisan = item.artisanProfile?.user;
+    await this.auditService.record({
+      action,
+      targetType: AdminActionTarget.PORTFOLIO_ITEM,
+      targetId: item.id,
+      targetLabel: artisan
+        ? `Portfolio item #${item.id} · ${artisan.firstname} ${artisan.lastname}`
+        : `Portfolio item #${item.id}`,
+      reason,
+      actorId: admin.id,
+      actorName: `${admin.firstname} ${admin.lastname}`,
+      actorEmail: admin.email,
+      metadata: {
+        artisanProfileId: item.artisanId,
+        artisanUserId: artisan?.id,
+      },
+    });
   }
 
   // ─── Private helpers ─────────────────────────────────────────────────────────

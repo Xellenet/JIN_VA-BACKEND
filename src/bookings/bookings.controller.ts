@@ -25,6 +25,7 @@ import { GetBookingsQueryDto } from './dto/get-bookings-query.dto';
 import { RespondBookingDto } from './dto/respond-booking.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
+import { NotSuspendedGuard } from '@common/guards/not-suspended.guard';
 import { Roles } from '@common/decorators/roles.decorator';
 import { Role } from '@common/types/enums';
 import type { AuthenticatedRequest } from '@common/types/authenticated-request.type';
@@ -39,7 +40,8 @@ export class BookingsController {
   // ─── Customer routes ──────────────────────────────────────────────────────────
 
   @Post()
-  @UseGuards(RolesGuard)
+  // AT3: a suspended customer keeps read access but cannot create new work.
+  @UseGuards(RolesGuard, NotSuspendedGuard)
   @Roles(Role.CUSTOMER)
   @ApiOperation({ summary: 'Create a booking request (customer only)' })
   create(@Req() req: AuthenticatedRequest, @Body() dto: CreateBookingDto) {

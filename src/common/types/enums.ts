@@ -104,6 +104,64 @@ export enum DisputeStatus {
   CLOSED = 'CLOSED',
 }
 
+/**
+ * DR1: the three PRD §5.13 verdicts an admin must choose between when
+ * resolving a dispute. Stored on the dispute distinctly from the free-text
+ * `resolution` note so a ruling is queryable and auditable rather than
+ * inferred from prose.
+ *
+ * `MUTUAL` deliberately implies **no** money action — see
+ * {@link DisputeMoneyAction}.
+ */
+export enum DisputeOutcome {
+  /** Rule for the client: refund the linked payment (full or partial). */
+  REFUND_CLIENT = 'REFUND_CLIENT',
+  /** Rule for the artisan: release the withheld payment to them. */
+  RELEASE_ARTISAN = 'RELEASE_ARTISAN',
+  /** Mutually resolved: the verdict is recorded and no money moves. */
+  MUTUAL = 'MUTUAL',
+}
+
+/**
+ * DR2: what actually happened to the money as part of a resolution. Recorded
+ * separately from {@link DisputeOutcome} because a verdict and its money
+ * action can legitimately diverge — a `REFUND_CLIENT` ruling on a dispute
+ * with no linked payment (the common case today), or on a payment that was
+ * already refunded, records the verdict with `NONE`. This column is what
+ * makes "no money moved" an explicit, readable fact rather than an absence.
+ */
+export enum DisputeMoneyAction {
+  /** No money moved: MUTUAL, no linked payment, or nothing left to act on. */
+  NONE = 'NONE',
+  /** A refund was initiated on the linked payment. */
+  REFUND = 'REFUND',
+  /** The withheld payment was released to the artisan. */
+  RELEASE = 'RELEASE',
+}
+
+/**
+ * DR5: fixed, small category list a party picks at filing time. Drives the
+ * admin queue's badge slot (the free-text `reason` is prose, not a badge),
+ * the server-side category filter (DQ1) and segmentation of the resolution
+ * -time metric (DR6).
+ */
+export enum DisputeCategory {
+  /** The agreed work was never finished. */
+  WORK_NOT_COMPLETED = 'WORK_NOT_COMPLETED',
+  /** The work was done but is below the agreed standard. */
+  WORK_QUALITY = 'WORK_QUALITY',
+  /** The artisan never turned up. */
+  ARTISAN_NO_SHOW = 'ARTISAN_NO_SHOW',
+  /** The client didn't provide access to the site/property. */
+  CLIENT_NO_ACCESS = 'CLIENT_NO_ACCESS',
+  /** A disagreement about how much was owed or charged. */
+  PAYMENT_AMOUNT = 'PAYMENT_AMOUNT',
+  /** Something was damaged during the work. */
+  PROPERTY_DAMAGE = 'PROPERTY_DAMAGE',
+  /** Anything the six specific categories don't cover. */
+  OTHER = 'OTHER',
+}
+
 export enum NotificationType {
   JOB_APPLICATION_RECEIVED = 'JOB_APPLICATION_RECEIVED',
   JOB_APPLICATION_ACCEPTED = 'JOB_APPLICATION_ACCEPTED',
@@ -182,4 +240,73 @@ export enum ModerationAction {
   FLAG = 'FLAG',
   REMOVE = 'REMOVE',
   RESTORE = 'RESTORE',
+}
+
+/**
+ * AT5: every consequential admin action that appends a row to
+ * `admin_actions`. Deliberately a *separate* vocabulary from
+ * {@link ModerationAction} — `review_moderation_actions` stays exactly as the
+ * reviews round built it and is neither replaced nor absorbed by this log.
+ */
+export enum AdminActionType {
+  USER_BAN = 'USER_BAN',
+  USER_UNBAN = 'USER_UNBAN',
+  USER_SUSPEND = 'USER_SUSPEND',
+  USER_ACTIVATE = 'USER_ACTIVATE',
+  VERIFICATION_APPROVE = 'VERIFICATION_APPROVE',
+  VERIFICATION_REJECT = 'VERIFICATION_REJECT',
+  PORTFOLIO_APPROVE = 'PORTFOLIO_APPROVE',
+  PORTFOLIO_REJECT = 'PORTFOLIO_REJECT',
+  DISPUTE_RESOLVE = 'DISPUTE_RESOLVE',
+  DISPUTE_CLOSE = 'DISPUTE_CLOSE',
+  PAYMENT_REFUND = 'PAYMENT_REFUND',
+  PAYMENT_FRAUD_FLAG = 'PAYMENT_FRAUD_FLAG',
+  PAYMENT_FRAUD_FLAG_CLEARED = 'PAYMENT_FRAUD_FLAG_CLEARED',
+}
+
+/**
+ * AT5: the kind of thing an {@link AdminActionType} was taken against, so the
+ * log can be read (and, later, filtered) without inferring the entity type
+ * from the action name.
+ */
+export enum AdminActionTarget {
+  USER = 'USER',
+  VERIFICATION = 'VERIFICATION',
+  PORTFOLIO_ITEM = 'PORTFOLIO_ITEM',
+  DISPUTE = 'DISPUTE',
+  PAYMENT = 'PAYMENT',
+}
+
+/**
+ * AT3: the three account states an admin can filter the user lists by.
+ * Derived from `User.isBanned` / `User.isSuspended` rather than stored as its
+ * own column — the two booleans are independent (a suspended account can
+ * subsequently be banned) and `BANNED` deliberately wins when both are set.
+ */
+export enum AdminUserStatus {
+  ACTIVE = 'ACTIVE',
+  SUSPENDED = 'SUSPENDED',
+  BANNED = 'BANNED',
+}
+
+/**
+ * AN1/AN2 (Open Question 12, resolved): the date ranges the analytics
+ * endpoints accept. Admin gets `7d | 30d | 90d | 1y` per PRD §5.13; artisan
+ * gets `7d | 30d | 90d | all` per PRD §5.12. Each endpoint's query DTO
+ * restricts this enum to its own four values, so an admin range on the
+ * artisan endpoint (or vice versa) is a 400, not a silently wrong window.
+ */
+export enum AnalyticsRange {
+  LAST_7_DAYS = '7d',
+  LAST_30_DAYS = '30d',
+  LAST_90_DAYS = '90d',
+  LAST_YEAR = '1y',
+  ALL_TIME = 'all',
+}
+
+/** AN2: per-range bucket granularity of every analytics time series. */
+export enum AnalyticsBucket {
+  DAY = 'day',
+  WEEK = 'week',
+  MONTH = 'month',
 }

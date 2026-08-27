@@ -13,7 +13,13 @@ import { PaystackService } from './paystack.service';
 import { Job } from '@jobs/entities/job.entity';
 import { User } from '@users/entities/user.entity';
 import { ArtisanProfile } from '@users/entities/artisan-profile.entity';
-import { PaymentStatus, PayoutType } from '@common/types/enums';
+import {
+  AdminActionTarget,
+  AdminActionType,
+  PaymentStatus,
+  PayoutType,
+} from '@common/types/enums';
+import { AdminAuditService } from '../admin-audit/admin-audit.service';
 import { APP_EVENTS } from '@common/events/app.events';
 import type {
   PaymentReceiptPayload,
@@ -56,6 +62,8 @@ export class PaymentsService {
      * toggles had no trigger behind them.
      */
     private readonly eventEmitter: EventEmitter2,
+    /** AT5: audit rows for admin refunds and fraud flags. */
+    private readonly auditService: AdminAuditService,
   ) {
     // ConfigService.get() always returns environment variables as strings
     // (process.env is never coerced), whether the value comes from a .env
@@ -73,6 +81,20 @@ export class PaymentsService {
       );
     }
     this.platformFeePercent = feePercent;
+  }
+
+  /**
+   * AT9: the platform fee percentage this service **actually applies** in
+   * `holdPayment`, exposed so the admin Settings screen can stop displaying a
+   * number that disagrees with production (it showed a hardcoded 15 against a
+   * backend default of 5).
+   *
+   * Read-only on purpose: making the fee runtime-configurable has retroactive
+   * -pricing consequences for in-flight jobs and is deliberately out of scope
+   * (Open Question 11, resolved) — this only makes the displayed value true.
+   */
+  getPlatformFeePercent(): number {
+    return this.platformFeePercent;
   }
 
   // ─── Notification emitters (PD1–PD3, PR3) ───────────────────────────────────
@@ -754,7 +776,155 @@ export class PaymentsService {
    * not the original total, so two legitimate partial refunds can't each
    * independently be approved for up to the full original amount.
    */
-  async adminRefund(paymentId: number, amountGhs?: number) {
+  /**
+   * DR2: the release-of-a-withheld-payment path, made reachable from a dispute
+   * ruling ("rule for the artisan").
+   *
+   * Deliberately a thin wrapper over the existing {@link capturePayment} —
+   * that method already owns the pessimistic row lock, the duplicate-transfer
+   * guard and the Paystack transfer call, and re-implementing any of it here
+   * would fork the platform's only payout path.
+   *
+   * What this adds is a **truthful outcome**, which the dispute flow depends
+   * on: `capturePayment` intentionally *no-ops* in several situations (no
+   * payout method on file → the payment is parked at `PENDING_TRANSFER`, an
+   * already-initiated transfer → skipped) and returns without throwing. A
+   * dispute resolution must never tell both parties that money moved when it
+   * did not, so those cases are re-read after the call and turned into
+   * explicit errors for the caller to surface.
+   */
+  async releaseWithheldPayment(paymentId: number) {
+    const payment = await this.repo.findOne({ where: { id: paymentId } });
+    if (!payment) {
+      throw new NotFoundException(`Payment ${paymentId} not found.`);
+    }
+    if (payment.status === PaymentStatus.RELEASED) {
+      throw new BadRequestException(
+        'This payment has already been released to the artisan.',
+      );
+    }
+
+    const releasable: PaymentStatus[] = [
+      PaymentStatus.HELD,
+      PaymentStatus.PENDING_TRANSFER,
+      PaymentStatus.TRANSFER_FAILED,
+    ];
+    if (!releasable.includes(payment.status)) {
+      throw new BadRequestException(
+        `Cannot release a payment with status ${payment.status}.`,
+      );
+    }
+    if (payment.status === PaymentStatus.HELD && payment.transferCode) {
+      throw new BadRequestException(
+        'A payout for this payment has already been initiated and is awaiting confirmation.',
+      );
+    }
+
+    await this.capturePayment(payment.reference, payment.jobId);
+
+    const after = await this.repo.findOne({ where: { id: paymentId } });
+    if (after?.status === PaymentStatus.PENDING_TRANSFER) {
+      throw new BadRequestException(
+        'The artisan has no payout method registered, so the withheld amount could not be transferred. ' +
+          'It stays withheld and will transfer once they add one.',
+      );
+    }
+    if (after?.status !== PaymentStatus.RELEASED && !after?.transferCode) {
+      throw new BadRequestException(
+        'The transfer could not be initiated. The payment is unchanged — retry once the cause is resolved.',
+      );
+    }
+
+    return {
+      message: 'Withheld payment released to the artisan.',
+      data: {
+        paymentId: payment.id,
+        artisanAmount: Number(payment.artisanAmount),
+        status: after?.status ?? payment.status,
+      },
+    };
+  }
+
+  // ─── AT7: fraud flagging ──────────────────────────────────────────────────────
+
+  /**
+   * AT7: marks a transaction for fraud review with a mandatory reason.
+   *
+   * Marking, visibility and auditing only — the flag deliberately has **no**
+   * enforcement effect on payouts, refunds or the account (Open Question 9,
+   * resolved). It is also kept entirely separate from `Payment.status`, so a
+   * payment can be both `RELEASED` and flagged and the settled payment-status
+   * vocabulary is never forked.
+   */
+  async setFraudFlag(admin: User, paymentId: number, reason: string) {
+    const payment = await this.repo.findOne({ where: { id: paymentId } });
+    if (!payment) {
+      throw new NotFoundException(`Payment ${paymentId} not found.`);
+    }
+    if (payment.fraudFlagged) {
+      throw new BadRequestException(
+        'This transaction is already flagged for fraud review.',
+      );
+    }
+
+    payment.fraudFlagged = true;
+    payment.fraudFlagReason = reason;
+    payment.fraudFlaggedAt = new Date();
+    payment.fraudFlaggedById = admin.id;
+    await this.repo.save(payment);
+
+    await this.auditService.record({
+      action: AdminActionType.PAYMENT_FRAUD_FLAG,
+      targetType: AdminActionTarget.PAYMENT,
+      targetId: payment.id,
+      targetLabel: `Payment ${payment.reference}`,
+      reason,
+      actorId: admin.id,
+      actorName: `${admin.firstname} ${admin.lastname}`,
+      actorEmail: admin.email,
+      amount: Number(payment.amount),
+      metadata: { jobId: payment.jobId, status: payment.status },
+    });
+
+    return { message: 'Transaction flagged for fraud review.' };
+  }
+
+  /** AT7: clears the flag, with its own mandatory reason and audit row. */
+  async clearFraudFlag(admin: User, paymentId: number, reason: string) {
+    const payment = await this.repo.findOne({ where: { id: paymentId } });
+    if (!payment) {
+      throw new NotFoundException(`Payment ${paymentId} not found.`);
+    }
+    if (!payment.fraudFlagged) {
+      throw new BadRequestException(
+        'This transaction is not currently flagged.',
+      );
+    }
+
+    payment.fraudFlagged = false;
+    // Must be `null`, not `undefined`, for TypeORM's save() to actually clear
+    // the column in Postgres.
+    payment.fraudFlagReason = null;
+    payment.fraudFlaggedAt = null;
+    payment.fraudFlaggedById = null;
+    await this.repo.save(payment);
+
+    await this.auditService.record({
+      action: AdminActionType.PAYMENT_FRAUD_FLAG_CLEARED,
+      targetType: AdminActionTarget.PAYMENT,
+      targetId: payment.id,
+      targetLabel: `Payment ${payment.reference}`,
+      reason,
+      actorId: admin.id,
+      actorName: `${admin.firstname} ${admin.lastname}`,
+      actorEmail: admin.email,
+      metadata: { jobId: payment.jobId, status: payment.status },
+    });
+
+    return { message: 'Fraud flag cleared.' };
+  }
+
+  async adminRefund(paymentId: number, amountGhs?: number, actor?: User) {
     /**
      * PD3: captured inside the transaction, emitted after it commits — the
      * customer must never be told their money is coming back on the strength
@@ -822,6 +992,32 @@ export class PaymentsService {
         refundOutcome.refundedNow,
         refundOutcome.fullyRefunded,
       );
+
+      // AT5: refunds are one of the actions the audit log exists for. `actor`
+      // is optional only because the refund path predates the log; every
+      // caller in this codebase passes it (the admin endpoint and the dispute
+      // ruling both do), so a refund with no recorded actor would be a bug.
+      if (actor) {
+        await this.auditService.record({
+          action: AdminActionType.PAYMENT_REFUND,
+          targetType: AdminActionTarget.PAYMENT,
+          targetId: refundOutcome.payment.id,
+          targetLabel: `Payment ${refundOutcome.payment.reference}`,
+          actorId: actor.id,
+          actorName: `${actor.firstname} ${actor.lastname}`,
+          actorEmail: actor.email,
+          amount: refundOutcome.refundedNow,
+          moneyAction: 'REFUND',
+          metadata: {
+            jobId: refundOutcome.payment.jobId,
+            fullyRefunded: refundOutcome.fullyRefunded,
+          },
+        });
+      } else {
+        this.logger.warn(
+          `Refund on payment ${refundOutcome.payment.id} was recorded with no acting admin — no audit row written.`,
+        );
+      }
     }
 
     return result;

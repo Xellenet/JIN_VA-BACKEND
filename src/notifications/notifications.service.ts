@@ -12,7 +12,12 @@ import { ArtisanNotificationPreferencesResponseDto } from './dto/artisan-notific
 import { AdminNotificationPreferencesResponseDto } from './dto/admin-notification-preferences-response.dto';
 import { UpdateNotificationPreferencesDto } from './dto/update-notification-preferences.dto';
 import { User } from '@users/entities/user.entity';
-import { NotificationType, Role } from '@common/types/enums';
+import {
+  DisputeMoneyAction,
+  DisputeOutcome,
+  NotificationType,
+  Role,
+} from '@common/types/enums';
 import { SUCCESS_MESSAGES } from '@common/constants/success-messages.constants';
 import { APP_EVENTS } from '@common/events/app.events';
 import { formatGhs } from '@common/utils/currency.util';
@@ -552,15 +557,41 @@ export class NotificationsService {
 
   // ─── Disputes (PD4) ─────────────────────────────────────────────────────────
 
-  /** PR3: admin-queue notification when a dispute is opened. */
+  /**
+   * PR3: admin-queue notification when a dispute is opened.
+   *
+   * DR4: the **counterparty** is now notified too. Before this round the
+   * filing notification went to admins only, so the party a dispute was filed
+   * against was never told it existed — the first they heard of anything was
+   * the resolution notice, by which point they had no way to put their side.
+   * Their copy is deliberately not the admin's queue copy: it tells them a
+   * response is wanted, not that a queue item is waiting.
+   */
   @OnEvent(APP_EVENTS.DISPUTE_FILED)
   async handleDisputeFiled(payload: DisputeFiledPayload) {
+    const meta = {
+      disputeId: payload.disputeId,
+      bookingId: payload.bookingId,
+      ...(payload.category ? { category: payload.category } : {}),
+    };
+
     await this.persistForAdmins(
       NotificationType.DISPUTE_FILED,
       'New Dispute Filed',
       `${payload.raisedByName} (${payload.raisedByRole.toLowerCase()}) opened a dispute on booking #${payload.bookingId}. It's waiting for review.`,
-      { disputeId: payload.disputeId, bookingId: payload.bookingId },
+      meta,
     );
+
+    if (payload.counterpartyUserId && payload.counterpartyUserId > 0) {
+      await this.persist(
+        payload.counterpartyUserId,
+        NotificationType.DISPUTE_FILED,
+        'A Dispute Was Filed',
+        `${payload.raisedByName} filed a dispute about booking #${payload.bookingId}. ` +
+          'You can read what they reported and submit your response while our team reviews it.',
+        meta,
+      );
+    }
   }
 
   /** PD4: PRD §5.13 — "both parties notified automatically" on the outcome. */
@@ -570,9 +601,6 @@ export class NotificationsService {
       payload,
       NotificationType.DISPUTE_RESOLVED,
       'Dispute Resolved',
-      payload.resolution
-        ? `The dispute on booking #${payload.bookingId} has been resolved. Outcome: ${payload.resolution}`
-        : `The dispute on booking #${payload.bookingId} has been resolved.`,
     );
   }
 
@@ -583,7 +611,6 @@ export class NotificationsService {
       payload,
       NotificationType.DISPUTE_CLOSED,
       'Dispute Closed',
-      `The dispute on booking #${payload.bookingId} has been closed. If you still need help, contact support.`,
     );
   }
 
@@ -591,12 +618,18 @@ export class NotificationsService {
    * Notifies both sides of a dispute outcome. De-duplicates on user id so a
    * malformed payload where both ids resolve to the same person can't produce
    * two identical rows.
+   *
+   * DR2/DR4: the body now states the **verdict** and, where money moved, the
+   * **amount** — and states it from each recipient's own side, so the client
+   * reads "Refunded to you: GH₵ 1,850.00" and the artisan reads that the same
+   * amount was refunded to the client, rather than both being handed the raw
+   * enum name. Amounts route through the shared `formatGhs` helper so they
+   * read identically to the same amount in the UI.
    */
   private async notifyDisputeOutcome(
     payload: DisputeOutcomePayload,
     type: NotificationType,
     title: string,
-    body: string,
   ): Promise<void> {
     const recipients = new Set(
       [payload.raisedByUserId, payload.counterpartyUserId].filter(
@@ -604,12 +637,84 @@ export class NotificationsService {
       ),
     );
     for (const userId of recipients) {
-      await this.persist(userId, type, title, body, {
-        disputeId: payload.disputeId,
-        bookingId: payload.bookingId,
-        outcome: payload.outcome,
-      });
+      await this.persist(
+        userId,
+        type,
+        title,
+        this.buildDisputeOutcomeBody(payload, userId),
+        {
+          disputeId: payload.disputeId,
+          bookingId: payload.bookingId,
+          outcome: payload.outcome,
+          ...(payload.verdict ? { verdict: payload.verdict } : {}),
+          ...(payload.moneyAction ? { moneyAction: payload.moneyAction } : {}),
+          ...(payload.moneyAmount != null
+            ? { moneyAmount: payload.moneyAmount }
+            : {}),
+        },
+      );
     }
+  }
+
+  /** DR2/DR4: verdict + money movement, written from `recipientId`'s side. */
+  private buildDisputeOutcomeBody(
+    payload: DisputeOutcomePayload,
+    recipientId: number,
+  ): string {
+    if (payload.outcome === 'CLOSED') {
+      return (
+        `The dispute on booking #${payload.bookingId} has been closed. ` +
+        'If you still need help, contact support.'
+      );
+    }
+
+    const parts = [
+      `The dispute on booking #${payload.bookingId} has been resolved.`,
+    ];
+
+    switch (payload.verdict) {
+      case DisputeOutcome.REFUND_CLIENT:
+        parts.push('Outcome: ruled for the client.');
+        break;
+      case DisputeOutcome.RELEASE_ARTISAN:
+        parts.push('Outcome: ruled for the artisan.');
+        break;
+      case DisputeOutcome.MUTUAL:
+        parts.push('Outcome: mutually resolved.');
+        break;
+      default:
+        break;
+    }
+
+    const amount = payload.moneyAmount;
+    if (
+      payload.moneyAction === DisputeMoneyAction.REFUND &&
+      amount != null &&
+      amount > 0
+    ) {
+      parts.push(
+        recipientId === payload.customerUserId
+          ? `Refunded to you: ${formatGhs(amount)}. It should reach your original payment method shortly.`
+          : `${formatGhs(amount)} was refunded to the client.`,
+      );
+    } else if (
+      payload.moneyAction === DisputeMoneyAction.RELEASE &&
+      amount != null &&
+      amount > 0
+    ) {
+      parts.push(
+        recipientId === payload.artisanUserId
+          ? `Released to you: ${formatGhs(amount)}.`
+          : `${formatGhs(amount)} was released to the artisan.`,
+      );
+    } else if (payload.moneyAction === DisputeMoneyAction.NONE) {
+      parts.push('No change was made to the payment.');
+    }
+
+    if (payload.resolution)
+      parts.push(`Note from our team: ${payload.resolution}`);
+
+    return parts.join(' ');
   }
 
   // ─── Admin moderation queue (PR3) ───────────────────────────────────────────

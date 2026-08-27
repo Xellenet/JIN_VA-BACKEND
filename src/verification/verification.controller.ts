@@ -101,7 +101,7 @@ export class VerificationController {
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: ApproveVerificationDto,
   ) {
-    return this.verificationService.approve(req.user.id, id, dto);
+    return this.verificationService.approve(req.user, id, dto);
   }
 
   @Patch(':id/reject')
@@ -114,6 +114,6 @@ export class VerificationController {
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: RejectVerificationDto,
   ) {
-    return this.verificationService.reject(req.user.id, id, dto);
+    return this.verificationService.reject(req.user, id, dto);
   }
 }
