@@ -233,6 +233,17 @@ async function seed() {
   console.log('✔  Created 1 admin');
 
   // ── Customers ──────────────────────────────────────────────────────────────────
+  //
+  // No `profilePicture` is set here, deliberately. Every seeded user used to
+  // get `/uploads/profiles/<name>.jpg`, but the seed writes no files and there
+  // has never been an `uploads/profiles/` directory — so all nine URLs were a
+  // guaranteed 404 on every avatar render. It was invisible in the UI because
+  // `AvatarImage` falls back to initials, and it only showed up in the network
+  // tab (and misled a QA pass into suspecting a storage-cutover regression).
+  // Leaving the column null makes the app's initials fallback the *deliberate*
+  // seeded state instead of an accident. If a seeded avatar is ever wanted,
+  // the seed must write the file too — see `LocalStorageProvider` for the
+  // folders that actually exist.
   const customerSeeds = [
     {
       firstname: 'Ama',
@@ -241,7 +252,6 @@ async function seed() {
       gender: Gender.FEMALE,
       phone: '020-111-0001',
       dateOfBirth: new Date('1992-03-20'),
-      profilePicture: '/uploads/profiles/ama-mensah.jpg',
       street: '12 Independence Ave',
       budgetMin: 50,
       budgetMax: 300,
@@ -254,7 +264,6 @@ async function seed() {
       gender: Gender.MALE,
       phone: '020-111-0002',
       dateOfBirth: new Date('1988-07-14'),
-      profilePicture: '/uploads/profiles/kofi-asante.jpg',
       street: '7 Castle Road',
       budgetMin: 100,
       budgetMax: 500,
@@ -267,7 +276,6 @@ async function seed() {
       gender: Gender.FEMALE,
       phone: '020-111-0003',
       dateOfBirth: new Date('1995-11-08'),
-      profilePicture: '/uploads/profiles/abena-boateng.jpg',
       street: '3 High Street',
       budgetMin: 80,
       budgetMax: 400,
@@ -280,7 +288,6 @@ async function seed() {
       gender: Gender.MALE,
       phone: '020-111-0004',
       dateOfBirth: new Date('1990-05-22'),
-      profilePicture: '/uploads/profiles/kwame-darko.jpg',
       street: '21 Liberation Road',
       budgetMin: 60,
       budgetMax: 350,
@@ -303,7 +310,6 @@ async function seed() {
         accountVerified: true,
         verifiedAt,
         dateOfBirth: c.dateOfBirth,
-        profilePicture: c.profilePicture,
       }),
     );
 
@@ -333,6 +339,7 @@ async function seed() {
   console.log(`✔  Created ${customers.length} customers`);
 
   // ── Artisans ───────────────────────────────────────────────────────────────────
+  // No `profilePicture`, for the same reason as the customers above.
   const artisanSeeds = [
     {
       firstname: 'Yaw',
@@ -341,7 +348,6 @@ async function seed() {
       gender: Gender.MALE,
       phone: '020-222-0001',
       dateOfBirth: new Date('1986-09-03'),
-      profilePicture: '/uploads/profiles/yaw-osei.jpg',
       bio: 'Certified plumber with 8 years of experience in residential and commercial pipe installations.',
       experience: 8,
       rate: 150,
@@ -357,7 +363,6 @@ async function seed() {
       gender: Gender.FEMALE,
       phone: '020-222-0002',
       dateOfBirth: new Date('1993-01-27'),
-      profilePicture: '/uploads/profiles/akua-frimpong.jpg',
       bio: 'Licensed electrician specialising in solar panel installations and smart home wiring systems.',
       experience: 6,
       rate: 200,
@@ -373,7 +378,6 @@ async function seed() {
       gender: Gender.FEMALE,
       phone: '020-222-0003',
       dateOfBirth: new Date('1997-06-15'),
-      profilePicture: '/uploads/profiles/efua-agyeman.jpg',
       bio: 'Professional hair braider with expertise in knotless braids, locs, and protective natural styles.',
       experience: 5,
       rate: 80,
@@ -389,7 +393,6 @@ async function seed() {
       gender: Gender.MALE,
       phone: '020-222-0004',
       dateOfBirth: new Date('1984-12-10'),
-      profilePicture: '/uploads/profiles/kweku-amoah.jpg',
       bio: 'Master carpenter crafting custom furniture, fitted wardrobes, and cabinetry since 2012.',
       experience: 12,
       rate: 120,
@@ -405,7 +408,6 @@ async function seed() {
       gender: Gender.FEMALE,
       phone: '020-222-0005',
       dateOfBirth: new Date('1991-04-05'),
-      profilePicture: '/uploads/profiles/adwoa-ansah.jpg',
       bio: 'Experienced painter delivering quality interior and exterior finishes for homes and commercial spaces.',
       experience: 7,
       rate: 100,
@@ -433,7 +435,6 @@ async function seed() {
         accountVerified: true,
         verifiedAt,
         dateOfBirth: a.dateOfBirth,
-        profilePicture: a.profilePicture,
       }),
     );
 
