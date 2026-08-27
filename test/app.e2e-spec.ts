@@ -16,6 +16,15 @@ describe('AppController (e2e)', () => {
     await app.init();
   });
 
+  // Pre-existing hang: this was the only e2e spec with no teardown, so the
+  // Postgres pool and the scheduler's timers stayed open and `npm run
+  // test:e2e` never exited after the suite passed (it needed `--forceExit` to
+  // print a result at all). Every other spec in this folder already closes its
+  // app in `afterAll`.
+  afterEach(async () => {
+    await app.close();
+  });
+
   it('/ (GET) returns the uptime health-check payload', () => {
     // Pre-existing stale assertion: this was still the Nest scaffold's
     // `'Hello World!'` long after `AppController.healthCheck()` was changed to
