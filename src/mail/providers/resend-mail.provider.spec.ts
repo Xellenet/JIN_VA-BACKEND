@@ -110,12 +110,12 @@ describe('ResendMailProvider (BI4)', () => {
         error: {
           name: 'invalid_api_key',
           statusCode: 401,
-          message: 'API key re_super_secret_value is invalid',
+          message: 'API key leak-sentinel-not-a-key is invalid',
         },
       });
 
       await expect(buildProvider(configured).send(MESSAGE)).rejects.not.toThrow(
-        /re_super_secret_value/,
+        /leak-sentinel-not-a-key/,
       );
     });
 

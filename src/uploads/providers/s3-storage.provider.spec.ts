@@ -119,7 +119,7 @@ describe('S3StorageProvider — BI1 failure discipline', () => {
     it('translates an AWS failure into a generic 5xx that leaks no provider detail', async () => {
       const awsError = Object.assign(
         new Error(
-          'The AWS Access Key Id AKIAEXAMPLESECRETLEAK you provided does not exist in our records.',
+          'The AWS Access Key Id leak-sentinel-not-a-key you provided does not exist in our records.',
         ),
         {
           name: 'InvalidAccessKeyId',
@@ -143,7 +143,7 @@ describe('S3StorageProvider — BI1 failure discipline', () => {
       );
       // Nothing from the AWS payload — key material, error name, bucket — may
       // reach the client, in any NODE_ENV.
-      expect(message).not.toMatch(/AKIA/);
+      expect(message).not.toMatch(/leak-sentinel/);
       expect(message).not.toMatch(/InvalidAccessKeyId/);
       expect(message).not.toMatch(/jinva-media-test/);
       expect(message).not.toMatch(/eu-west-1/);
@@ -151,7 +151,7 @@ describe('S3StorageProvider — BI1 failure discipline', () => {
 
     it('logs the AWS error name and status, and never the AWS error message or stack', async () => {
       const awsError = Object.assign(
-        new Error('Secret-bearing AWS detail AKIAEXAMPLESECRETLEAK'),
+        new Error('Secret-bearing AWS detail leak-sentinel-not-a-key'),
         { name: 'AccessDenied', $metadata: { httpStatusCode: 403 } },
       );
       sendMock.mockRejectedValueOnce(awsError);
@@ -174,7 +174,7 @@ describe('S3StorageProvider — BI1 failure discipline', () => {
       expect(logged).toHaveLength(1);
       expect(logged[0]).toContain('AccessDenied');
       expect(logged[0]).toContain('HTTP 403');
-      expect(logged[0]).not.toContain('AKIA');
+      expect(logged[0]).not.toContain('leak-sentinel');
       expect(logged[0]).not.toContain('Secret-bearing AWS detail');
       errorSpy.mockRestore();
     });
@@ -232,7 +232,7 @@ describe('S3StorageProvider — BI1 failure discipline', () => {
 
     it('logs a failed delete by AWS error name only', async () => {
       sendMock.mockRejectedValueOnce(
-        Object.assign(new Error('AKIAEXAMPLESECRETLEAK in the detail'), {
+        Object.assign(new Error('leak-sentinel-not-a-key in the detail'), {
           name: 'NoSuchKey',
           $metadata: { httpStatusCode: 404 },
         }),
@@ -255,7 +255,7 @@ describe('S3StorageProvider — BI1 failure discipline', () => {
 
       expect(logged).toHaveLength(1);
       expect(logged[0]).toContain('NoSuchKey');
-      expect(logged[0]).not.toContain('AKIA');
+      expect(logged[0]).not.toContain('leak-sentinel');
       warnSpy.mockRestore();
     });
   });
