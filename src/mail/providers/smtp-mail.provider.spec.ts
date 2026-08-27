@@ -109,8 +109,100 @@ describe('SmtpMailProvider (BI4)', () => {
     sendMailMock.mockRejectedValueOnce(new Error('535 auth failed'));
 
     await expect(buildProvider(CONFIGURED).send(MESSAGE)).rejects.toThrow(
-      /535 auth failed/,
+      /SMTP transport rejected the message/,
     );
+  });
+
+  /**
+   * The default transport must not put the configured `MAIL_USER` value into
+   * the application log. `MailService` logs whatever message this provider
+   * throws, so the assertion that matters is on the thrown string.
+   */
+  describe('failure sanitisation', () => {
+    /** What nodemailer actually produces for an SMTP 535 auth rejection. */
+    const authRejection = Object.assign(
+      new Error(
+        'Invalid login: 535 5.7.8 Authentication credentials invalid for user leak-sentinel-not-a-key',
+      ),
+      {
+        code: 'EAUTH',
+        responseCode: 535,
+        response:
+          '535 5.7.8 Authentication credentials invalid for user leak-sentinel-not-a-key',
+        command: 'AUTH PLAIN',
+      },
+    );
+
+    it('reports the nodemailer code and SMTP status, so an operator can still diagnose it', async () => {
+      sendMailMock.mockRejectedValueOnce(authRejection);
+
+      await expect(buildProvider(CONFIGURED).send(MESSAGE)).rejects.toThrow(
+        /EAUTH \/ SMTP 535/,
+      );
+    });
+
+    it('never echoes the username the server reflected back, in any field', async () => {
+      sendMailMock.mockRejectedValueOnce(authRejection);
+
+      const thrown = await buildProvider(CONFIGURED)
+        .send(MESSAGE)
+        .then(
+          () => null,
+          (err: unknown) => err,
+        );
+
+      const message = (thrown as Error).message;
+      expect(message).not.toContain('leak-sentinel-not-a-key');
+      expect(message).not.toContain('Invalid login');
+      expect(message).not.toContain('5.7.8');
+      expect(message).not.toContain(CONFIGURED.MAIL_USER);
+      expect(message).not.toContain(CONFIGURED.MAIL_PASS);
+    });
+
+    it('still throws — a sanitised failure is not a swallowed one', async () => {
+      sendMailMock.mockRejectedValueOnce(authRejection);
+
+      await expect(
+        buildProvider(CONFIGURED).send(MESSAGE),
+      ).rejects.toBeInstanceOf(Error);
+    });
+
+    it('falls back to the error name when nodemailer classified nothing', async () => {
+      sendMailMock.mockRejectedValueOnce(
+        Object.assign(new Error('socket hang up leak-sentinel-not-a-key'), {
+          name: 'TypeError',
+        }),
+      );
+
+      const thrown = await buildProvider(CONFIGURED)
+        .send(MESSAGE)
+        .then(
+          () => null,
+          (err: unknown) => err,
+        );
+
+      expect((thrown as Error).message).toContain('TypeError');
+      expect((thrown as Error).message).not.toContain('leak-sentinel');
+      expect((thrown as Error).message).not.toContain('socket hang up');
+    });
+
+    it('reports a connection failure distinguishably from an auth failure', async () => {
+      sendMailMock.mockRejectedValueOnce(
+        Object.assign(new Error('connect ECONNREFUSED 10.0.0.5:587'), {
+          code: 'ECONNECTION',
+        }),
+      );
+
+      const thrown = await buildProvider(CONFIGURED)
+        .send(MESSAGE)
+        .then(
+          () => null,
+          (err: unknown) => err,
+        );
+
+      expect((thrown as Error).message).toContain('ECONNECTION');
+      expect((thrown as Error).message).not.toContain('10.0.0.5');
+    });
   });
 
   describe('missingConfiguration()', () => {
