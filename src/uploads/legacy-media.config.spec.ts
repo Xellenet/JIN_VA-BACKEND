@@ -4,6 +4,7 @@ import {
   LEGACY_MEDIA_PREFIX,
   resolveLegacyMediaPlan,
 } from './legacy-media.config';
+import { PRIVATE_UPLOAD_FOLDERS } from './upload-folders';
 
 /**
  * BI2: the media-serving decision. The property that matters most is the one
@@ -81,5 +82,41 @@ describe('resolveLegacyMediaPlan (BI2)', () => {
 
   it('caches legacy media for a year, since stored filenames are immutable UUIDs', () => {
     expect(LEGACY_MEDIA_MAX_AGE_MS).toBe(365 * 24 * 60 * 60 * 1000);
+  });
+
+  describe('KYC folders are never part of the public mount', () => {
+    for (const env of [
+      {},
+      { STORAGE_PROVIDER: 'local' },
+      { STORAGE_PROVIDER: 's3' },
+      { STORAGE_PROVIDER: 's3', SERVE_LEGACY_UPLOADS: 'false' },
+    ]) {
+      it(`withholds documents/selfies for ${JSON.stringify(env)}`, () => {
+        const plan = resolveLegacyMediaPlan(env);
+
+        for (const folder of PRIVATE_UPLOAD_FOLDERS) {
+          expect(plan.servedFolders).not.toContain(folder);
+        }
+        expect(plan.withheldFolders).toEqual([...PRIVATE_UPLOAD_FOLDERS]);
+      });
+    }
+
+    it('serves exactly the five public folders and nothing else', () => {
+      expect(resolveLegacyMediaPlan({}).servedFolders).toEqual([
+        'avatars',
+        'portfolio',
+        'reviews',
+        'messages',
+        'job-attachments',
+      ]);
+    });
+
+    it('says so in the log line, so an operator can see it without reading the code', () => {
+      const plan = resolveLegacyMediaPlan({ STORAGE_PROVIDER: 's3' });
+
+      expect(plan.description).toContain('documents/, selfies/');
+      expect(plan.description).toContain('/uploads/kyc/');
+      expect(plan.description).toContain('admin only');
+    });
   });
 });

@@ -15,7 +15,7 @@ import { S3StorageProvider } from './s3-storage.provider';
  */
 
 interface MockCommand {
-  __type: 'Put' | 'Delete';
+  __type: 'Put' | 'Delete' | 'Get';
   input: Record<string, unknown>;
 }
 
@@ -33,6 +33,12 @@ jest.mock('@aws-sdk/client-s3', () => ({
     .fn()
     .mockImplementation((input: Record<string, unknown>) => ({
       __type: 'Delete',
+      input,
+    })),
+  GetObjectCommand: jest
+    .fn()
+    .mockImplementation((input: Record<string, unknown>) => ({
+      __type: 'Get',
       input,
     })),
 }));
@@ -216,6 +222,143 @@ describe('S3StorageProvider — BI1 failure discipline', () => {
       expect(result.url).toBe(
         `https://cdn.jinva.example/avatars/${result.filename}`,
       );
+    });
+  });
+
+  describe('KYC key separation — the cutover must not publish identity documents', () => {
+    const KYC_UPLOADS = [
+      {
+        folder: 'documents',
+        originalName: 'ghana-card-front.pdf',
+        mimetype: 'application/pdf',
+      },
+      {
+        folder: 'selfies',
+        originalName: 'selfie.jpg',
+        mimetype: 'image/jpeg',
+      },
+    ] as const;
+
+    for (const options of KYC_UPLOADS) {
+      it(`writes ${options.folder} under the private/ prefix, not the public one`, async () => {
+        sendMock.mockResolvedValueOnce({});
+        const provider = new S3StorageProvider();
+
+        const result = await provider.upload(Buffer.from('bytes'), options);
+
+        const key = String(sendMock.mock.calls[0][0].input.Key);
+        expect(key.startsWith(`private/${options.folder}/`)).toBe(true);
+        expect(key).toContain(result.filename);
+      });
+
+      it(`never mints a public URL for ${options.folder}, even with a CDN base configured`, async () => {
+        process.env.AWS_S3_PUBLIC_URL_BASE = 'https://cdn.jinva.example';
+        sendMock.mockResolvedValueOnce({});
+        const provider = new S3StorageProvider();
+
+        const result = await provider.upload(Buffer.from('bytes'), options);
+
+        // A stored public URL is what turns a later bucket-policy mistake into
+        // a breach, so none may exist even while the bucket is private.
+        expect(result.url).toBe(
+          `/uploads/${options.folder}/${result.filename}`,
+        );
+        expect(result.url).not.toContain('cdn.jinva.example');
+        expect(result.url).not.toContain('amazonaws.com');
+        expect(result.url).not.toContain('jinva-media-test');
+        expect(result.url).not.toMatch(/^https?:/);
+      });
+    }
+
+    it('leaves every public folder on the public CDN prefix, exactly as before', async () => {
+      process.env.AWS_S3_PUBLIC_URL_BASE = 'https://cdn.jinva.example';
+      const provider = new S3StorageProvider();
+
+      for (const folder of [
+        'avatars',
+        'portfolio',
+        'reviews',
+        'messages',
+        'job-attachments',
+      ] as const) {
+        sendMock.mockResolvedValueOnce({});
+        const result = await provider.upload(Buffer.from('bytes'), {
+          folder,
+          originalName: 'x.jpg',
+          mimetype: 'image/jpeg',
+        });
+
+        expect(result.url).toBe(
+          `https://cdn.jinva.example/${folder}/${result.filename}`,
+        );
+      }
+    });
+
+    it('deletes a KYC object from the private prefix, so cleanup targets the real key', async () => {
+      sendMock.mockResolvedValueOnce({});
+      const provider = new S3StorageProvider();
+
+      await provider.delete('abc.jpg', 'selfies');
+
+      expect(sendMock.mock.calls[0][0].input).toEqual({
+        Bucket: 'jinva-media-test',
+        Key: 'private/selfies/abc.jpg',
+      });
+    });
+
+    describe('readPrivate()', () => {
+      it('reads from the private prefix and reports the stored content type', async () => {
+        sendMock.mockResolvedValueOnce({
+          Body: 'stream-stand-in',
+          ContentType: 'application/pdf',
+          ContentLength: 1234,
+        });
+        const provider = new S3StorageProvider();
+
+        const object = await provider.readPrivate('documents', 'abc.pdf');
+
+        expect(sendMock.mock.calls[0][0].__type).toBe('Get');
+        expect(sendMock.mock.calls[0][0].input).toEqual({
+          Bucket: 'jinva-media-test',
+          Key: 'private/documents/abc.pdf',
+        });
+        expect(object?.contentType).toBe('application/pdf');
+        expect(object?.contentLength).toBe(1234);
+      });
+
+      it('returns null for a missing key, so the caller can fall back to legacy local disk', async () => {
+        sendMock.mockRejectedValueOnce(
+          Object.assign(new Error('nope'), {
+            name: 'NoSuchKey',
+            $metadata: { httpStatusCode: 404 },
+          }),
+        );
+        const provider = new S3StorageProvider();
+
+        await expect(
+          provider.readPrivate('documents', 'abc.pdf'),
+        ).resolves.toBeNull();
+      });
+
+      it('still translates a real AWS failure into the generic 5xx, leaking nothing', async () => {
+        sendMock.mockRejectedValueOnce(
+          Object.assign(new Error('Denied for key leak-sentinel-not-a-key'), {
+            name: 'AccessDenied',
+            $metadata: { httpStatusCode: 403 },
+          }),
+        );
+        const provider = new S3StorageProvider();
+
+        const thrown = await provider.readPrivate('documents', 'abc.pdf').then(
+          () => null,
+          (err: unknown) => err,
+        );
+
+        expect(thrown).toBeInstanceOf(InternalServerErrorException);
+        expect((thrown as InternalServerErrorException).message).toBe(
+          'File storage is temporarily unavailable. Please try again later.',
+        );
+      });
     });
   });
 
