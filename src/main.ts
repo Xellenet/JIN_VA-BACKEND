@@ -6,9 +6,9 @@ import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { TypeOrmFilter } from './common/filters/typeorm-exception.filter';
 import { ResponseInterceptor } from './common/interceptors/response.interceptor';
 import { setupSwagger } from './config/swagger.config';
-import { ValidationPipe } from '@nestjs/common';
-import { join } from 'path';
+import { Logger, ValidationPipe } from '@nestjs/common';
 import cookieParser from 'cookie-parser';
+import { applyLegacyMediaServing } from './uploads/legacy-media.config';
 import type { Logger as WinstonLogger } from 'winston';
 
 async function bootstrap() {
@@ -42,8 +42,17 @@ async function bootstrap() {
     }),
   );
 
-  // Serve uploaded files (e.g. avatars) at /uploads/*
-  app.useStaticAssets(join(process.cwd(), 'uploads'), { prefix: '/uploads' });
+  // BI2: media delivery. This used to be an unconditional
+  // `useStaticAssets(join(process.cwd(), 'uploads'), { prefix: '/uploads' })`,
+  // which made the NestJS process the media CDN in every environment. It is
+  // now driven by `applyLegacyMediaServing()` — read the header comment in
+  // `src/uploads/legacy-media.config.ts` for why we kept a legacy-scoped
+  // static handler instead of migrating the stored URLs.
+  //
+  // Logged with Nest's own Logger (already routed into winston by `useLogger`
+  // above) because the injected nest-winston LoggerService exposes `log`, not
+  // `info`.
+  new Logger('MediaServing').log(applyLegacyMediaServing(app).description);
 
   app.setGlobalPrefix('api/v1', { exclude: ['/'] });
   setupSwagger(app);
