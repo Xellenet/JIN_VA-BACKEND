@@ -1,7 +1,5 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { ConfigModule, ConfigService } from '@nestjs/config';
-import { ThrottlerModule } from '@nestjs/throttler';
 import { MessagesController } from './messages.controller';
 import { MessagesService } from './messages.service';
 import { MessageSendThrottlerGuard } from './guards/message-send-throttler.guard';
@@ -10,9 +8,7 @@ import { Conversation } from './entities/conversation.entity';
 import { User } from '@users/entities/user.entity';
 import { Job } from '@jobs/entities/job.entity';
 import { Booking } from '../bookings/entities/booking.entity';
-
-/** RL1: default when `MESSAGE_RATE_LIMIT_PER_MINUTE` is unset. */
-const DEFAULT_MESSAGE_RATE_LIMIT = 25;
+import { ThrottlingModule } from '@common/throttling/throttling.module';
 
 @Module({
   imports: [
@@ -20,35 +16,17 @@ const DEFAULT_MESSAGE_RATE_LIMIT = 25;
     // message with a job/booking they are actually party to.
     TypeOrmModule.forFeature([Message, Conversation, User, Job, Booking]),
     /**
-     * RL1: registered here rather than globally in `AppModule` on purpose.
-     * The requirement is a rate limit on *sending a message*; a global
-     * `APP_GUARD` registration would silently start throttling every other
-     * endpoint in the application, which is a much bigger behavioural change
-     * than what was asked for. The named `message-send` throttler is applied
-     * by `@UseGuards(MessageSendThrottlerGuard)` on that one route.
-     *
-     * The limit is tunable without a code change (requirements.md Open
-     * Question #5 flags 20–30/minute as a starting point, not a resolved
-     * figure) — set `MESSAGE_RATE_LIMIT_PER_MINUTE` in the environment.
+     * RL1: the `message-send` throttler (and its
+     * `MESSAGE_RATE_LIMIT_PER_MINUTE` override) is configured centrally in
+     * `ThrottlingModule`, which used to be registered inline here. It moved
+     * when `/auth/*` needed limits of its own: `ThrottlerModule` is `@Global()`,
+     * so two root registrations would have left two competing option providers
+     * in the global scope. Nothing about this route's limit changed — it is
+     * still opt-in per route (no `APP_GUARD`), still 25/minute by default, and
+     * `MessageSendThrottlerGuard` still scopes itself to the `message-send`
+     * throttler alone, so the auth limits do not apply here.
      */
-    ThrottlerModule.forRootAsync({
-      imports: [ConfigModule],
-      inject: [ConfigService],
-      useFactory: (config: ConfigService) => {
-        const raw = config.get<string | number>(
-          'MESSAGE_RATE_LIMIT_PER_MINUTE',
-          DEFAULT_MESSAGE_RATE_LIMIT,
-        );
-        const parsed = Number(raw);
-        const limit =
-          Number.isFinite(parsed) && parsed > 0
-            ? Math.floor(parsed)
-            : DEFAULT_MESSAGE_RATE_LIMIT;
-        return {
-          throttlers: [{ name: 'message-send', ttl: 60_000, limit }],
-        };
-      },
-    }),
+    ThrottlingModule,
   ],
   controllers: [MessagesController],
   providers: [MessagesService, MessageSendThrottlerGuard],
