@@ -18,7 +18,9 @@ import {
   ApiBody,
   ApiConflictResponse,
   ApiCreatedResponse,
+  ApiForbiddenResponse,
   ApiFoundResponse,
+  ApiGoneResponse,
   ApiOkResponse,
   ApiOperation,
   ApiQuery,
@@ -36,6 +38,8 @@ import { LoginResponseDto } from './dto/login-response.dto';
 import { OAuthCallbackDto } from './dto/oauth-callback.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ResendVerificationDto } from './dto/resend-verification.dto';
+import { RestoreAccountDto } from './dto/restore-account.dto';
+import { RestoreAccountResponseDto } from './dto/restore-account-response.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import type { AuthenticatedRequest } from '@common/types/authenticated-request.type';
@@ -126,7 +130,14 @@ export class AuthController {
       'Validates credentials and issues an RS256-signed access token (15 min) in the response body. ' +
       'The refresh token (7 days) is set exclusively via an httpOnly `Set-Cookie` header — it never ' +
       'appears in the JSON body. ' +
-      'Both email-not-found and wrong-password surface as a single 401 to prevent user enumeration.',
+      'Both email-not-found and wrong-password surface as a single 401 to prevent user enumeration. ' +
+      'C1.4: if the submitted password is **correct** but the account is soft-deleted and still ' +
+      'inside its 30-day recovery window, this returns 403 with `meta.error: ' +
+      '`ACCOUNT_PENDING_DELETION`` and `meta.details.deletedAt` / ' +
+      '`meta.details.restorableUntil`, and no tokens — the caller should offer ' +
+      '`POST /auth/restore-account`. A wrong password on such an account, and an account whose ' +
+      'window has closed, both return the same generic 401 as any other failure, so the restore ' +
+      'prompt can never be reached without proving ownership.',
   })
   @ApiOkResponse({
     description:
@@ -135,6 +146,11 @@ export class AuthController {
   })
   @ApiBadRequestResponse({ description: 'Email or password field is missing' })
   @ApiUnauthorizedResponse({ description: 'Invalid email or password' })
+  @ApiForbiddenResponse({
+    description:
+      'Email not verified, or the account is soft-deleted but still restorable ' +
+      '(`ACCOUNT_PENDING_DELETION`)',
+  })
   async loginUser(
     @Body() loginDto: LoginDto,
     @Res({ passthrough: true }) res: Response,
@@ -142,6 +158,71 @@ export class AuthController {
     const { result, refreshToken } = await this.authService.loginUser(loginDto);
     setRefreshTokenCookie(res, refreshToken);
     setAuthSessionCookie(res, { sub: result.data.id, role: result.data.role });
+    return result;
+  }
+
+  /**
+   * C1.4: restores a soft-deleted account inside its 30-day recovery window
+   * and signs the user back in.
+   *
+   * Reachable only by someone who can produce the account's password — the
+   * same ownership proof login requires, and the reason this takes credentials
+   * rather than just an email. Google-only accounts (no password) restore by
+   * completing `GET /auth/google/callback` instead.
+   *
+   * @param dto - The account email and its password.
+   * @param res - Used to set the httpOnly cookies, exactly as login does.
+   */
+  @Post('restore-account')
+  @HttpCode(200)
+  @ApiOperation({
+    summary: 'Restore a soft-deleted account within its 30-day window',
+    description:
+      'Clears the deletion and reactivates the account. Requires the ' +
+      "account's email **and** password — an email-only endpoint would let " +
+      "anyone un-delete a stranger's account. " +
+      'On success the account is immediately fully usable and every ' +
+      'relationship it had (profile, services, portfolio, jobs, bookings, ' +
+      'reviews, favourites, payout details) is intact, because nothing was ' +
+      'modified during the window. A confirmation email is sent. ' +
+      'A verified account is signed in and receives an access token plus the ' +
+      'httpOnly refresh/session cookies; an account that had not verified its ' +
+      'email is still restored, but `requiresEmailVerification` is `true` and ' +
+      'no token is issued. ' +
+      'Failures are deliberately indistinguishable: an unknown email, a live ' +
+      'account, a purged account and a wrong password all return the same ' +
+      '401. A 410 means the account was real and owned by the caller but can ' +
+      'never come back (`meta.error`: `ACCOUNT_RESTORE_WINDOW_EXPIRED` or ' +
+      '`ACCOUNT_PERMANENTLY_DELETED`).',
+  })
+  @ApiBody({ type: RestoreAccountDto })
+  @ApiOkResponse({
+    description: 'Account restored',
+    type: RestoreAccountResponseDto,
+  })
+  @ApiUnauthorizedResponse({
+    description:
+      'Ownership not proven — no restorable account for these credentials',
+  })
+  @ApiGoneResponse({
+    description:
+      'The recovery window has closed, or the account has already been purged',
+  })
+  async restoreAccount(
+    @Body() dto: RestoreAccountDto,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<RestoreAccountResponseDto> {
+    const { result, refreshToken } = await this.authService.restoreAccount(dto);
+
+    // No session for an account that still has to verify its email — the
+    // restore succeeded, but the S4 verification gate applies to it as normal.
+    if (refreshToken) {
+      setRefreshTokenCookie(res, refreshToken);
+      setAuthSessionCookie(res, {
+        sub: result.data.id,
+        role: result.data.role,
+      });
+    }
     return result;
   }
 

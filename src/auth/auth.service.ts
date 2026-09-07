@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ForbiddenException,
+  HttpException,
   Injectable,
   Logger,
 } from '@nestjs/common';
@@ -16,8 +17,19 @@ import { VARIABLES } from '@common/constants/variables.constants';
 import { SUCCESS_MESSAGES } from '@common/constants/success-messages.constants';
 import { InvalidCredentialsException } from '@common/exceptions/invalid-credentials.exceptions';
 import { SocialOnlyAccountException } from '@common/exceptions/social-only-account.exception';
+import { AccountPendingDeletionException } from '@common/exceptions/account-pending-deletion.exception';
+import {
+  isWithinRecoveryWindow,
+  purgeDateFor,
+} from '@common/utils/account-recovery.util';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { MailEvent } from 'mail/events/mail.events';
+import type { AccountRestoredPayload } from 'mail/events/mail.events';
+import { RestoreAccountDto } from './dto/restore-account.dto';
+import {
+  RestoreAccountResponseDto,
+  type RestoreAccountResult,
+} from './dto/restore-account-response.dto';
 import { UserTokenService } from '@users/token.service';
 import { Role, Token } from '@common/types/enums';
 import { ResetPasswordDto } from './dto/reset-password.dto';
@@ -153,10 +165,13 @@ export class AuthService {
     const user = await this.userService.findUserByEmail(email);
 
     if (!user) {
-      this.logger.warn(`Invalid credentials provided for email ${email}`);
-      throw new InvalidCredentialsException(
-        ERROR_MESSAGES.AUTH.INVALID_CREDENTIALS,
-      );
+      // C1.4: no *live* account with this email. Before settling on the
+      // generic rejection, work out whether this is instead a soft-deleted
+      // account its rightful owner could restore — but only ever after
+      // verifying the submitted password. Resolves to the distinguishable
+      // pending-deletion rejection, or to the same generic
+      // invalid-credentials error as every other login failure.
+      throw await this.resolveNoLiveAccountRejection(email, password);
     }
 
     // G10: an account created (or exclusively used) via Google sign-in has no
@@ -212,6 +227,171 @@ export class AuthService {
       data: plainToInstance(UserResponseDto, user),
     });
     return { result, refreshToken: refresh_token };
+  }
+
+  /**
+   * C1.4: decides what a login attempt against an address with no live
+   * account is told — the account-enumeration-critical branch of `loginUser`.
+   *
+   * **The ordering here is the security property, not an implementation
+   * detail.** The password is verified *before* the account's deletion state
+   * is allowed to affect the response. Every path that has not proven
+   * ownership resolves to the byte-identical generic invalid-credentials
+   * error, so all of the following are indistinguishable to a caller:
+   * an address that was never registered, a wrong password on a soft-deleted
+   * account, a soft-deleted account whose window has closed, and a purged
+   * account. Only a caller who submitted the correct password for an account
+   * that is genuinely still restorable learns anything.
+   *
+   * A soft-deleted Google-only account (no password hash) also resolves to the
+   * generic error rather than the "use Google instead" hint — that hint would
+   * disclose the existence of a deleted account to someone who hasn't proven
+   * anything. Those accounts restore through the Google callback instead.
+   *
+   * @returns The exception the caller must throw. Never returns normally
+   *   without one, and never returns a token or a user.
+   */
+  private async resolveNoLiveAccountRejection(
+    email: string,
+    password: string,
+  ): Promise<HttpException> {
+    const genericRejection = new InvalidCredentialsException(
+      ERROR_MESSAGES.AUTH.INVALID_CREDENTIALS,
+    );
+
+    const deletedUser =
+      await this.userService.findSoftDeletedUserByEmail(email);
+    if (!deletedUser?.deletedAt) {
+      this.logger.warn(`Invalid credentials provided for email ${email}`);
+      return genericRejection;
+    }
+
+    // Ownership check first — nothing below this line may run for a caller
+    // who cannot produce the account's password.
+    const { isValid } =
+      await this.userService.getSoftDeletedPasswordCheckResult(
+        password,
+        deletedUser.id,
+      );
+    if (!isValid) {
+      this.logger.warn(
+        `Invalid credentials provided for a soft-deleted account: ${email}`,
+      );
+      return genericRejection;
+    }
+
+    if (!isWithinRecoveryWindow(deletedUser.deletedAt)) {
+      // C1.7: past the window there is no restore prompt and no hint that the
+      // account ever existed, even though the caller did prove ownership.
+      this.logger.warn(
+        `Login on a soft-deleted account past its recovery window: user ${deletedUser.id}`,
+      );
+      return genericRejection;
+    }
+
+    this.logger.log(
+      `Offering restore for soft-deleted account ${deletedUser.id}`,
+    );
+    return new AccountPendingDeletionException(
+      deletedUser.deletedAt,
+      purgeDateFor(deletedUser.deletedAt),
+    );
+  }
+
+  /**
+   * C1.4: restores a soft-deleted account inside its 30-day window and, when
+   * the account is verified, signs the user straight back in.
+   *
+   * Requires email **and** password (B5). Ownership is proven here in exactly
+   * the same order as in `loginUser`: resolve the soft-deleted row, verify the
+   * password, and only then act. A caller who fails that check gets a single
+   * generic message whether the address is unknown, live, already purged, or
+   * simply the wrong password — so this endpoint is no more of an enumeration
+   * oracle than login is.
+   *
+   * Restoring is deliberately not conditional on `accountVerified`: C1.4 gives
+   * restore precedence over the verification gate. An unverified account is
+   * restored and then told to verify, rather than being left deleted with no
+   * way forward.
+   *
+   * @throws {InvalidCredentialsException} Ownership not proven (401).
+   * @throws {AccountNotRestorableException} Window closed, or already purged (410).
+   */
+  async restoreAccount(dto: RestoreAccountDto): Promise<RestoreAccountResult> {
+    const { email, password } = dto;
+
+    const deletedUser =
+      await this.userService.findSoftDeletedUserByEmail(email);
+    if (!deletedUser) {
+      this.logger.warn(`Restore requested for an unrestorable email`);
+      throw new InvalidCredentialsException(
+        ERROR_MESSAGES.AUTH.RESTORE_INVALID_CREDENTIALS,
+      );
+    }
+
+    const { isValid } =
+      await this.userService.getSoftDeletedPasswordCheckResult(
+        password,
+        deletedUser.id,
+      );
+    if (!isValid) {
+      this.logger.warn(
+        `Restore rejected for account ${deletedUser.id}: credentials not verified`,
+      );
+      throw new InvalidCredentialsException(
+        ERROR_MESSAGES.AUTH.RESTORE_INVALID_CREDENTIALS,
+      );
+    }
+
+    // The window check, the purged-row check and the purge race all resolve
+    // inside this call, under a row lock on the account.
+    const restored = await this.userService.restoreAccountById(deletedUser.id);
+
+    return this.completeRestore(restored);
+  }
+
+  /**
+   * C1.4: shared tail of both restore paths (password and Google). Sends the
+   * confirmation email and issues a session — unless the account never
+   * verified its email, in which case the restore stands but no session is
+   * issued and the caller is told to verify.
+   */
+  private async completeRestore(user: User): Promise<RestoreAccountResult> {
+    this.emmitter.emit(MailEvent.ACCOUNT_RESTORED, {
+      email: user.email,
+      firstname: user.firstname,
+    } satisfies AccountRestoredPayload);
+
+    if (!user.accountVerified) {
+      this.logger.log(
+        `Restored account ${user.id} is unverified — no session issued`,
+      );
+      return {
+        result: plainToInstance(RestoreAccountResponseDto, {
+          message: SUCCESS_MESSAGES.AUTH.ACCOUNT_RESTORED_VERIFY_EMAIL,
+          restored: true,
+          requiresEmailVerification: true,
+          data: plainToInstance(UserResponseDto, user),
+        }),
+      };
+    }
+
+    const { access_token, refresh_token, expires_at } =
+      await this.userTokenService.createJWTTokens(user);
+
+    this.logger.log(`Restored account ${user.id} and issued a new session`);
+
+    return {
+      result: plainToInstance(RestoreAccountResponseDto, {
+        message: SUCCESS_MESSAGES.AUTH.ACCOUNT_RESTORED,
+        restored: true,
+        requiresEmailVerification: false,
+        access_token,
+        expires_at,
+        data: plainToInstance(UserResponseDto, user),
+      }),
+      refreshToken: refresh_token,
+    };
   }
 
   /**
@@ -601,7 +781,23 @@ export class AuthService {
       // is ignored entirely; it can only ever affect a brand-new account.
       user = await this.updateSocialLoginInfo(user, socialProfile);
     } else {
-      user = await this.registerSocialUser(socialProfile, stateData.role);
+      // C1.4: the recovery path must not be password-only. A Google-only
+      // account has a null password hash, so `POST /auth/restore-account` can
+      // never work for it — completing this OAuth flow *is* the proof of
+      // ownership, so restore it here.
+      //
+      // This also prevents a much worse outcome than a missing feature: with
+      // no restore attempted, `registerSocialUser` would try to insert a
+      // second row with an email that a soft-deleted row still holds under a
+      // unique constraint spanning deleted rows, and the owner's Google
+      // sign-in would fail with a constraint violation instead of getting
+      // their account back.
+      const restored = await this.restoreSoftDeletedForSocialLogin(
+        socialProfile.email,
+      );
+      user =
+        restored ??
+        (await this.registerSocialUser(socialProfile, stateData.role));
     }
 
     this.logger.log(`Generating tokens for social login user: ${user.email}`);
@@ -617,6 +813,47 @@ export class AuthService {
       data: plainToInstance(UserResponseDto, user),
     });
     return { result, refreshToken: refresh_token };
+  }
+
+  /**
+   * C1.4: restores a soft-deleted account whose owner has just completed the
+   * Google OAuth flow for it.
+   *
+   * The completed OAuth flow is the ownership proof, which is why no password
+   * is involved — this is the recovery path for the accounts that have no
+   * password to give (G5/G10). It reuses the same row-locked restore as the
+   * password path, so the window check, the purged-row refusal and the
+   * purge-race resolution are all identical.
+   *
+   * @returns The restored user, or `null` when there is no soft-deleted
+   *   account for this address (in which case the caller registers a new one).
+   * @throws {AccountNotRestorableException} When the window has closed or the
+   *   row was already purged. The controller turns any callback failure into a
+   *   redirect back to the frontend, so this surfaces as a failed sign-in
+   *   rather than a raw error — see api-contract.md, which flags that a
+   *   dedicated `?error=` code for this case is a deliberate follow-up.
+   */
+  private async restoreSoftDeletedForSocialLogin(
+    email: string,
+  ): Promise<User | null> {
+    const deletedUser =
+      await this.userService.findSoftDeletedUserByEmail(email);
+    if (!deletedUser) return null;
+
+    this.logger.log(
+      `Restoring soft-deleted account ${deletedUser.id} via completed Google sign-in`,
+    );
+    const restored = await this.userService.restoreAccountById(deletedUser.id);
+
+    // Confirmation email only. Tokens are issued by `handleOAuthCallback`
+    // itself, exactly as for any other social login, so the restore doesn't
+    // fork the session-issuing path.
+    this.emmitter.emit(MailEvent.ACCOUNT_RESTORED, {
+      email: restored.email,
+      firstname: restored.firstname,
+    } satisfies AccountRestoredPayload);
+
+    return restored;
   }
 
   /**
