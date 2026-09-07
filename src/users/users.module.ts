@@ -10,6 +10,12 @@ import { ArtisanProfile } from './entities/artisan-profile.entity';
 import { CustomerProfile } from './entities/customer-profile.entity';
 import { ServiceEntity } from '@services/entities/service.entity';
 import { UploadsModule } from '../uploads/uploads.module';
+import { Booking } from '../bookings/entities/booking.entity';
+import { Job } from '@jobs/entities/job.entity';
+import { Payment } from '../payments/entities/payment.entity';
+import { Dispute } from '../disputes/entities/dispute.entity';
+import { AccountCommitmentsService } from './account-commitments.service';
+import { AccountPurgeService } from './account-purge.service';
 
 @Module({
   imports: [
@@ -20,11 +26,30 @@ import { UploadsModule } from '../uploads/uploads.module';
       ArtisanProfile,
       CustomerProfile,
       ServiceEntity,
+      // C1.1: read-only, count-only access for the pre-deletion live
+      // -commitment guard. Deliberately the entities and not the owning
+      // modules — this adds no module-level coupling and no behaviour from
+      // bookings/jobs/payments/disputes leaks into users.
+      Booking,
+      Job,
+      Payment,
+      Dispute,
     ]),
     UploadsModule,
   ],
   controllers: [UsersController],
-  providers: [UsersService, UserTokenService],
-  exports: [UsersService, UserTokenService],
+  providers: [
+    UsersService,
+    UserTokenService,
+    AccountCommitmentsService,
+    AccountPurgeService,
+  ],
+  exports: [
+    UsersService,
+    UserTokenService,
+    AccountCommitmentsService,
+    // C1.7: consumed by `SchedulerModule`'s daily purge cron.
+    AccountPurgeService,
+  ],
 })
 export class UsersModule {}

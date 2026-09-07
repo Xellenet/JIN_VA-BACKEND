@@ -19,6 +19,7 @@ import {
 import {
   ApiBearerAuth,
   ApiBody,
+  ApiConflictResponse,
   ApiConsumes,
   ApiCreatedResponse,
   ApiForbiddenResponse,
@@ -45,6 +46,7 @@ import { UploadsService } from '../uploads/uploads.service';
 import { CreateAddressDto } from './dto/create-address.dto';
 import { UpdateAddressDto } from './dto/update-address.dto';
 import { AddressResponseDto } from './dto/address-response.dto';
+import { DeleteAccountResponseDto } from './dto/delete-account-response.dto';
 import type { AuthenticatedRequest } from '@common/types/authenticated-request.type';
 
 /**
@@ -130,8 +132,12 @@ export class UsersController {
    * Soft-deletes the authenticated user's account. The record is retained in
    * the database but treated as inactive. All active refresh tokens are revoked.
    *
+   * C1.1: refused with 409 while the account still has live commitments.
+   * C1.2/C1.5: the response carries the server-computed purge date, and a
+   * confirmation email stating that date is sent unconditionally.
+   *
    * @param req - Express request; `req.user.id` is injected by `JwtAuthGuard`.
-   * @returns Confirmation message.
+   * @returns Confirmation message plus `deletedAt` / `purgeAt`.
    */
   @Delete('me')
   @UseGuards(JwtAuthGuard)
@@ -139,9 +145,27 @@ export class UsersController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Delete the authenticated user account (soft-delete)',
+    description:
+      'Soft-deletes the account, revokes every refresh token, and emails a ' +
+      'confirmation stating the exact date the account is permanently purged. ' +
+      'The account can be restored by signing in again (or completing Google ' +
+      'sign-in) at any point up to `purgeAt`. ' +
+      'Refused with 409 (`meta.error: ACCOUNT_HAS_LIVE_COMMITMENTS`) while the ' +
+      'account still has a pending/confirmed booking, an open or in-progress ' +
+      'job, a payment in flight, or an unresolved dispute — the message names ' +
+      'what is outstanding.',
   })
-  @ApiOkResponse({ description: 'Account deleted successfully' })
+  @ApiOkResponse({
+    description:
+      'Account soft-deleted; response carries the recovery-window deadline',
+    type: DeleteAccountResponseDto,
+  })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
+  @ApiConflictResponse({
+    description:
+      'Deletion refused — the account still has live bookings, jobs, ' +
+      'payments or disputes',
+  })
   deleteMe(@Req() req: AuthenticatedRequest) {
     return this.usersService.deleteMe(req.user.id);
   }
@@ -207,6 +231,11 @@ export class UsersController {
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Get the artisan profile of the authenticated artisan',
+    description:
+      'Self-view only. Always includes `isProfileComplete` and a populated ' +
+      '`missingFields` array — `[]` when the profile is complete, never ' +
+      'absent. Possible keys: `bio`, `hourlyRate`, `location`, `services`. ' +
+      '`missingFields` is never exposed on any public artisan profile.',
   })
   @ApiOkResponse({
     description: 'Artisan profile retrieved successfully',
@@ -234,6 +263,13 @@ export class UsersController {
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Update the artisan profile of the authenticated artisan',
+    description:
+      'Recomputes and persists `isProfileComplete` against the post-merge ' +
+      'profile on every save, so search visibility follows the save ' +
+      'immediately — no second save and no service add/remove is needed. ' +
+      'The response carries the freshly-recomputed `isProfileComplete` and ' +
+      '`missingFields`, so the caller can update a completeness indicator ' +
+      'straight from the save response without re-fetching.',
   })
   @ApiOkResponse({
     description: 'Artisan profile updated successfully',

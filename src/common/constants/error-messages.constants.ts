@@ -1,3 +1,13 @@
+/**
+ * Joins already-phrased clauses into readable prose: `a`, `a and b`,
+ * `a, b and c`. Used by messages that enumerate several blocking conditions
+ * in one sentence.
+ */
+function joinClauses(clauses: string[]): string {
+  if (clauses.length <= 1) return clauses[0] ?? '';
+  return `${clauses.slice(0, -1).join(', ')} and ${clauses[clauses.length - 1]}`;
+}
+
 export const ERROR_MESSAGES = {
   USER: {
     EMAIL_REQUIRED: 'Email is required',
@@ -6,6 +16,17 @@ export const ERROR_MESSAGES = {
     NOT_FOUND_WITH_ID: (id: string) => `User with id ${id} not found`,
     EMAIL_ALREADY_EXISTS: (email: string) =>
       `User with email ${email} exists already`,
+    /**
+     * C1.1: deletion is refused (409) while the account still has live
+     * commitments. `blockers` are already-phrased clauses (see
+     * `AccountCommitmentsService`), joined here so the user reads one sentence
+     * that names everything outstanding rather than discovering blockers one
+     * retry at a time. Deliberately amount-free — it names the blocking
+     * items, never a figure, so no currency ever has to be formatted here.
+     */
+    DELETION_BLOCKED: (blockers: string[]) =>
+      `Your account can't be deleted yet — ${joinClauses(blockers)}. ` +
+      `Resolve these first, then try again.`,
   },
   AUTH: {
     INVALID_CREDENTIALS: 'Invalid email or password',
@@ -17,6 +38,21 @@ export const ERROR_MESSAGES = {
       'Unable to restore this account with the provided credentials.',
     RESTORE_WINDOW_EXPIRED:
       'This account can no longer be restored — the 30-day recovery window has passed.',
+    /**
+     * C1.7/C1.8: the purge job has already scrubbed this account. Returned
+     * only to a caller that had already proven ownership before the purge
+     * committed (the purge-vs-restore race) — a cold restore attempt on a
+     * purged account gets `RESTORE_INVALID_CREDENTIALS`, which is
+     * indistinguishable from a never-registered email.
+     */
+    ACCOUNT_PERMANENTLY_DELETED:
+      'This account has been permanently deleted and can no longer be restored. Please create a new account.',
+    /**
+     * C1.4: the distinguishable pending-deletion login rejection. Only ever
+     * returned *after* the submitted password has been verified.
+     */
+    ACCOUNT_PENDING_DELETION:
+      'This account is scheduled for deletion. You can still restore it before the recovery window closes.',
     PASSWORDS_DO_NOT_MATCH: 'newPassword and confirmNewPassword do not match',
     // G10: distinct from INVALID_CREDENTIALS so the frontend can render a
     // specific message (and a "Continue with Google" shortcut) instead of
