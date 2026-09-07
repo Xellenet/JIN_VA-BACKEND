@@ -30,6 +30,7 @@ import { ArtisanProfileResponseDto } from './dto/artisan-profile-response.dto';
 import { CustomerProfileResponseDto } from './dto/customer-profile-response.dto';
 import { ServiceEntity } from '@services/entities/service.entity';
 import { UserTokenService } from './token.service';
+import { computeProfileCompleteness } from '@artisans/artisans.service';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { MailEvent } from 'mail/events/mail.events';
 import type { AccountDeletedPayload } from 'mail/events/mail.events';
@@ -552,6 +553,12 @@ export class UsersService {
    * Returns the artisan profile for a given user, including linked services and
    * the user's base data with addresses.
    *
+   * C2.1: the response carries a populated `missingFields` — always present,
+   * `[]` when the profile is complete. It used to be silently absent on this
+   * route (the DTO declared it, only `ArtisansService.toPrivate()` filled it,
+   * and that is unreachable from here), which left the artisan-facing
+   * completeness indicator with nothing to list.
+   *
    * @param userId - The user ID whose artisan profile to retrieve.
    * @returns `{ message, data: ArtisanProfileResponseDto }`.
    * @throws {NotFoundException} When no artisan profile exists for the user.
@@ -579,6 +586,20 @@ export class UsersService {
   /**
    * Applies a partial update to an artisan's profile, optionally replacing the
    * linked services list. Pass `serviceIds: []` to unlink all services.
+   *
+   * C2.2: recomputes and persists `isProfileComplete` on every save through
+   * this route. This is the route both the Profile page and the Settings page
+   * actually save through, and it previously never recomputed the flag — only
+   * the `/artisans/me` routes did. The effect was that an artisan could fill
+   * in every required field, save successfully, and stay flagged incomplete
+   * and invisible in customer search indefinitely, unless they happened to
+   * also add or remove a service afterwards.
+   *
+   * The recompute runs against the **post-merge** profile, not the request
+   * body: the Profile page and the Settings page send different, overlapping
+   * field subsets, so completeness has to be judged on the whole resulting
+   * profile or a partial payload would look incomplete purely because it
+   * didn't mention the other page's fields.
    *
    * @param userId - The user ID whose artisan profile to update.
    * @param updateArtisanProfileDto - Fields to update.
@@ -617,12 +638,23 @@ export class UsersService {
     }
 
     Object.assign(profile, profileUpdates);
+
+    // C2.2: exactly the same logic the `/artisans/me` routes already apply —
+    // imported, not re-implemented, so there is only ever one definition of
+    // "complete" (and therefore of who is searchable).
+    const { isComplete } = computeProfileCompleteness(profile);
+    profile.isProfileComplete = isComplete;
+
     const saved = await this.artisanProfilesRepository.save(profile);
 
     const updated = await this.artisanProfilesRepository.findOne({
       where: { id: saved.id },
       relations: ['user', 'user.addresses', 'services'],
     });
+
+    this.logger.log(
+      `Artisan ${userId} updated their profile (isProfileComplete=${isComplete})`,
+    );
 
     return {
       message: SUCCESS_MESSAGES.ARTISAN_PROFILE.UPDATED,
@@ -788,12 +820,45 @@ export class UsersService {
     return { message: SUCCESS_MESSAGES.USER.ADDRESS_REMOVED };
   }
 
+  /**
+   * C2.1: `missingFields` is not a persisted column — only the derived
+   * `isProfileComplete` boolean is — so it has to be computed fresh and
+   * stitched onto the transformed DTO, exactly as
+   * `ArtisansService.toPrivate()` does for the `/artisans/me` routes. Without
+   * this, the field the DTO (and therefore Swagger) promises was simply absent
+   * from both `/users/me/artisan-profile` responses, and the frontend had no
+   * way to distinguish "complete" from "the field wasn't serialized".
+   *
+   * The caller **must** have loaded the `services` relation: completeness
+   * counts offered services, and an unloaded relation would report `services`
+   * as missing on a profile that has some.
+   */
   private toArtisanProfileResponse(
     profile: ArtisanProfile,
   ): ArtisanProfileResponseDto {
-    return plainToInstance(ArtisanProfileResponseDto, profile, {
+    const dto = plainToInstance(ArtisanProfileResponseDto, profile, {
       excludeExtraneousValues: true,
     });
+
+    const { isComplete, missingFields } = computeProfileCompleteness(profile);
+    dto.missingFields = missingFields;
+
+    // `isProfileComplete` stays sourced from the persisted column, because
+    // that column — not this computation — is what the search hard-filter
+    // reads. If the two ever disagree, the artisan's real search visibility is
+    // the persisted value, so reporting anything else would be a lie in one
+    // direction or the other. A disagreement means some write path skipped the
+    // recompute (the C2.2 bug's signature), so say so loudly rather than
+    // papering over it on a read.
+    if (dto.isProfileComplete !== isComplete) {
+      this.logger.warn(
+        `Artisan profile ${profile.id} has a stale isProfileComplete flag ` +
+          `(persisted=${dto.isProfileComplete}, computed=${isComplete}); ` +
+          `missing=[${missingFields.join(', ')}]`,
+      );
+    }
+
+    return dto;
   }
 
   private toCustomerProfileResponse(
