@@ -138,4 +138,21 @@ export class User {
   @DeleteDateColumn({ name: 'deleted_at', type: 'timestamp', nullable: true })
   @Exclude()
   deletedAt?: Date;
+
+  /**
+   * C1.7/C1.8: stamped by the scheduled purge job once the 30-day recovery
+   * window has elapsed and this row's personal data has been irreversibly
+   * scrubbed. `deletedAt` stays set alongside it.
+   *
+   * This is what makes "restore after purge" impossible **by construction**
+   * rather than merely unexposed: every restore path refuses outright on a
+   * non-null `purgedAt`, the purge candidate query skips rows that already
+   * have one (making reruns idempotent), and the soft-deleted-account lookup
+   * used by login excludes them, so a purged account is indistinguishable
+   * from one that never existed. The scrubbed email and nulled password hash
+   * are the other two independent guarantees — see `AccountPurgeService`.
+   */
+  @Column({ name: 'purged_at', type: 'timestamp', nullable: true })
+  @Exclude()
+  purgedAt?: Date | null;
 }

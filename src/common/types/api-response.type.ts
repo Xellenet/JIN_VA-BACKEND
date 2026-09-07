@@ -21,6 +21,13 @@ export interface MetaData {
    * Present only on responses that are actually retry-after-able (429s).
    */
   retryAfterSeconds?: number;
+  /**
+   * C1.4: primitive, machine-readable facts an error needs the client to act
+   * on rather than merely display — e.g. the pending-deletion login
+   * rejection's `deletedAt` / `restorableUntil`. Opt-in per exception, never
+   * present on a 5xx in production. See `AllExceptionsFilter`.
+   */
+  details?: Record<string, string | number | boolean>;
 }
 
 export interface SuccessResponse<T> {
