@@ -698,5 +698,149 @@ describe('AuthService', () => {
         expect.objectContaining({ role: Role.CUSTOMER }),
       );
     });
+
+    // C1.4: a Google-only account has no password, so the OAuth completion is
+    // its ownership proof and the callback restores it inline. Without this,
+    // registration would be attempted against an email a soft-deleted row
+    // still holds under a unique constraint, and the owner's sign-in would
+    // fail on a constraint violation instead of returning their account.
+    it('restores a soft-deleted account when its owner completes the Google flow (C1.4)', async () => {
+      mockOAuthStateService.consumeState.mockReturnValueOnce({
+        role: Role.CUSTOMER,
+      });
+      mockStrategy.getAccessToken.mockResolvedValueOnce('provider-token');
+      mockStrategy.getUserProfile.mockResolvedValueOnce({
+        email: 'social-gone@example.com',
+        firstname: 'Ama',
+        lastname: 'Owusu',
+        provider: 'google',
+        providerId: 'google-id-4',
+      });
+      mockUsersService.findUserByEmail.mockResolvedValueOnce(null);
+      mockUsersService.findSoftDeletedUserByEmail.mockResolvedValueOnce({
+        ...mockUser,
+        id: 8,
+        email: 'social-gone@example.com',
+        password: null,
+        deletedAt: subDays(new Date(), 5),
+      });
+      mockUsersService.restoreAccountById.mockResolvedValueOnce({
+        ...mockUser,
+        id: 8,
+        email: 'social-gone@example.com',
+        password: null,
+      });
+
+      const { refreshToken } = await service.handleOAuthCallback('google', {
+        code: 'auth-code',
+        state: 'state-123',
+      } as OAuthCallbackDto);
+
+      expect(mockUsersService.restoreAccountById).toHaveBeenCalledWith(8);
+      // No duplicate account, and the user lands logged in.
+      expect(mockUsersService.createUser).not.toHaveBeenCalled();
+      expect(refreshToken).toBe('refresh-token');
+      expect(mockEmitter.emit).toHaveBeenCalledWith(
+        MailEvent.ACCOUNT_RESTORED,
+        expect.objectContaining({ email: 'social-gone@example.com' }),
+      );
+    });
+  });
+
+  /**
+   * C1.8: "restoration after purge must be impossible by construction, not
+   * merely unexposed."
+   *
+   * There are exactly two entry points into restore — the password endpoint
+   * and the Google callback — and both compose the same two guards:
+   * `findSoftDeletedUserByEmail`, whose predicate excludes purged rows, and
+   * `restoreAccountById`, which refuses one under the row lock. This block
+   * exercises that *composition*, with the lookup modelling the real
+   * predicate over an in-memory row rather than being told what to return, so
+   * it is the closure being asserted and not the mock.
+   *
+   * (The two guards are asserted individually in `users.service.spec.ts`.)
+   */
+  describe('purge is terminal — no code path restores a purged account (C1.8)', () => {
+    const purgedRow = {
+      ...mockUser,
+      id: 99,
+      // What the purge actually leaves behind: the original address is gone,
+      // there is no password hash, and purgedAt is stamped.
+      email: 'deleted-user-99@deleted.invalid',
+      password: null,
+      deletedAt: subDays(new Date(), 60),
+      purgedAt: subDays(new Date(), 30),
+    };
+
+    beforeEach(() => {
+      mockUsersService.findUserByEmail.mockResolvedValue(null);
+      // The real query is `WHERE email = ? AND deleted_at IS NOT NULL AND
+      // purged_at IS NULL`, so it can resolve neither the original address
+      // (overwritten) nor the placeholder (purged).
+      mockUsersService.findSoftDeletedUserByEmail.mockImplementation(
+        (email: string): Promise<null> => {
+          const matches = email === purgedRow.email && !purgedRow.purgedAt;
+          return Promise.resolve(matches ? (purgedRow as never) : null);
+        },
+      );
+    });
+
+    it('cannot be restored through POST /auth/restore-account, by either address', async () => {
+      for (const email of ['gone@example.com', purgedRow.email]) {
+        await expect(
+          service.restoreAccount({ email, password: 'pass' }),
+        ).rejects.toThrow(InvalidCredentialsException);
+      }
+      expect(mockUsersService.restoreAccountById).not.toHaveBeenCalled();
+    });
+
+    // Indistinguishable from an address that was never registered, per C1.7.
+    it('cannot be discovered through login, even with the right password', async () => {
+      await expect(
+        service.loginUser({ email: purgedRow.email, password: 'pass' }),
+      ).rejects.toThrow(InvalidCredentialsException);
+      expect(
+        mockUsersService.getSoftDeletedPasswordCheckResult,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('cannot be restored through the Google callback either', async () => {
+      mockOAuthStateService.consumeState.mockReturnValueOnce({
+        role: Role.CUSTOMER,
+      });
+      mockSocialAuthStrategyFactory.getStrategy.mockReturnValue({
+        getAccessToken: jest.fn().mockResolvedValue('provider-token'),
+        getUserProfile: jest.fn().mockResolvedValue({
+          email: purgedRow.email,
+          firstname: 'Ama',
+          lastname: 'Owusu',
+          provider: 'google',
+          providerId: 'google-id-9',
+        }),
+      });
+      mockUserTokenService.createJWTTokens.mockResolvedValue({
+        access_token: 'access-token',
+        refresh_token: 'refresh-token',
+        expires_at: new Date(),
+      });
+      mockUsersService.createUser.mockResolvedValueOnce({
+        data: { ...mockUser, id: 100 },
+      });
+
+      await service.handleOAuthCallback('google', {
+        code: 'auth-code',
+        state: 'state-123',
+      } as OAuthCallbackDto);
+
+      // The purged row is invisible to the restore lookup, so the callback
+      // treats this as a brand-new signup — it never resurrects the old
+      // account, and never emits a restore confirmation for it.
+      expect(mockUsersService.restoreAccountById).not.toHaveBeenCalled();
+      expect(mockEmitter.emit).not.toHaveBeenCalledWith(
+        MailEvent.ACCOUNT_RESTORED,
+        expect.anything(),
+      );
+    });
   });
 });
