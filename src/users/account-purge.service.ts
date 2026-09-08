@@ -1,12 +1,14 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { EntityManager, IsNull, LessThan, Repository } from 'typeorm';
+import { EntityManager, In, IsNull, LessThan, Repository } from 'typeorm';
 import type { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
 import { User } from './entities/user.entity';
 import { UserToken } from './entities/user-token.entity';
 import { Address } from './entities/address.entity';
 import { ArtisanProfile } from './entities/artisan-profile.entity';
+import { ArtisanVerification } from '../verification/entities/artisan-verification.entity';
+import { KycMediaService } from '../uploads/kyc-media.service';
 import { VARIABLES } from '@common/constants/variables.constants';
 import { purgeCutoffFrom } from '@common/utils/account-recovery.util';
 
@@ -52,6 +54,13 @@ export class AccountPurgeService {
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
     private readonly config: ConfigService,
+    /**
+     * C1.7: KYC media has to leave *storage*, not just the database — the
+     * admin-only `GET /uploads/kyc/:folder/:filename` endpoint resolves a
+     * folder and filename and has no notion of whether the owning account was
+     * purged, so an un-deleted object stays readable forever.
+     */
+    private readonly kycMedia: KycMediaService,
   ) {}
 
   /**
@@ -169,6 +178,7 @@ export class AccountPurgeService {
 
         await this.scrubUserRow(manager, user, now);
         await this.scrubArtisanProfile(manager, user.id);
+        await this.scrubArtisanVerifications(manager, user.id);
         await this.deleteResidualPersonalData(manager, user.id);
 
         this.logger.log(`Purged user ${userId}`);
@@ -262,6 +272,93 @@ export class AccountPurgeService {
       .set(scrubbed)
       .where('user_id = :userId', { userId })
       .execute();
+  }
+
+  /**
+   * C1.7: strips the account's KYC identity data — the single most sensitive
+   * thing it ever handed over — and deletes the stored documents.
+   *
+   * This was the gap that made "permanently deleted" untrue: the purge
+   * anonymized the `users` row and the artisan profile, but
+   * `artisan_verifications` is joined by `artisan_profile_id` (a row the purge
+   * deliberately keeps), so it kept the Ghana Card / passport number, full
+   * legal name, date of birth, the whole KYC provider payload, and the URLs of
+   * the ID front/back scans and the selfie. The files themselves were never
+   * deleted and any admin could still stream them through
+   * `GET /uploads/kyc/:folder/:filename`, which knows nothing about purges. A
+   * purged ex-artisan therefore remained fully re-identifiable from a scan of
+   * their national ID plus a photo of their face.
+   *
+   * **Objects first, then the columns.** The reference is the only way to find
+   * the stored file, so clearing it before the delete would orphan the media
+   * permanently and undetectably.
+   *
+   * What is kept, deliberately: `status`, `reviewedAt`, `reviewedById`,
+   * `documentType` and the provider name — non-identifying, and the moderation
+   * audit trail of who approved what has to survive an account leaving.
+   *
+   * A no-op for a customer account, and for an artisan who never submitted
+   * verification (no rows).
+   */
+  private async scrubArtisanVerifications(
+    manager: EntityManager,
+    userId: number,
+  ): Promise<void> {
+    const repo = manager.getRepository(ArtisanVerification);
+
+    // Two-level relation criteria (verification → artisan profile → user)
+    // rather than a raw subquery, so the join follows the mapping instead of
+    // hardcoding a second table's column name here.
+    const verifications = await repo.find({
+      where: { artisanProfile: { user: { id: userId } } },
+    });
+
+    if (verifications.length === 0) return;
+
+    for (const verification of verifications) {
+      for (const reference of [
+        verification.documentFrontUrl,
+        verification.documentBackUrl,
+        verification.selfieUrl,
+      ]) {
+        if (!reference) continue;
+        const deleted = await this.kycMedia.deleteByReference(reference);
+        if (!deleted) {
+          // The DB scrub still proceeds — leaving the identity *data* in place
+          // because one file reference was unparseable would be worse — but an
+          // operator needs to know a file may be left behind, and after this
+          // transaction the reference is gone.
+          this.logger.error(
+            `Purge of user ${userId}: could not resolve a KYC media reference on ` +
+              `verification ${verification.id} to a stored object. If that file exists ` +
+              `it must be removed by hand — the reference is cleared below.`,
+          );
+        }
+      }
+    }
+
+    const scrubbed = {
+      idNumber: null,
+      fullLegalName: null,
+      dateOfBirth: null,
+      additionalNotes: null,
+      providerRawResponse: null,
+      documentFrontUrl: null,
+      documentBackUrl: null,
+      selfieUrl: null,
+      adminNotes: null,
+      rejectionReason: null,
+      providerReference: null,
+    } as unknown as QueryDeepPartialEntity<ArtisanVerification>;
+
+    await repo.update(
+      { id: In(verifications.map((verification) => verification.id)) },
+      scrubbed,
+    );
+
+    this.logger.log(
+      `Purged the KYC data on ${verifications.length} verification row(s) for user ${userId}`,
+    );
   }
 
   /**

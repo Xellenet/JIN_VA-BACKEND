@@ -16,6 +16,7 @@ import { Payment } from '../payments/entities/payment.entity';
 import { Dispute } from '../disputes/entities/dispute.entity';
 import { AccountCommitmentsService } from './account-commitments.service';
 import { AccountPurgeService } from './account-purge.service';
+import { ArtisanVerification } from '../verification/entities/artisan-verification.entity';
 
 @Module({
   imports: [
@@ -34,6 +35,10 @@ import { AccountPurgeService } from './account-purge.service';
       Job,
       Payment,
       Dispute,
+      // C1.7: the purge scrubs the KYC identity data hanging off the artisan
+      // profile. Registered here so `autoLoadEntities` sees it from this
+      // module rather than only from `AdminModule`.
+      ArtisanVerification,
     ]),
     UploadsModule,
   ],

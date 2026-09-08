@@ -15,6 +15,10 @@ import { StorageProviderFactory } from './providers/storage-provider.factory';
     S3StorageProvider,
     StorageProviderFactory,
   ],
-  exports: [UploadsService, StorageProviderFactory],
+  // C1.7: `KycMediaService` is exported for the account purge, which has to
+  // delete a purged artisan's identity documents and verification selfie from
+  // storage. Deliberately the service and not the providers, so the
+  // "which store holds it" rule stays in one place.
+  exports: [UploadsService, StorageProviderFactory, KycMediaService],
 })
 export class UploadsModule {}

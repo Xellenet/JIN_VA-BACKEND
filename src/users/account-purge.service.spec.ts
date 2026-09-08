@@ -5,6 +5,8 @@ import { FindOperator } from 'typeorm';
 import { addDays, subDays } from 'date-fns';
 import { AccountPurgeService } from './account-purge.service';
 import { User } from './entities/user.entity';
+import { ArtisanVerification } from '../verification/entities/artisan-verification.entity';
+import { KycMediaService } from '../uploads/kyc-media.service';
 import { VARIABLES } from '@common/constants/variables.constants';
 import { Role } from '@common/types/enums';
 
@@ -35,6 +37,11 @@ describe('AccountPurgeService (C1.7/C1.8)', () => {
     findOne: jest.fn(),
     update: jest.fn(),
   };
+  /** C1.7: KYC rows are read (for their media references) then scrubbed. */
+  const mockVerificationsRepo = {
+    find: jest.fn(),
+    update: jest.fn(),
+  };
   const mockQueryBuilder = {
     update: jest.fn().mockReturnThis(),
     delete: jest.fn().mockReturnThis(),
@@ -44,8 +51,14 @@ describe('AccountPurgeService (C1.7/C1.8)', () => {
     execute: jest.fn().mockResolvedValue({ affected: 1 }),
   };
   const mockManager = {
-    getRepository: () => mockTransactionalRepo,
+    getRepository: (entity: unknown) =>
+      entity === ArtisanVerification
+        ? mockVerificationsRepo
+        : mockTransactionalRepo,
     createQueryBuilder: () => mockQueryBuilder,
+  };
+  const mockKycMedia = {
+    deleteByReference: jest.fn(),
   };
   const mockUsersRepository = {
     find: jest.fn(),
@@ -72,11 +85,14 @@ describe('AccountPurgeService (C1.7/C1.8)', () => {
         AccountPurgeService,
         { provide: getRepositoryToken(User), useValue: mockUsersRepository },
         { provide: ConfigService, useValue: mockConfig },
+        { provide: KycMediaService, useValue: mockKycMedia },
       ],
     }).compile();
 
     service = module.get(AccountPurgeService);
     jest.clearAllMocks();
+    mockVerificationsRepo.find.mockResolvedValue([]);
+    mockKycMedia.deleteByReference.mockResolvedValue(true);
     mockQueryBuilder.update.mockReturnThis();
     mockQueryBuilder.delete.mockReturnThis();
     mockQueryBuilder.from.mockReturnThis();
@@ -249,6 +265,21 @@ describe('AccountPurgeService (C1.7/C1.8)', () => {
       expect(mockTransactionalRepo.update).not.toHaveBeenCalled();
       expect(mockQueryBuilder.execute).not.toHaveBeenCalled();
     });
+
+    // Log-only has to be inert in *storage* too, not just in the database —
+    // deleting a KYC document is every bit as irreversible as scrubbing a row.
+    it('does not read or delete any KYC media', async () => {
+      mockTransactionalRepo.findOne.mockResolvedValueOnce({
+        ...deletedUser,
+        deletedAt: subDays(new Date(), 45),
+      });
+
+      await service.purgeAccount(deletedUser.id);
+
+      expect(mockVerificationsRepo.find).not.toHaveBeenCalled();
+      expect(mockKycMedia.deleteByReference).not.toHaveBeenCalled();
+      expect(mockVerificationsRepo.update).not.toHaveBeenCalled();
+    });
   });
 
   describe('purgeAccount — destructive mode', () => {
@@ -346,6 +377,105 @@ describe('AccountPurgeService (C1.7/C1.8)', () => {
     it('deletes the residual tokens and saved addresses', async () => {
       await runPurge();
       expect(mockQueryBuilder.delete).toHaveBeenCalledTimes(2);
+    });
+
+    /**
+     * C1.7's "all directly identifying personal data is irreversibly
+     * scrubbed" has to reach `artisan_verifications`, which the purge
+     * otherwise never touched because it hangs off the artisan profile rather
+     * than the user row. Left alone, a purged ex-artisan stayed fully
+     * re-identifiable: Ghana Card / passport number, legal name, date of
+     * birth, the KYC provider payload, and the stored ID scans and selfie —
+     * still streamable by any admin through `GET /uploads/kyc/...`, which has
+     * no notion of a purged account.
+     */
+    describe('KYC identity data (C1.7)', () => {
+      const verificationRow = {
+        id: 55,
+        idNumber: 'GHA-000111222-3',
+        fullLegalName: 'Yaw Mensah',
+        dateOfBirth: '1990-04-01',
+        documentFrontUrl: '/uploads/documents/front-uuid.jpg',
+        documentBackUrl: '/uploads/documents/back-uuid.jpg',
+        selfieUrl: '/uploads/selfies/selfie-uuid.jpg',
+      };
+
+      const runPurgeWithVerification = async () => {
+        mockVerificationsRepo.find.mockResolvedValue([verificationRow]);
+        return runPurge();
+      };
+
+      it('clears every identifying column, keeping only the moderation trail', async () => {
+        await runPurgeWithVerification();
+
+        const [criteria, payload] = (
+          mockVerificationsRepo.update.mock.calls as unknown[][]
+        )[0] as [{ id: unknown }, Record<string, unknown>];
+
+        expect(criteria.id).toBeDefined();
+        for (const field of [
+          'idNumber',
+          'fullLegalName',
+          'dateOfBirth',
+          'additionalNotes',
+          'providerRawResponse',
+          'documentFrontUrl',
+          'documentBackUrl',
+          'selfieUrl',
+        ]) {
+          expect(payload[field]).toBeNull();
+        }
+
+        // Who reviewed what, and when, is not personal data of the departing
+        // artisan and has to survive them leaving.
+        expect(payload).not.toHaveProperty('status');
+        expect(payload).not.toHaveProperty('reviewedAt');
+        expect(payload).not.toHaveProperty('reviewedById');
+      });
+
+      it('deletes the stored documents and selfie from storage', async () => {
+        await runPurgeWithVerification();
+
+        const references = (
+          mockKycMedia.deleteByReference.mock.calls as unknown[][]
+        ).map((call) => call[0]);
+        expect(references).toEqual([
+          verificationRow.documentFrontUrl,
+          verificationRow.documentBackUrl,
+          verificationRow.selfieUrl,
+        ]);
+      });
+
+      // The reference is the only way to find the file, so clearing it first
+      // would orphan the media permanently and undetectably.
+      it('deletes the objects before clearing the references that locate them', async () => {
+        await runPurgeWithVerification();
+
+        const deleteOrder = mockKycMedia.deleteByReference.mock
+          .invocationCallOrder as number[];
+        const updateOrder = mockVerificationsRepo.update.mock
+          .invocationCallOrder as number[];
+        expect(Math.max(...deleteOrder)).toBeLessThan(Math.min(...updateOrder));
+      });
+
+      it('still scrubs the row when a file could not be resolved in storage', async () => {
+        mockKycMedia.deleteByReference.mockResolvedValue(false);
+
+        await runPurgeWithVerification();
+
+        // Leaving the ID number in place because one filename was unparseable
+        // would be the worse failure; the operator gets an error log instead.
+        expect(mockVerificationsRepo.update).toHaveBeenCalled();
+      });
+
+      it('is a no-op for an account with no verification rows', async () => {
+        mockVerificationsRepo.find.mockResolvedValue([]);
+
+        await runPurge();
+
+        expect(mockKycMedia.deleteByReference).not.toHaveBeenCalled();
+        expect(mockVerificationsRepo.update).not.toHaveBeenCalled();
+      });
     });
 
     // C1.7: financial, audit and counterparty-integrity records stay attached
