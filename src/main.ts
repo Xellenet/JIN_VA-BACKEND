@@ -9,6 +9,7 @@ import { setupSwagger } from './config/swagger.config';
 import { Logger, ValidationPipe } from '@nestjs/common';
 import cookieParser from 'cookie-parser';
 import { applyLegacyMediaServing } from './uploads/legacy-media.config';
+import { resolveTrustProxyHops } from './config/trust-proxy.config';
 import type { Logger as WinstonLogger } from 'winston';
 
 async function bootstrap() {
@@ -22,30 +23,25 @@ async function bootstrap() {
 
   /**
    * The auth rate limits key on the client IP, so `req.ip` has to actually *be*
-   * the client. Behind a proxy or load balancer (Render, nginx, Cloudflare) it
-   * isn't: Express reports the nearest hop unless it is told how many hops to
-   * trust — which would put every user of the platform into a single
-   * rate-limit bucket and start rejecting logins globally after ten attempts.
+   * the client. `resolveTrustProxyHops` owns that decision — including
+   * refusing to boot a production deployment that never said whether it sits
+   * behind a proxy, because "unset" used to mean "trust nothing" *and* be the
+   * default, which is the one setting that silently collapses every per-IP
+   * limit into a single platform-wide bucket. Read the header comment in
+   * `src/config/trust-proxy.config.ts` for the full reasoning.
    *
-   * `TRUST_PROXY_HOPS` is the number of proxies in front of this process (1 for
-   * a typical single PaaS/reverse proxy). Express then resolves the client
-   * address from `X-Forwarded-For`, skipping exactly that many trusted hops
-   * counted from the connection inwards. It is deliberately a hop *count*
-   * rather than `trust proxy: true`: `true` takes the left-most `X-Forwarded-For`
-   * entry, which is whatever the caller chose to put there, making an IP-keyed
-   * limit trivially bypassable.
-   *
-   * Unset (or 0) means "not behind a proxy" — `req.ip` stays the socket
-   * address, which is correct for local development and for a directly-exposed
-   * process. **Any hosted environment must set this**, or per-IP limits are
-   * per-deployment limits.
+   * The setting is always logged, in every configuration, so the effective
+   * value is visible in the boot log rather than inferred from its absence.
    */
-  const trustProxyHops = Number(process.env.TRUST_PROXY_HOPS ?? 0);
-  if (Number.isInteger(trustProxyHops) && trustProxyHops > 0) {
-    app.set('trust proxy', trustProxyHops);
-    new Logger('Bootstrap').log(
-      `Trusting ${trustProxyHops} proxy hop(s) for client IP resolution`,
-    );
+  const trustProxy = resolveTrustProxyHops();
+  const bootLogger = new Logger('Bootstrap');
+  if (trustProxy.hops > 0) {
+    app.set('trust proxy', trustProxy.hops);
+  }
+  if (trustProxy.warn) {
+    bootLogger.warn(trustProxy.description);
+  } else {
+    bootLogger.log(trustProxy.description);
   }
 
   app.useGlobalFilters(new AllExceptionsFilter(logger), new TypeOrmFilter());
