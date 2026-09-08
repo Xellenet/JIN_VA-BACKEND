@@ -41,6 +41,36 @@ import {
   isWithinRecoveryWindow,
   purgeDateFor,
 } from '@common/utils/account-recovery.util';
+import { randomUUID } from 'node:crypto';
+
+/**
+ * A real bcrypt hash, at the application's configured cost factor, of a random
+ * value that is never stored anywhere and can therefore never be submitted.
+ *
+ * It exists so that a credential check with **no hash to compare against**
+ * (no such account, or a social-only account) still costs the same ~half
+ * second as one that does. Without it, `bcrypt.compare` ran only on the
+ * branches where a matching row was found, and the response time alone
+ * separated "this address is registered" (and, on the restore endpoint,
+ * "this address has a deleted account still inside its recovery window") from
+ * "this address is unknown" — a ~60–80x signal that needed one unauthenticated
+ * request per address to read.
+ *
+ * Generated rather than hardcoded so it always tracks `SALT_OR_ROUNDS`;
+ * kicked off eagerly at module load (not awaited — bcrypt's async form runs on
+ * the thread pool) so no request ever pays for producing it, and memoized so
+ * exactly one is ever made per process.
+ *
+ * Matching it is worthless by construction: the comparison's result is
+ * discarded and the caller is told `hasPassword: false, isValid: false`
+ * regardless.
+ */
+let dummyPasswordHash: Promise<string> | null = null;
+function getDummyPasswordHash(): Promise<string> {
+  dummyPasswordHash ??= bcrypt.hash(randomUUID(), VARIABLES.SALT_OR_ROUNDS);
+  return dummyPasswordHash;
+}
+void getDummyPasswordHash();
 
 @Injectable()
 export class UsersService {
@@ -544,17 +574,45 @@ export class UsersService {
 
   /**
    * Shared bcrypt comparison for every password check in this service, so the
-   * "a null hash is never a match and never reaches `bcrypt.compare`" rule
-   * (G5/G10) is stated once instead of re-implemented per call site.
+   * "a null hash is never a match" rule (G5/G10) is stated once instead of
+   * re-implemented per call site.
+   *
+   * A null hash still costs one comparison — against
+   * {@link getDummyPasswordHash}, result discarded — so that a social-only
+   * account and an account with a password are not separable by response time.
+   * The G5/G10 rule that a null hash never reaches `bcrypt.compare` is
+   * preserved: the null is never the argument, the throwaway hash is.
    */
   private async comparePasswordHash(
     password: string,
     hash: string | null,
   ): Promise<{ hasPassword: boolean; isValid: boolean }> {
     if (!hash) {
+      await this.spendPasswordCheckCost(password);
       return { hasPassword: false, isValid: false };
     }
     return { hasPassword: true, isValid: await bcrypt.compare(password, hash) };
+  }
+
+  /**
+   * C1.4: spends exactly one bcrypt comparison and discards the result, so a
+   * rejection path that never found an account costs the same as one that did.
+   *
+   * Call this on **every** credential-checking branch that returns without
+   * comparing a real hash — `AuthService`'s "no live and no soft-deleted
+   * account for this email" branch, and `restoreAccount`'s "nothing
+   * restorable" branch. Both are the enumeration-critical paths: their bodies
+   * are already byte-identical to the wrong-password rejection, and this is
+   * what makes their *timing* identical too.
+   *
+   * Exactly one comparison per attempt is the invariant to preserve — not
+   * "at least one". Two would be as distinguishable as none.
+   */
+  async spendPasswordCheckCost(password: string): Promise<void> {
+    // `bcrypt.compare` throws on an undefined/null data argument; a rejection
+    // path must never turn into a 500 because the body was odd, and an empty
+    // string costs the same to compare as any other.
+    await bcrypt.compare(password ?? '', await getDummyPasswordHash());
   }
 
   async findOne(id: number) {

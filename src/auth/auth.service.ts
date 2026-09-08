@@ -255,6 +255,11 @@ export class AuthService {
    * disclose the existence of a deleted account to someone who hasn't proven
    * anything. Those accounts restore through the Google callback instead.
    *
+   * **Identical bodies are only half of it.** Every branch here spends exactly
+   * one bcrypt comparison, including the one that finds no row at all
+   * (see {@link UsersService.spendPasswordCheckCost}), so response time cannot
+   * separate "registered" from "never registered" either.
+   *
    * @returns The exception the caller must throw. Never returns normally
    *   without one, and never returns a token or a user.
    */
@@ -269,7 +274,14 @@ export class AuthService {
     const deletedUser =
       await this.userService.findSoftDeletedUserByEmail(email);
     if (!deletedUser?.deletedAt) {
-      this.logger.warn(`Invalid credentials provided for email ${email}`);
+      // No account of any kind for this address. Spend a bcrypt comparison
+      // anyway: without it this branch returns in single-digit milliseconds
+      // while every branch that found a row takes ~half a second, and that
+      // difference alone tells an unauthenticated caller whether an address is
+      // registered. The bodies were already identical; this makes the timing
+      // identical.
+      await this.userService.spendPasswordCheckCost(password);
+      this.logger.warn(`Rejected login for an unknown address`);
       return genericRejection;
     }
 
@@ -281,8 +293,12 @@ export class AuthService {
         deletedUser.id,
       );
     if (!isValid) {
+      // The user ID, never the email: this line records "an address with a
+      // soft-deleted account was tried", so an email here would turn log read
+      // access into an enumeration oracle for accounts pending deletion — and
+      // would outlive the purge that scrubs the address from the database.
       this.logger.warn(
-        `Invalid credentials provided for a soft-deleted account: ${email}`,
+        `Invalid credentials provided for a soft-deleted account: user ${deletedUser.id}`,
       );
       return genericRejection;
     }
@@ -313,8 +329,11 @@ export class AuthService {
    * the same order as in `loginUser`: resolve the soft-deleted row, verify the
    * password, and only then act. A caller who fails that check gets a single
    * generic message whether the address is unknown, live, already purged, or
-   * simply the wrong password — so this endpoint is no more of an enumeration
-   * oracle than login is.
+   * simply the wrong password — and every one of those branches spends the
+   * same single bcrypt comparison, so the four are indistinguishable by
+   * response time as well as by body. That matters more here than anywhere
+   * else: the bit this endpoint would otherwise leak is precisely "this
+   * address has a deleted account still inside its recovery window".
    *
    * Restoring is deliberately not conditional on `accountVerified`: C1.4 gives
    * restore precedence over the verification gate. An unverified account is
@@ -330,6 +349,15 @@ export class AuthService {
     const deletedUser =
       await this.userService.findSoftDeletedUserByEmail(email);
     if (!deletedUser) {
+      // Unknown address, a live account, or an already-purged one — all four
+      // documented 401 cases must be indistinguishable, and until this call
+      // they were not. This branch returned without any bcrypt work while the
+      // wrong-password branch paid for a full comparison, so response time was
+      // a clean binary signal for the single most sensitive bit this endpoint
+      // holds: whether that address has a deleted account still inside its
+      // recovery window. One unauthenticated request per address, repeatable,
+      // and per-IP rate limiting only slows a sweep rather than closing it.
+      await this.userService.spendPasswordCheckCost(password);
       this.logger.warn(`Restore requested for an unrestorable email`);
       throw new InvalidCredentialsException(
         ERROR_MESSAGES.AUTH.RESTORE_INVALID_CREDENTIALS,

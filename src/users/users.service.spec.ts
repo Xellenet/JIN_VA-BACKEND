@@ -23,6 +23,7 @@ import { MailEvent } from 'mail/events/mail.events';
 import { AccountNotRestorableException } from '@common/exceptions/account-not-restorable.exception';
 import { addDays, subDays } from 'date-fns';
 import type { FindOperator } from 'typeorm';
+import * as bcrypt from 'bcrypt';
 
 describe('UsersService', () => {
   let service: UsersService;
@@ -340,6 +341,83 @@ describe('UsersService', () => {
         mockUsersRepository.findOne.mock.calls as unknown[][]
       )[0][0] as { select: string[] };
       expect(options.select).toEqual(['id']);
+    });
+  });
+
+  /**
+   * C1.4: the timing half of "these outcomes must be indistinguishable".
+   * `bcrypt.compare` used to run only where a hash was found, so a branch with
+   * no account (or a social-only account) returned in single-digit
+   * milliseconds against ~half a second — a clean, repeatable signal from one
+   * unauthenticated request. Every path now costs exactly one comparison.
+   */
+  describe('constant-cost password checks (C1.4)', () => {
+    /**
+     * A bcrypt comparison at `SALT_OR_ROUNDS` (12) takes hundreds of
+     * milliseconds on any machine this runs on, while skipping it takes
+     * microseconds — the gap the finding measured was ~60–80x. 25ms is far
+     * below the real cost and far above scheduling noise, so "did this path
+     * actually do the work" is a stable question to ask.
+     *
+     * `bcrypt` is a native binding whose exports cannot be redefined, so this
+     * is asserted by cost rather than by spying on `compare`.
+     */
+    const MIN_BCRYPT_MS = 25;
+
+    const elapsed = async (run: () => Promise<unknown>): Promise<number> => {
+      const started = Date.now();
+      await run();
+      return Date.now() - started;
+    };
+
+    it('spendPasswordCheckCost actually performs a comparison', async () => {
+      const cost = await elapsed(() =>
+        service.spendPasswordCheckCost('whatever-was-submitted'),
+      );
+      expect(cost).toBeGreaterThan(MIN_BCRYPT_MS);
+    });
+
+    it('tolerates a missing password without throwing (a rejection path must never 500)', async () => {
+      await expect(
+        service.spendPasswordCheckCost(undefined as unknown as string),
+      ).resolves.toBeUndefined();
+    });
+
+    // The row exists but has no stored hash (a soft-deleted Google-only
+    // account). It must still cost a comparison, and must never report a match.
+    it('still costs a comparison for an account with no stored hash', async () => {
+      mockUsersRepository.findOne.mockResolvedValueOnce({ password: null });
+
+      let result: { hasPassword: boolean; isValid: boolean } | undefined;
+      const cost = await elapsed(async () => {
+        result = await service.getSoftDeletedPasswordCheckResult('pw', 1);
+      });
+
+      expect(result).toEqual({ hasPassword: false, isValid: false });
+      expect(cost).toBeGreaterThan(MIN_BCRYPT_MS);
+    });
+
+    // The property that closes the oracle: a wrong password against a real
+    // hash and a check with no hash at all cost the same order of magnitude.
+    it('costs the same order of magnitude with and without a stored hash', async () => {
+      const realHash = await bcrypt.hash('correct', VARIABLES.SALT_OR_ROUNDS);
+
+      mockUsersRepository.findOne.mockResolvedValueOnce({
+        password: realHash,
+      });
+      const withHash = await elapsed(() =>
+        service.getSoftDeletedPasswordCheckResult('wrong', 1),
+      );
+
+      mockUsersRepository.findOne.mockResolvedValueOnce({ password: null });
+      const withoutHash = await elapsed(() =>
+        service.getSoftDeletedPasswordCheckResult('wrong', 1),
+      );
+
+      const ratio =
+        Math.max(withHash, withoutHash) /
+        Math.max(1, Math.min(withHash, withoutHash));
+      expect(ratio).toBeLessThan(3);
     });
   });
 
