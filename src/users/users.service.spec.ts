@@ -291,6 +291,58 @@ describe('UsersService', () => {
     });
   });
 
+  describe('isEmailRegistered (C1.6)', () => {
+    it('should throw NotFoundException if email is missing', async () => {
+      await expect(
+        service.isEmailRegistered(undefined as unknown as string),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    // The point of the method: registration must see soft-deleted rows, so a
+    // deleted address is rejected by the app's own `UserAlreadyExists` rather
+    // than falling through to the unique constraint (which produced a
+    // *different* 409 and leaked the deleted state).
+    it('looks past the soft-delete filter', async () => {
+      mockUsersRepository.findOne.mockResolvedValueOnce(null);
+
+      await service.isEmailRegistered('gone@example.com');
+
+      const options = (
+        mockUsersRepository.findOne.mock.calls as unknown[][]
+      )[0][0] as { where: { email: string }; withDeleted: boolean };
+      expect(options.withDeleted).toBe(true);
+      expect(options.where.email).toBe('gone@example.com');
+      // No `deletedAt` predicate: live *and* deleted rows both count as taken.
+      expect(options.where).not.toHaveProperty('deletedAt');
+    });
+
+    it('reports taken for a soft-deleted row and free for no row', async () => {
+      mockUsersRepository.findOne.mockResolvedValueOnce({ id: 42 });
+      await expect(service.isEmailRegistered('gone@example.com')).resolves.toBe(
+        true,
+      );
+
+      mockUsersRepository.findOne.mockResolvedValueOnce(null);
+      await expect(service.isEmailRegistered('free@example.com')).resolves.toBe(
+        false,
+      );
+    });
+
+    // Nothing about the account may reach an unauthenticated caller — the
+    // answer is a boolean, and only the id is even selected.
+    it('returns a boolean and loads nothing but the id', async () => {
+      mockUsersRepository.findOne.mockResolvedValueOnce({ id: 42 });
+
+      const result = await service.isEmailRegistered('gone@example.com');
+
+      expect(typeof result).toBe('boolean');
+      const options = (
+        mockUsersRepository.findOne.mock.calls as unknown[][]
+      )[0][0] as { select: string[] };
+      expect(options.select).toEqual(['id']);
+    });
+  });
+
   describe('findSoftDeletedUserByEmail (C1.4)', () => {
     // The safety property: this lookup is structurally incapable of returning
     // a live account or a purged one, so widening login's visibility cannot

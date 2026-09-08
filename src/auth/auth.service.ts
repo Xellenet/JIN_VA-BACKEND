@@ -98,8 +98,15 @@ export class AuthService {
 
     this.logger.log(`Registering User with email ${email}`);
 
-    const existingUser = await this.userService.findUserByEmail(email);
-    if (existingUser) {
+    // C1.6: the check spans soft-deleted rows on purpose. `findUserByEmail`
+    // excludes them, which meant a deleted address never hit this branch and
+    // was instead rejected downstream by the `users.email` unique constraint —
+    // a `409` with a different message and no `meta.error`, so a single
+    // unauthenticated register probe told an attacker whether an address was
+    // live, deleted, or free. Both cases now raise the identical
+    // `UserAlreadyExists`, which is what makes "taken" and "taken by a
+    // *deleted* account" indistinguishable.
+    if (await this.userService.isEmailRegistered(email)) {
       throw new UserAlreadyExists(
         ERROR_MESSAGES.USER.EMAIL_ALREADY_EXISTS(email),
       );

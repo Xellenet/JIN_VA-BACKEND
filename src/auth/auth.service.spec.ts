@@ -37,6 +37,7 @@ describe('AuthService', () => {
   };
   const mockUsersService = {
     findUserByEmail: jest.fn(),
+    isEmailRegistered: jest.fn(),
     createUser: jest.fn(),
     validatePassword: jest.fn(),
     hasUsablePassword: jest.fn(),
@@ -99,6 +100,9 @@ describe('AuthService', () => {
       hasPassword: false,
       isValid: false,
     });
+    // C1.6: registration's existence check spans soft-deleted rows; default to
+    // "address is free".
+    mockUsersService.isEmailRegistered.mockResolvedValue(false);
   });
 
   it('should be defined', () => {
@@ -118,7 +122,7 @@ describe('AuthService', () => {
         password: 'pass',
       } as CreateUserDto;
       const loggerSpy = jest.spyOn(service['logger'], 'log');
-      mockUsersService.findUserByEmail.mockResolvedValueOnce(undefined);
+      mockUsersService.isEmailRegistered.mockResolvedValueOnce(false);
       mockUsersService.createUser.mockResolvedValueOnce({ data: mockUser });
       mockUserTokenService.createToken.mockResolvedValueOnce({
         token: 'verification-token',
@@ -144,7 +148,7 @@ describe('AuthService', () => {
       await expect(service.registerUser(dto)).rejects.toThrow(
         BadRequestException,
       );
-      expect(mockUsersService.findUserByEmail).not.toHaveBeenCalled();
+      expect(mockUsersService.isEmailRegistered).not.toHaveBeenCalled();
     });
 
     it('should throw UserAlreadyExists if user already exists', async () => {
@@ -152,12 +156,49 @@ describe('AuthService', () => {
         email: 'test@example.com',
         password: 'pass',
       } as CreateUserDto;
-      mockUsersService.findUserByEmail.mockResolvedValueOnce(mockUser);
+      mockUsersService.isEmailRegistered.mockResolvedValueOnce(true);
 
       await expect(service.registerUser(dto)).rejects.toThrow(
         UserAlreadyExists,
       );
-      expect(mockUsersService.findUserByEmail).toHaveBeenCalledWith(dto.email);
+      expect(mockUsersService.isEmailRegistered).toHaveBeenCalledWith(
+        dto.email,
+      );
+    });
+
+    /**
+     * C1.6: the existence check must span soft-deleted rows, and the rejection
+     * must be the *same* exception a live account produces.
+     *
+     * Before this, registration checked `findUserByEmail` (soft-delete
+     * filtered), so a deleted address skipped this branch entirely and was
+     * rejected downstream by the `users.email` unique constraint — a 409 with
+     * a different message and no `meta.error`. One unauthenticated probe then
+     * classified any address as live / deleted / free. The assertion that
+     * `findUserByEmail` is *not* consulted is the regression guard: swapping
+     * back to it silently reopens the leak.
+     */
+    it('rejects a soft-deleted address identically to a live one, and never uses the soft-delete-filtered lookup', async () => {
+      const dto: CreateUserDto = {
+        email: 'deleted@example.com',
+        password: 'pass',
+      } as CreateUserDto;
+
+      mockUsersService.isEmailRegistered.mockResolvedValueOnce(true);
+      const deletedRejection = await service
+        .registerUser(dto)
+        .catch((err: UserAlreadyExists) => err);
+
+      mockUsersService.isEmailRegistered.mockResolvedValueOnce(true);
+      const liveRejection = await service
+        .registerUser({ ...dto } as CreateUserDto)
+        .catch((err: UserAlreadyExists) => err);
+
+      expect(deletedRejection).toBeInstanceOf(UserAlreadyExists);
+      expect(deletedRejection.message).toBe(liveRejection.message);
+      expect(deletedRejection.getStatus()).toBe(liveRejection.getStatus());
+      expect(mockUsersService.findUserByEmail).not.toHaveBeenCalled();
+      expect(mockUsersService.createUser).not.toHaveBeenCalled();
     });
 
     it('should create, emit event, and return user if not exists', async () => {
@@ -166,7 +207,7 @@ describe('AuthService', () => {
         password: 'pass',
         role: Role.CUSTOMER,
       } as CreateUserDto;
-      mockUsersService.findUserByEmail.mockResolvedValueOnce(undefined);
+      mockUsersService.isEmailRegistered.mockResolvedValueOnce(false);
       mockUsersService.createUser.mockResolvedValueOnce({ data: mockUser });
       mockUserTokenService.createToken.mockResolvedValueOnce({
         token: 'verification-token',
@@ -174,7 +215,9 @@ describe('AuthService', () => {
 
       const result = await service.registerUser(dto);
 
-      expect(mockUsersService.findUserByEmail).toHaveBeenCalledWith(dto.email);
+      expect(mockUsersService.isEmailRegistered).toHaveBeenCalledWith(
+        dto.email,
+      );
       expect(mockUsersService.createUser).toHaveBeenCalledWith(dto);
       expect(mockEmitter.emit).toHaveBeenCalledWith(
         expect.any(String),

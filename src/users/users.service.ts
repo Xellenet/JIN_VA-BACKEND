@@ -321,6 +321,37 @@ export class UsersService {
   }
 
   /**
+   * C1.6: whether the address is already taken by **any** account — live or
+   * soft-deleted. Registration's existence check, and nothing else.
+   *
+   * Deliberately not `findUserByEmail` (which excludes soft-deleted rows):
+   * relying on that made a soft-deleted address fall through the application's
+   * own `UserAlreadyExists` and get rejected by the `users.email` unique
+   * constraint instead, which `TypeOrmFilter` renders with a *different*
+   * message and no `meta.error`. One register probe could therefore classify
+   * any address as live / deleted / free, which C1.6 forbids.
+   *
+   * Returns a boolean, not an entity: the caller must not be able to base
+   * anything but "taken or not" on the answer, and nothing about a
+   * soft-deleted account should be loaded by an unauthenticated request.
+   *
+   * A **purged** row is not a match — its email was overwritten with the
+   * `deleted-user-<id>@deleted.invalid` placeholder, so the original address is
+   * genuinely free again (Open Question 2's resolved behaviour).
+   */
+  async isEmailRegistered(email: string): Promise<boolean> {
+    if (!email) {
+      throw new NotFoundException('Email required');
+    }
+    const existing = await this.usersRepository.findOne({
+      where: { email },
+      withDeleted: true,
+      select: ['id'],
+    });
+    return !!existing;
+  }
+
+  /**
    * C1.4: resolves a **soft-deleted, not-yet-purged** account by email — the
    * only lookup in the application that can see past the soft-delete filter.
    *
