@@ -133,7 +133,8 @@ export class ArtisansService {
    *
    * @param artisanProfileId - The primary key of the artisan profile.
    * @returns `{ message, data: ArtisanPublicResponseDto }`.
-   * @throws {NotFoundException} When no artisan profile with the given ID exists.
+   * @throws {NotFoundException} When no artisan profile with the given ID
+   *   exists, or when its owning account is soft-deleted or purged.
    */
   async findById(artisanProfileId: number): Promise<PublicItem> {
     const profile = await this.artisanProfileRepository.findOne({
@@ -141,7 +142,18 @@ export class ArtisansService {
       relations: ['user', 'services'],
     });
 
-    if (!profile) {
+    // C1.6: `user` being null here means the owning account is soft-deleted
+    // (C1) or purged (C1.7) — `artisan_profiles` itself is not soft-deletable,
+    // and TypeORM appends `AND user.deleted_at IS NULL` to the relation's LEFT
+    // join, so the profile row still comes back with a null `user`.
+    //
+    // This must be the *same* 404 a nonexistent ID gets, for two reasons:
+    // dereferencing the null relation below used to throw a `TypeError` and
+    // hand an unauthenticated caller a 500 on a public route (so a bookmarked
+    // or shared artisan link broke rather than saying "not found"), and a
+    // 500-vs-404 difference is itself an oracle for "this artisan deleted
+    // their account". Nonexistent, soft-deleted and purged are indistinguishable.
+    if (!profile || !profile.user) {
       throw new NotFoundException(
         `Artisan profile with id ${artisanProfileId} not found.`,
       );
