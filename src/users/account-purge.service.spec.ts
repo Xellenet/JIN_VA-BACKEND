@@ -5,6 +5,7 @@ import { FindOperator } from 'typeorm';
 import { addDays, subDays } from 'date-fns';
 import { AccountPurgeService } from './account-purge.service';
 import { User } from './entities/user.entity';
+import { ArtisanProfile } from './entities/artisan-profile.entity';
 import { ArtisanVerification } from '../verification/entities/artisan-verification.entity';
 import { KycMediaService } from '../uploads/kyc-media.service';
 import { VARIABLES } from '@common/constants/variables.constants';
@@ -37,9 +38,20 @@ describe('AccountPurgeService (C1.7/C1.8)', () => {
     findOne: jest.fn(),
     update: jest.fn(),
   };
-  /** C1.7: KYC rows are read (for their media references) then scrubbed. */
+  /**
+   * C1.7: KYC rows are read (for their media references) then scrubbed. The
+   * read goes through the repository's own query builder, joining
+   * `artisan_profiles` on the raw join columns — see the lookup-shape
+   * assertions below, and `account-purge.kyc-lookup.spec.ts` for the same
+   * query compiled to SQL through real entity metadata.
+   */
+  const mockVerificationsQueryBuilder = {
+    innerJoin: jest.fn().mockReturnThis(),
+    where: jest.fn().mockReturnThis(),
+    getMany: jest.fn().mockResolvedValue([]),
+  };
   const mockVerificationsRepo = {
-    find: jest.fn(),
+    createQueryBuilder: jest.fn(() => mockVerificationsQueryBuilder),
     update: jest.fn(),
   };
   const mockQueryBuilder = {
@@ -91,7 +103,12 @@ describe('AccountPurgeService (C1.7/C1.8)', () => {
 
     service = module.get(AccountPurgeService);
     jest.clearAllMocks();
-    mockVerificationsRepo.find.mockResolvedValue([]);
+    mockVerificationsRepo.createQueryBuilder.mockReturnValue(
+      mockVerificationsQueryBuilder,
+    );
+    mockVerificationsQueryBuilder.innerJoin.mockReturnThis();
+    mockVerificationsQueryBuilder.where.mockReturnThis();
+    mockVerificationsQueryBuilder.getMany.mockResolvedValue([]);
     mockKycMedia.deleteByReference.mockResolvedValue(true);
     mockQueryBuilder.update.mockReturnThis();
     mockQueryBuilder.delete.mockReturnThis();
@@ -276,7 +293,7 @@ describe('AccountPurgeService (C1.7/C1.8)', () => {
 
       await service.purgeAccount(deletedUser.id);
 
-      expect(mockVerificationsRepo.find).not.toHaveBeenCalled();
+      expect(mockVerificationsRepo.createQueryBuilder).not.toHaveBeenCalled();
       expect(mockKycMedia.deleteByReference).not.toHaveBeenCalled();
       expect(mockVerificationsRepo.update).not.toHaveBeenCalled();
     });
@@ -401,9 +418,45 @@ describe('AccountPurgeService (C1.7/C1.8)', () => {
       };
 
       const runPurgeWithVerification = async () => {
-        mockVerificationsRepo.find.mockResolvedValue([verificationRow]);
+        mockVerificationsQueryBuilder.getMany.mockResolvedValue([
+          verificationRow,
+        ]);
         return runPurge();
       };
+
+      /**
+       * The lookup is the part a mocked repository cannot vouch for, and it is
+       * where this step shipped broken: `find({ where: { artisanProfile: {
+       * user: { id } } } })` makes TypeORM append
+       * `AND users.deleted_at IS NULL` to the join it builds for that relation
+       * condition, and every purge candidate is soft-deleted — so the query
+       * matched nothing on every purge and the step returned before touching
+       * anything. Asserting the shape of the query, not just that a mock was
+       * called, is what makes that visible here; the SQL-level proof is in
+       * `account-purge.kyc-lookup.spec.ts`.
+       */
+      it('finds the rows by the raw join columns, never through the `user` relation', async () => {
+        await runPurgeWithVerification();
+
+        const [joinTarget, , onClause] = (
+          mockVerificationsQueryBuilder.innerJoin.mock.calls as unknown[][]
+        )[0] as [unknown, string, string];
+        const [whereClause, whereParams] = (
+          mockVerificationsQueryBuilder.where.mock.calls as unknown[][]
+        )[0] as [string, Record<string, unknown>];
+
+        // Only `artisan_profiles` is joined. It has no `@DeleteDateColumn`, so
+        // no soft-delete filter can be appended to this query; `User` (which
+        // does have one) must never appear in the join path.
+        expect(joinTarget).toBe(ArtisanProfile);
+        expect(joinTarget).not.toBe(User);
+        expect(onClause).toBe('profile.id = verification.artisan_profile_id');
+        expect(whereClause).toBe('profile.user_id = :userId');
+        // A raw predicate string, not relation criteria — the shape that made
+        // this step a no-op.
+        expect(whereClause).not.toContain('artisanProfile');
+        expect(whereParams).toEqual({ userId: deletedUser.id });
+      });
 
       it('clears every identifying column, keeping only the moderation trail', async () => {
         await runPurgeWithVerification();
@@ -451,10 +504,10 @@ describe('AccountPurgeService (C1.7/C1.8)', () => {
       it('deletes the objects before clearing the references that locate them', async () => {
         await runPurgeWithVerification();
 
-        const deleteOrder = mockKycMedia.deleteByReference.mock
-          .invocationCallOrder as number[];
-        const updateOrder = mockVerificationsRepo.update.mock
-          .invocationCallOrder as number[];
+        const deleteOrder =
+          mockKycMedia.deleteByReference.mock.invocationCallOrder;
+        const updateOrder =
+          mockVerificationsRepo.update.mock.invocationCallOrder;
         expect(Math.max(...deleteOrder)).toBeLessThan(Math.min(...updateOrder));
       });
 
@@ -469,7 +522,7 @@ describe('AccountPurgeService (C1.7/C1.8)', () => {
       });
 
       it('is a no-op for an account with no verification rows', async () => {
-        mockVerificationsRepo.find.mockResolvedValue([]);
+        mockVerificationsQueryBuilder.getMany.mockResolvedValue([]);
 
         await runPurge();
 

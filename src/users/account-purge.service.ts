@@ -306,12 +306,38 @@ export class AccountPurgeService {
   ): Promise<void> {
     const repo = manager.getRepository(ArtisanVerification);
 
-    // Two-level relation criteria (verification → artisan profile → user)
-    // rather than a raw subquery, so the join follows the mapping instead of
-    // hardcoding a second table's column name here.
-    const verifications = await repo.find({
-      where: { artisanProfile: { user: { id: userId } } },
-    });
+    // Resolved through the raw `artisan_profile_id` / `user_id` join columns,
+    // never through the `user` relation — the same convention the two sibling
+    // steps above and below use, and for exactly this reason.
+    //
+    // Relation criteria (`find({ where: { artisanProfile: { user: { id } } } })`)
+    // read better but are a **silent no-op** here: TypeORM turns a relation
+    // condition into a LEFT JOIN and appends `AND users.deleted_at IS NULL` to
+    // *that join's* ON clause whenever `withDeleted` is false. Every purge
+    // candidate is soft-deleted by definition — `findPurgeCandidateIds` selects
+    // on `deleted_at < cutoff`, the in-lock re-check refuses a live row, and
+    // `scrubUserRow` deliberately leaves `deletedAt` set — so the join never
+    // matches, the lookup returns zero rows on *every* purge, and this step
+    // returns below without deleting a document or clearing a column. The KYC
+    // identity data then survives a "permanent, irreversible" purge intact.
+    // Same TypeORM behaviour `ArtisansService.findById` documents for its null
+    // `user` relation.
+    //
+    // Joining only `artisan_profiles` (which has no `@DeleteDateColumn`) means
+    // no soft-delete filter can be appended to this query at all, rather than
+    // being switched off with `withDeleted: true` and re-appearing the moment
+    // someone drops that flag. `account-purge.kyc-lookup.spec.ts` compiles the
+    // query below through real entity metadata and fails if a `deleted_at`
+    // predicate ever reappears in it.
+    const verifications = await repo
+      .createQueryBuilder('verification')
+      .innerJoin(
+        ArtisanProfile,
+        'profile',
+        'profile.id = verification.artisan_profile_id',
+      )
+      .where('profile.user_id = :userId', { userId })
+      .getMany();
 
     if (verifications.length === 0) return;
 
