@@ -130,6 +130,7 @@ interface PartyDispute {
   category: DisputeCategory;
   reason: string;
   response?: string;
+  booking?: { id: number };
   viewerRole: 'RAISER' | 'COUNTERPARTY';
   canRespond: boolean;
   outcome?: DisputeOutcome;
@@ -837,6 +838,89 @@ describe('Analytics, admin tooling & disputes (e2e)', () => {
       // The artisan filed none of these — they are all against them.
       expect(mine.length).toBeGreaterThan(0);
       expect(mine.every((d) => d.viewerRole === 'COUNTERPARTY')).toBe(true);
+    });
+
+    /**
+     * DC3.6 (backend half). Both parties may each file one dispute on the same
+     * booking — the duplicate guard is per *raiser*
+     * (`{ bookingId, raisedById }`), not per booking. `GET /disputes/my` then
+     * returns two disputes with the same `booking.id` to both of them.
+     *
+     * The frontend's strip picks which dispute to link a viewer to using
+     * `viewerRole` and `canRespond` (it must prefer the one this viewer raised,
+     * then the one they can respond to, and never array order). That rule is
+     * only implementable if these two fields are derived **per row, per
+     * caller** — so this test pins exactly that, from both sides at once.
+     * Deliberately last in this block: the DP2 test above asserts the artisan
+     * is the counterparty on every dispute, which stops being true once the
+     * artisan files one of their own.
+     */
+    it('DC3.6: derives viewerRole and canRespond per row when both parties filed on one booking', async () => {
+      const booking = await makeBooking();
+      const byCustomer = await raiseDispute(customerToken, booking.id);
+      const byArtisan = await raiseDispute(
+        artisanToken,
+        booking.id,
+        DisputeCategory.CLIENT_NO_ACCESS,
+      );
+      expect(byCustomer).not.toBe(byArtisan);
+
+      const onThisBooking = async (token: string) => {
+        const res = await request(server())
+          .get('/api/v1/disputes/my')
+          .set('Authorization', `Bearer ${token}`);
+        expect(res.status).toBe(200);
+        return envelope<PartyDispute[]>(res).filter(
+          (d) => Number(d.booking?.id) === booking.id,
+        );
+      };
+
+      // Each party sees both disputes on the booking…
+      const customerView = await onThisBooking(customerToken);
+      const artisanView = await onThisBooking(artisanToken);
+      expect(customerView.map((d) => d.id).sort()).toEqual(
+        [byCustomer, byArtisan].sort(),
+      );
+      expect(artisanView.map((d) => d.id).sort()).toEqual(
+        [byCustomer, byArtisan].sort(),
+      );
+
+      // …but each row is labelled from that caller's own side, so the strip
+      // never has to guess and never has to fall back to array order.
+      const customerOwn = customerView.find((d) => d.id === byCustomer)!;
+      const customerAgainst = customerView.find((d) => d.id === byArtisan)!;
+      expect(customerOwn.viewerRole).toBe('RAISER');
+      expect(customerOwn.canRespond).toBe(false);
+      expect(customerAgainst.viewerRole).toBe('COUNTERPARTY');
+      expect(customerAgainst.canRespond).toBe(true);
+
+      const artisanOwn = artisanView.find((d) => d.id === byArtisan)!;
+      const artisanAgainst = artisanView.find((d) => d.id === byCustomer)!;
+      expect(artisanOwn.viewerRole).toBe('RAISER');
+      expect(artisanOwn.canRespond).toBe(false);
+      expect(artisanAgainst.viewerRole).toBe('COUNTERPARTY');
+      expect(artisanAgainst.canRespond).toBe(true);
+
+      // Exactly one dispute per viewer is theirs, and exactly one is answerable
+      // — the two conditions the frontend's selection rule keys on.
+      for (const view of [customerView, artisanView]) {
+        expect(view.filter((d) => d.viewerRole === 'RAISER')).toHaveLength(1);
+        expect(view.filter((d) => d.canRespond)).toHaveLength(1);
+      }
+
+      // The single read agrees with the list read, from both sides.
+      for (const [token, id, role] of [
+        [customerToken, byCustomer, 'RAISER'],
+        [customerToken, byArtisan, 'COUNTERPARTY'],
+        [artisanToken, byArtisan, 'RAISER'],
+        [artisanToken, byCustomer, 'COUNTERPARTY'],
+      ] as const) {
+        const res = await request(server())
+          .get(`/api/v1/disputes/my/${id}`)
+          .set('Authorization', `Bearer ${token}`);
+        expect(res.status).toBe(200);
+        expect(envelope<PartyDispute>(res).viewerRole).toBe(role);
+      }
     });
   });
 
