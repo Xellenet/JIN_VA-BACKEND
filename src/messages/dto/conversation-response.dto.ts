@@ -5,9 +5,27 @@ import {
 } from './message-response.dto';
 
 export class ConversationParticipantDto {
-  @ApiProperty() id!: number;
-  @ApiProperty() firstname!: string;
-  @ApiProperty() lastname!: string;
+  @ApiPropertyOptional({
+    description:
+      'C1: absent when this participant has deleted their account — there is ' +
+      'no live user to link to. The names still render (see below).',
+  })
+  id?: number;
+
+  @ApiProperty({
+    description:
+      'C1: `"Deleted"` when this participant has deleted their account, ' +
+      'pairing with `lastname` for "Deleted User" — the same placeholder the ' +
+      'purge writes onto the row, so the thread reads the same during the ' +
+      '30-day window and after the purge. Never absent, never null.',
+  })
+  firstname!: string;
+
+  @ApiProperty({
+    description: 'C1: `"User"` for a deleted participant — see `firstname`.',
+  })
+  lastname!: string;
+
   @ApiPropertyOptional({ nullable: true }) profilePicture?: string | null;
 }
 

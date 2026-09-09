@@ -18,11 +18,14 @@ import {
   ApiBody,
   ApiConflictResponse,
   ApiCreatedResponse,
+  ApiForbiddenResponse,
   ApiFoundResponse,
+  ApiGoneResponse,
   ApiOkResponse,
   ApiOperation,
   ApiQuery,
   ApiTags,
+  ApiTooManyRequestsResponse,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
@@ -36,7 +39,13 @@ import { LoginResponseDto } from './dto/login-response.dto';
 import { OAuthCallbackDto } from './dto/oauth-callback.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ResendVerificationDto } from './dto/resend-verification.dto';
+import { RestoreAccountDto } from './dto/restore-account.dto';
+import { RestoreAccountResponseDto } from './dto/restore-account-response.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import {
+  AuthCredentialsThrottlerGuard,
+  AuthEmailThrottlerGuard,
+} from './guards/auth-throttler.guard';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import type { AuthenticatedRequest } from '@common/types/authenticated-request.type';
 import {
@@ -65,10 +74,39 @@ const OAUTH_ERROR_CODES = {
 } as const;
 
 /**
+ * The one 429 description every throttled auth route publishes. Identical
+ * everywhere on purpose: the guard runs before the handler, so the response
+ * cannot vary by whether the submitted email belongs to a real account, and
+ * documenting it per-route with different wording would only imply that it
+ * might.
+ */
+const RATE_LIMITED_DESCRIPTION =
+  'Too many attempts from this client. `meta.error` is `AUTH_RATE_LIMIT_EXCEEDED` and ' +
+  '`meta.retryAfterSeconds` says how long to wait. Byte-identical for every caller ' +
+  'regardless of whether the account exists — it carries no information about the account.';
+
+/**
  * Handles all authentication flows: registration, login, token refresh,
  * email verification, password reset, password change, and logout.
  * Auth routes are excluded from the global response interceptor and return
  * their own structured payloads.
+ *
+ * **Rate limiting.** Every route here that lets a caller guess a secret (a
+ * password or a one-time token) or that sends mail to a caller-supplied address
+ * is throttled per client IP — `login`, `restore-account`, `reset-password`,
+ * `verify-email` and `change-password` under the `auth-credentials` throttler
+ * (default 10/minute, `AUTH_RATE_LIMIT_PER_MINUTE`); `register`,
+ * `forgot-password` and `resend-verification` under the stricter `auth-email`
+ * one (default 5/minute, `AUTH_EMAIL_RATE_LIMIT_PER_MINUTE`). Each route counts
+ * separately. See `guards/auth-throttler.guard.ts` for why the key is the IP and
+ * never the submitted email.
+ *
+ * Two routes are deliberately **not** throttled, having been considered:
+ * `refresh-token`, because its token arrives in an httpOnly cookie, is
+ * high-entropy and single-use (replay already fails), while a legitimate app
+ * with several tabs open can burst refreshes; and the two `google` routes,
+ * which carry no guessable secret — the OAuth `state` is single-use and
+ * server-issued, and a limit there would throttle the consent redirect itself.
  */
 @ApiTags('Authentication')
 @Controller('auth')
@@ -85,12 +123,16 @@ export class AuthController {
    * @returns The created user profile (password excluded).
    */
   @Post('register')
+  // Registration spam: every call that hits a free address dispatches a
+  // verification email and creates a row.
+  @UseGuards(AuthEmailThrottlerGuard)
   @ApiOperation({
     summary: 'Register a new user account',
     description:
       'Creates a new CUSTOMER or ARTISAN account. ' +
       'A one-time email verification link is sent to the provided address on success. ' +
-      'Passwords must be at least 8 characters and contain an uppercase letter, a digit, and a special character.',
+      'Passwords must be at least 8 characters and contain an uppercase letter, a digit, and a special character. ' +
+      'Rate-limited per client IP.',
   })
   @ApiCreatedResponse({
     description: 'User registered successfully',
@@ -103,6 +145,7 @@ export class AuthController {
   @ApiConflictResponse({
     description: 'An account with this email address already exists',
   })
+  @ApiTooManyRequestsResponse({ description: RATE_LIMITED_DESCRIPTION })
   registerUser(@Body() createUserDto: CreateUserDto) {
     return this.authService.registerUser(createUserDto);
   }
@@ -120,13 +163,24 @@ export class AuthController {
    */
   @Post('login')
   @HttpCode(200)
+  // The endpoint this whole throttling round exists for: an email+password pair
+  // whose response tells the caller whether the guess was right.
+  @UseGuards(AuthCredentialsThrottlerGuard)
   @ApiOperation({
     summary: 'Login with email and password',
     description:
       'Validates credentials and issues an RS256-signed access token (15 min) in the response body. ' +
       'The refresh token (7 days) is set exclusively via an httpOnly `Set-Cookie` header — it never ' +
       'appears in the JSON body. ' +
-      'Both email-not-found and wrong-password surface as a single 401 to prevent user enumeration.',
+      'Both email-not-found and wrong-password surface as a single 401 to prevent user enumeration. ' +
+      'C1.4: if the submitted password is **correct** but the account is soft-deleted and still ' +
+      'inside its 30-day recovery window, this returns 403 with `meta.error: ' +
+      '`ACCOUNT_PENDING_DELETION`` and `meta.details.deletedAt` / ' +
+      '`meta.details.restorableUntil`, and no tokens — the caller should offer ' +
+      '`POST /auth/restore-account`. A wrong password on such an account, and an account whose ' +
+      'window has closed, both return the same generic 401 as any other failure, so the restore ' +
+      'prompt can never be reached without proving ownership. ' +
+      'Rate-limited per client IP.',
   })
   @ApiOkResponse({
     description:
@@ -135,6 +189,12 @@ export class AuthController {
   })
   @ApiBadRequestResponse({ description: 'Email or password field is missing' })
   @ApiUnauthorizedResponse({ description: 'Invalid email or password' })
+  @ApiForbiddenResponse({
+    description:
+      'Email not verified, or the account is soft-deleted but still restorable ' +
+      '(`ACCOUNT_PENDING_DELETION`)',
+  })
+  @ApiTooManyRequestsResponse({ description: RATE_LIMITED_DESCRIPTION })
   async loginUser(
     @Body() loginDto: LoginDto,
     @Res({ passthrough: true }) res: Response,
@@ -142,6 +202,77 @@ export class AuthController {
     const { result, refreshToken } = await this.authService.loginUser(loginDto);
     setRefreshTokenCookie(res, refreshToken);
     setAuthSessionCookie(res, { sub: result.data.id, role: result.data.role });
+    return result;
+  }
+
+  /**
+   * C1.4: restores a soft-deleted account inside its 30-day recovery window
+   * and signs the user back in.
+   *
+   * Reachable only by someone who can produce the account's password — the
+   * same ownership proof login requires, and the reason this takes credentials
+   * rather than just an email. Google-only accounts (no password) restore by
+   * completing `GET /auth/google/callback` instead.
+   *
+   * @param dto - The account email and its password.
+   * @param res - Used to set the httpOnly cookies, exactly as login does.
+   */
+  @Post('restore-account')
+  @HttpCode(200)
+  // Same email+password shape as login, so the same exposure and the same
+  // limit. Its own counter, though — burning the login quota must not lock a
+  // legitimate owner out of recovering their account, or vice versa.
+  @UseGuards(AuthCredentialsThrottlerGuard)
+  @ApiOperation({
+    summary: 'Restore a soft-deleted account within its 30-day window',
+    description:
+      'Clears the deletion and reactivates the account. Requires the ' +
+      "account's email **and** password — an email-only endpoint would let " +
+      "anyone un-delete a stranger's account. " +
+      'On success the account is immediately fully usable and every ' +
+      'relationship it had (profile, services, portfolio, jobs, bookings, ' +
+      'reviews, favourites, payout details) is intact, because nothing was ' +
+      'modified during the window. A confirmation email is sent. ' +
+      'A verified account is signed in and receives an access token plus the ' +
+      'httpOnly refresh/session cookies; an account that had not verified its ' +
+      'email is still restored, but `requiresEmailVerification` is `true` and ' +
+      'no token is issued. ' +
+      'Failures are deliberately indistinguishable: an unknown email, a live ' +
+      'account, a purged account and a wrong password all return the same ' +
+      '401. A 410 means the account was real and owned by the caller but can ' +
+      'never come back (`meta.error`: `ACCOUNT_RESTORE_WINDOW_EXPIRED` or ' +
+      '`ACCOUNT_PERMANENTLY_DELETED`). ' +
+      'Rate-limited per client IP.',
+  })
+  @ApiBody({ type: RestoreAccountDto })
+  @ApiOkResponse({
+    description: 'Account restored',
+    type: RestoreAccountResponseDto,
+  })
+  @ApiUnauthorizedResponse({
+    description:
+      'Ownership not proven — no restorable account for these credentials',
+  })
+  @ApiGoneResponse({
+    description:
+      'The recovery window has closed, or the account has already been purged',
+  })
+  @ApiTooManyRequestsResponse({ description: RATE_LIMITED_DESCRIPTION })
+  async restoreAccount(
+    @Body() dto: RestoreAccountDto,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<RestoreAccountResponseDto> {
+    const { result, refreshToken } = await this.authService.restoreAccount(dto);
+
+    // No session for an account that still has to verify its email — the
+    // restore succeeded, but the S4 verification gate applies to it as normal.
+    if (refreshToken) {
+      setRefreshTokenCookie(res, refreshToken);
+      setAuthSessionCookie(res, {
+        sub: result.data.id,
+        role: result.data.role,
+      });
+    }
     return result;
   }
 
@@ -154,12 +285,17 @@ export class AuthController {
    */
   @Post('verify-email')
   @HttpCode(200)
+  // Token guessing: the 200-vs-400 answer says whether the submitted token was
+  // valid. The token is high-entropy, so this is defence in depth rather than
+  // the primary control, but it is the same shape of oracle as login.
+  @UseGuards(AuthCredentialsThrottlerGuard)
   @ApiOperation({
     summary: 'Verify email address using the one-time registration token',
     description:
       'Marks the account as verified and stamps `verifiedAt`. ' +
       'The token is single-use and expires after the configured TTL. ' +
-      'A welcome email is dispatched on success.',
+      'A welcome email is dispatched on success. ' +
+      'Rate-limited per client IP.',
   })
   @ApiBody({
     schema: {
@@ -177,6 +313,7 @@ export class AuthController {
   @ApiBadRequestResponse({
     description: 'Token is missing, invalid, or already expired',
   })
+  @ApiTooManyRequestsResponse({ description: RATE_LIMITED_DESCRIPTION })
   async verifyEmail(
     @Body('token') token: string,
   ): Promise<{ message: string }> {
@@ -195,12 +332,17 @@ export class AuthController {
    */
   @Post('forgot-password')
   @HttpCode(200)
+  // The response is already enumeration-safe, but the *side effect* is not
+  // free: each call to a registered address sends mail. Unthrottled, one IP
+  // could walk an address list and mail-bomb whoever is on it, at no cost.
+  @UseGuards(AuthEmailThrottlerGuard)
   @ApiOperation({
     summary: 'Request a password-reset link',
     description:
       'Generates a short-lived password-reset token and emails it to the provided address. ' +
       'If a valid unexpired token already exists for this account it is reused. ' +
-      'Always returns 200 — even for unregistered emails — to prevent email enumeration.',
+      'Always returns 200 — even for unregistered emails — to prevent email enumeration. ' +
+      'Rate-limited per client IP.',
   })
   @ApiBody({
     schema: {
@@ -220,6 +362,7 @@ export class AuthController {
   @ApiBadRequestResponse({
     description: 'Email is not registered on the platform',
   })
+  @ApiTooManyRequestsResponse({ description: RATE_LIMITED_DESCRIPTION })
   async forgotPassword(
     @Body('email') email: string,
   ): Promise<{ message: string }> {
@@ -238,12 +381,17 @@ export class AuthController {
    */
   @Post('reset-password')
   @HttpCode(200)
+  // Token guessing, with a much higher payoff than verify-email: a correct
+  // guess sets a password of the attacker's choosing. Reset tokens live for 60
+  // minutes, so the window is long enough that an unbounded guess rate matters.
+  @UseGuards(AuthCredentialsThrottlerGuard)
   @ApiOperation({
     summary: 'Reset password using the token from the forgot-password email',
     description:
       'Validates the reset token, hashes the new password, and revokes both the reset token ' +
       'and all existing refresh tokens for the account (forces re-login on all devices). ' +
-      'Pass the token from the email as a query parameter.',
+      'Pass the token from the email as a query parameter. ' +
+      'Rate-limited per client IP.',
   })
   @ApiQuery({
     name: 'token',
@@ -256,6 +404,7 @@ export class AuthController {
     description:
       '`newPassword` and `confirmNewPassword` do not match, or token is invalid / expired',
   })
+  @ApiTooManyRequestsResponse({ description: RATE_LIMITED_DESCRIPTION })
   async resetPassword(
     @Query('token') token: string,
     @Body() resetPasswordDto: ResetPasswordDto,
@@ -360,7 +509,12 @@ export class AuthController {
    */
   @Post('change-password')
   @HttpCode(200)
-  @UseGuards(JwtAuthGuard)
+  // `JwtAuthGuard` first, deliberately: an unauthenticated flood is rejected as
+  // 401 before it can consume anyone's quota, and by the time the throttler
+  // runs `req.user` exists, so the counter keys on the account rather than the
+  // network. What this bounds is current-password guessing by someone holding a
+  // stolen access token.
+  @UseGuards(JwtAuthGuard, AuthCredentialsThrottlerGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Change password for the authenticated user',
@@ -368,7 +522,8 @@ export class AuthController {
       'Verifies the current password, hashes the new password, ' +
       'revokes all existing refresh tokens (logs out all other devices), ' +
       'and returns a fresh access token so the current session stays active. ' +
-      'The new refresh token is set as an httpOnly cookie — it is never returned in the body.',
+      'The new refresh token is set as an httpOnly cookie — it is never returned in the body. ' +
+      'Rate-limited per authenticated account.',
   })
   @ApiOkResponse({
     description:
@@ -382,6 +537,7 @@ export class AuthController {
   @ApiUnauthorizedResponse({
     description: 'Missing or invalid JWT in Authorization header',
   })
+  @ApiTooManyRequestsResponse({ description: RATE_LIMITED_DESCRIPTION })
   async changePassword(
     @Body() changePasswordDto: ChangePasswordDto,
     @Req() req: AuthenticatedRequest,
@@ -407,12 +563,20 @@ export class AuthController {
    */
   @Post('resend-verification')
   @HttpCode(200)
+  // F1's 60-second cooldown (`AuthService.resendVerification`) already bounds
+  // mail *per account*, which is the abuse case it was written for, and it
+  // still does — this guard is not a replacement for it. What the cooldown
+  // cannot bound is one IP walking a list of *different* addresses: each
+  // unverified account past its own cooldown yields another email, and every
+  // call costs a user lookup regardless. That's what this limits.
+  @UseGuards(AuthEmailThrottlerGuard)
   @ApiOperation({
     summary: 'Resend the email-verification link for an unverified account',
     description:
       'Issues a fresh email-verification token and resends the verification email. ' +
       'Always returns 200 regardless of whether the email exists, is already verified, ' +
-      'or is within its resend cooldown, to prevent account enumeration.',
+      'or is within its resend cooldown, to prevent account enumeration. ' +
+      'Subject to both the existing per-account 60-second resend cooldown and a per-client-IP rate limit.',
   })
   @ApiBody({ type: ResendVerificationDto })
   @ApiOkResponse({
@@ -420,6 +584,7 @@ export class AuthController {
       'If the account exists and is unverified, a new verification email is sent',
   })
   @ApiBadRequestResponse({ description: 'Email is missing or invalid' })
+  @ApiTooManyRequestsResponse({ description: RATE_LIMITED_DESCRIPTION })
   async resendVerification(
     @Body() dto: ResendVerificationDto,
   ): Promise<{ message: string }> {

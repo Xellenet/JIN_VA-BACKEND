@@ -1,7 +1,8 @@
 import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
-import { ThrottlerGuard } from '@nestjs/throttler';
 import type { ThrottlerLimitDetail } from '@nestjs/throttler';
 import type { ExecutionContext } from '@nestjs/common';
+import { NamedThrottlerGuard } from '@common/throttling/named-throttler.guard';
+import { THROTTLER_NAMES } from '@common/throttling/throttler-names';
 
 /**
  * The stable code a client matches on to recognise a send-rate-limit rejection,
@@ -11,6 +12,11 @@ export const MESSAGE_RATE_LIMIT_ERROR_CODE = 'MESSAGE_RATE_LIMIT_EXCEEDED';
 
 /**
  * RL1: per-sender rate limit on `POST /messages`.
+ *
+ * Scoped to the `message-send` throttler via `NamedThrottlerGuard`, so the
+ * `/auth/*` limits configured alongside it in `ThrottlingModule` are not
+ * applied to this route (the stock guard would apply every configured
+ * throttler to every route it protects).
  *
  * Two deliberate departures from the stock `ThrottlerGuard`:
  *
@@ -36,7 +42,9 @@ export const MESSAGE_RATE_LIMIT_ERROR_CODE = 'MESSAGE_RATE_LIMIT_EXCEEDED';
  *    which is exactly what happened to the earlier `error:` key (QA B1).
  */
 @Injectable()
-export class MessageSendThrottlerGuard extends ThrottlerGuard {
+export class MessageSendThrottlerGuard extends NamedThrottlerGuard {
+  protected readonly throttlerName = THROTTLER_NAMES.MESSAGE_SEND;
+
   protected getTracker(req: Record<string, unknown>): Promise<string> {
     const user = req.user as { id?: number } | undefined;
     if (user?.id) return Promise.resolve(`user-${user.id}`);

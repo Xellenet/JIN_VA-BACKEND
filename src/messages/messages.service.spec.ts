@@ -407,6 +407,119 @@ describe('MessagesService', () => {
     });
   });
 
+  /**
+   * C1: once a counterparty deletes their account, the relation comes back
+   * `null` (TypeORM appends `AND users.deleted_at IS NULL` to the LEFT join,
+   * and `conversations` is not itself soft-deletable). The thread must keep
+   * working for the party who is still there, with a name it can render —
+   * `requirements.md` edge case: "the anonymized name renders, the thread
+   * doesn't 500". QA's repro for the 500 lives in
+   * `__qa__/deleted-participant-thread.qa.spec.ts`; this covers what the
+   * surviving payload actually says.
+   */
+  describe('a soft-deleted counterparty', () => {
+    /** What the repository hands back once one side is soft-deleted. */
+    const conversationRow = (slot: 'A' | 'B') => ({
+      id: 7,
+      participantA: slot === 'A' ? null : customer,
+      participantB: slot === 'B' ? null : artisan,
+      lastMessageAt: null,
+      createdAt: new Date('2026-09-01T00:00:00.000Z'),
+    });
+
+    const stubConversationPage = (rows: unknown[]) => {
+      const qb: Record<string, unknown> = {
+        getManyAndCount: () => Promise.resolve([rows, rows.length]),
+      };
+      for (const method of [
+        'leftJoinAndSelect',
+        'where',
+        'orderBy',
+        'skip',
+        'take',
+      ]) {
+        qb[method] = () => qb;
+      }
+      conversationsRepo.createQueryBuilder.mockReturnValue(qb);
+    };
+
+    it('names the departed contact "Deleted User" instead of dropping the name keys', async () => {
+      stubConversationPage([conversationRow('A')]);
+
+      const result = await service.getConversations(artisan.id, {});
+
+      // Emitting `undefined` here dropped both keys from the JSON, and the
+      // frontend rendered the row as "undefined undefined" (qa-report FE-7).
+      const [row] = result.data;
+      expect(row.contact.firstname).toBe('Deleted');
+      expect(row.contact.lastname).toBe('User');
+      expect(row.participantA.firstname).toBe('Deleted');
+      expect(row.participantA.lastname).toBe('User');
+      // Same placeholder the purge writes onto the row itself, so the thread
+      // reads identically inside the window and after the purge.
+      expect(`${row.contact.firstname} ${row.contact.lastname}`).toBe(
+        'Deleted User',
+      );
+    });
+
+    it('leaves the surviving participant untouched', async () => {
+      stubConversationPage([conversationRow('B')]);
+
+      const result = await service.getConversations(customer.id, {});
+
+      const [row] = result.data;
+      expect(row.participantA.firstname).toBe('Ama');
+      expect(row.contact.firstname).toBe('Deleted');
+    });
+
+    it('serves the thread to the surviving party in either slot', async () => {
+      for (const slot of ['A', 'B'] as const) {
+        conversationsRepo.findOne.mockResolvedValueOnce(conversationRow(slot));
+        const caller = slot === 'A' ? artisan : customer;
+
+        await expect(
+          service.getMessages(caller.id, 7, {}),
+        ).resolves.toBeDefined();
+      }
+    });
+
+    it('still refuses a stranger when one participant is null', async () => {
+      conversationsRepo.findOne.mockResolvedValueOnce(conversationRow('A'));
+
+      // The null guard must not turn "a participant is missing" into "anyone
+      // may read this thread".
+      await expect(
+        service.getMessages(otherCustomer.id, 7, {}),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('labels each side of an admin dispute view from the dispute, not from the surviving party', async () => {
+      // The customer deleted their account; the artisan is still live.
+      conversationsRepo.findOne.mockResolvedValueOnce({
+        id: 7,
+        participantA: null,
+        participantB: artisan,
+      });
+      messagesRepo.count.mockResolvedValueOnce(1);
+      messagesRepo.find.mockResolvedValueOnce([
+        { id: 1, content: 'first', sender: artisan },
+      ]);
+
+      const result = await service.getConversationBetween(
+        customer.id,
+        artisan.id,
+        { disputeId: 12, bookingId: 34 },
+      );
+
+      // The departed side must not be mistaken for the surviving one.
+      expect(result.data!.customer.firstname).toBe('Deleted');
+      expect(result.data!.customer.role).toBe(Role.CUSTOMER);
+      expect(result.data!.artisan.id).toBe(artisan.id);
+      expect(result.data!.artisan.firstname).toBe('Yaw');
+      expect(result.data!.artisan.role).toBe(Role.ARTISAN);
+    });
+  });
+
   describe('getConversationBetween (AD1)', () => {
     it('returns data: null with a clear message when the two parties never messaged', async () => {
       conversationsRepo.findOne.mockResolvedValueOnce(null);

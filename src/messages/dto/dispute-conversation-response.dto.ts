@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { MessageResponseDto } from './message-response.dto';
 
 /**
@@ -8,8 +8,18 @@ import { MessageResponseDto } from './message-response.dto';
  * own/other framing doesn't apply).
  */
 export class DisputeConversationParticipantDto {
-  @ApiProperty() id!: number;
-  @ApiProperty() firstname!: string;
+  @ApiPropertyOptional({
+    description:
+      'C1: absent when this party has deleted their account. `role` is still ' +
+      "correct — it comes from the dispute's own sides, not from the user row.",
+  })
+  id?: number;
+
+  @ApiProperty({
+    description: 'C1: `"Deleted"` / `"User"` when this party has deleted.',
+  })
+  firstname!: string;
+
   @ApiProperty() lastname!: string;
   @ApiProperty({ nullable: true }) profilePicture!: string | null;
   @ApiProperty({ enum: ['CUSTOMER', 'ARTISAN'] }) role!: string;

@@ -10,6 +10,7 @@ import type { Logger } from 'winston';
 import type { ThrottlerLimitDetail } from '@nestjs/throttler';
 import { AllExceptionsFilter } from './all-exceptions.filter';
 import { MessageSendThrottlerGuard } from '@messages/guards/message-send-throttler.guard';
+import { AccountPendingDeletionException } from '../exceptions/account-pending-deletion.exception';
 import { ErrorResponse } from '../types/api-response.type';
 
 /**
@@ -160,6 +161,76 @@ describe('AllExceptionsFilter', () => {
     });
   });
 
+  /**
+   * C1.4: the pending-deletion login rejection has to hand the client two
+   * real dates, because a client computing "+30 days" itself would drift from
+   * whatever the purge job enforces. `meta.details` is the narrow, opt-in
+   * channel for that — and it must stay narrow.
+   */
+  describe('C1.4: meta.details', () => {
+    it('carries the pending-deletion dates through to the client', () => {
+      const body = render(
+        new AccountPendingDeletionException(
+          new Date('2026-08-24T09:00:00.000Z'),
+          new Date('2026-09-23T09:00:00.000Z'),
+        ),
+      );
+
+      expect(body.meta.statusCode).toBe(HttpStatus.FORBIDDEN);
+      expect(body.meta.error).toBe('ACCOUNT_PENDING_DELETION');
+      expect(body.meta.details).toEqual({
+        deletedAt: '2026-08-24T09:00:00.000Z',
+        restorableUntil: '2026-09-23T09:00:00.000Z',
+      });
+    });
+
+    it('is absent for exceptions that opt into nothing', () => {
+      expect(
+        render(new BadRequestException('nope')).meta.details,
+      ).toBeUndefined();
+    });
+
+    // Still not a passthrough of the exception's response object: only
+    // primitives cross the boundary, so nothing can smuggle an entity, a
+    // nested internal object or a function into the error envelope.
+    it('drops non-primitive values rather than serializing internals', () => {
+      const body = render(
+        new HttpException(
+          {
+            message: 'weird',
+            details: {
+              keptString: 'ok',
+              keptNumber: 7,
+              keptBool: true,
+              droppedObject: { password: 'hunter2' },
+              droppedArray: [1, 2],
+              droppedNaN: Number.NaN,
+              droppedNull: null,
+            },
+          },
+          HttpStatus.BAD_REQUEST,
+        ),
+      );
+
+      expect(body.meta.details).toEqual({
+        keptString: 'ok',
+        keptNumber: 7,
+        keptBool: true,
+      });
+    });
+
+    it('is absent when every supplied value was dropped', () => {
+      const body = render(
+        new HttpException(
+          { message: 'weird', details: { nested: { a: 1 } } },
+          HttpStatus.BAD_REQUEST,
+        ),
+      );
+
+      expect(body.meta.details).toBeUndefined();
+    });
+  });
+
   describe('5xx redaction still holds in production', () => {
     it('leaks neither the message, the code, nor a retry hint', () => {
       process.env.NODE_ENV = 'production';
@@ -176,6 +247,18 @@ describe('AllExceptionsFilter', () => {
       );
       expect(body.meta.error).toBeUndefined();
       expect(body.meta.retryAfterSeconds).toBeUndefined();
+    });
+
+    it('drops meta.details too, so a 5xx cannot leak internals through it', () => {
+      process.env.NODE_ENV = 'production';
+      const body = render(
+        new InternalServerErrorException({
+          message: 'boom',
+          details: { host: '10.0.0.4', port: 5432 },
+        }),
+      );
+
+      expect(body.meta.details).toBeUndefined();
     });
   });
 });

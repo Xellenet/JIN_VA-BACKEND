@@ -88,4 +88,48 @@ export class KycMediaService {
       'That verification file is no longer available.',
     );
   }
+
+  /**
+   * C1.7: permanently removes one stored KYC object, given the reference the
+   * verification row holds (`/uploads/<folder>/<filename>` —
+   * `buildPrivateMediaReference`'s shape, in both storage modes).
+   *
+   * Used by the account purge. Without it, a "permanently deleted" account
+   * still had its national-ID scan and verification selfie on disk or in the
+   * bucket, readable through `GET /uploads/kyc/:folder/:filename`, which is
+   * enough to fully re-identify the person the purge just anonymized.
+   *
+   * **Both stores are always tried**, for the same reason `open()` reads local
+   * disk first regardless of the active provider: a pre-S3-cutover document
+   * physically lives on the app server's disk, so deleting only from the
+   * active provider would leave exactly the objects that have been around the
+   * longest. Each provider's `delete` already treats an absent object as a
+   * no-op, so trying both is safe and idempotent.
+   *
+   * @returns `false` when the reference could not be resolved to a KYC object
+   *   at all (nothing was attempted) — the caller decides whether that is
+   *   worth reporting. Never throws: a purge must not be blocked by storage.
+   */
+  async deleteByReference(reference: string): Promise<boolean> {
+    const segments = reference.split('/').filter(Boolean);
+    const filename = segments.at(-1) ?? '';
+    const folder = segments.at(-2) ?? '';
+
+    if (!isPrivateUploadFolder(folder) || !isSafeMediaFilename(filename)) {
+      this.logger.warn(
+        `Not a recognisable KYC media reference; nothing deleted for it.`,
+      );
+      return false;
+    }
+
+    await this.localProvider.delete(filename, folder);
+
+    const active = this.factory.getProvider();
+    if (active.providerName !== this.localProvider.providerName) {
+      await active.delete(filename, folder);
+    }
+
+    this.logger.log(`Deleted KYC object ${folder}/${filename} from storage`);
+    return true;
+  }
 }

@@ -18,6 +18,11 @@ import { SocialAuthStrategyFactory } from './social-auth.factory';
 import { OAuthStateService } from './oauth-state.service';
 import { Role } from '@common/types/enums';
 import { OAuthCallbackDto } from './dto/oauth-callback.dto';
+import { AccountPendingDeletionException } from '@common/exceptions/account-pending-deletion.exception';
+import { VARIABLES } from '@common/constants/variables.constants';
+import { ERROR_MESSAGES } from '@common/constants/error-messages.constants';
+import { MailEvent } from 'mail/events/mail.events';
+import { addDays, subDays } from 'date-fns';
 
 describe('AuthService', () => {
   let service: AuthService;
@@ -33,11 +38,16 @@ describe('AuthService', () => {
   };
   const mockUsersService = {
     findUserByEmail: jest.fn(),
+    isEmailRegistered: jest.fn(),
     createUser: jest.fn(),
     validatePassword: jest.fn(),
     hasUsablePassword: jest.fn(),
     getPasswordCheckResult: jest.fn(),
     updateUserData: jest.fn(),
+    findSoftDeletedUserByEmail: jest.fn(),
+    getSoftDeletedPasswordCheckResult: jest.fn(),
+    spendPasswordCheckCost: jest.fn(),
+    restoreAccountById: jest.fn(),
   };
   const mockUserTokenService = {
     createToken: jest.fn(),
@@ -85,6 +95,17 @@ describe('AuthService', () => {
       hasPassword: true,
       isValid: true,
     });
+    // C1.4: default to "there is no soft-deleted account for this email", so
+    // tests written before the recovery window don't need to know about it.
+    mockUsersService.findSoftDeletedUserByEmail.mockResolvedValue(null);
+    mockUsersService.getSoftDeletedPasswordCheckResult.mockResolvedValue({
+      hasPassword: false,
+      isValid: false,
+    });
+    // C1.6: registration's existence check spans soft-deleted rows; default to
+    // "address is free".
+    mockUsersService.isEmailRegistered.mockResolvedValue(false);
+    mockUsersService.spendPasswordCheckCost.mockResolvedValue(undefined);
   });
 
   it('should be defined', () => {
@@ -104,7 +125,7 @@ describe('AuthService', () => {
         password: 'pass',
       } as CreateUserDto;
       const loggerSpy = jest.spyOn(service['logger'], 'log');
-      mockUsersService.findUserByEmail.mockResolvedValueOnce(undefined);
+      mockUsersService.isEmailRegistered.mockResolvedValueOnce(false);
       mockUsersService.createUser.mockResolvedValueOnce({ data: mockUser });
       mockUserTokenService.createToken.mockResolvedValueOnce({
         token: 'verification-token',
@@ -130,7 +151,7 @@ describe('AuthService', () => {
       await expect(service.registerUser(dto)).rejects.toThrow(
         BadRequestException,
       );
-      expect(mockUsersService.findUserByEmail).not.toHaveBeenCalled();
+      expect(mockUsersService.isEmailRegistered).not.toHaveBeenCalled();
     });
 
     it('should throw UserAlreadyExists if user already exists', async () => {
@@ -138,12 +159,50 @@ describe('AuthService', () => {
         email: 'test@example.com',
         password: 'pass',
       } as CreateUserDto;
-      mockUsersService.findUserByEmail.mockResolvedValueOnce(mockUser);
+      mockUsersService.isEmailRegistered.mockResolvedValueOnce(true);
 
       await expect(service.registerUser(dto)).rejects.toThrow(
         UserAlreadyExists,
       );
-      expect(mockUsersService.findUserByEmail).toHaveBeenCalledWith(dto.email);
+      expect(mockUsersService.isEmailRegistered).toHaveBeenCalledWith(
+        dto.email,
+      );
+    });
+
+    /**
+     * C1.6: the existence check must span soft-deleted rows, and the rejection
+     * must be the *same* exception a live account produces.
+     *
+     * Before this, registration checked `findUserByEmail` (soft-delete
+     * filtered), so a deleted address skipped this branch entirely and was
+     * rejected downstream by the `users.email` unique constraint — a 409 with
+     * a different message and no `meta.error`. One unauthenticated probe then
+     * classified any address as live / deleted / free. The assertion that
+     * `findUserByEmail` is *not* consulted is the regression guard: swapping
+     * back to it silently reopens the leak.
+     */
+    it('rejects a taken address through one live-or-deleted-blind check, never the soft-delete-filtered lookup', async () => {
+      const dto: CreateUserDto = {
+        email: 'deleted@example.com',
+        password: 'pass',
+      } as CreateUserDto;
+      mockUsersService.isEmailRegistered.mockResolvedValueOnce(true);
+
+      let rejection: unknown;
+      try {
+        await service.registerUser(dto);
+      } catch (err) {
+        rejection = err;
+      }
+
+      // Live and soft-deleted are the same branch now, so they cannot produce
+      // different messages or a different `meta.error`.
+      expect(rejection).toBeInstanceOf(UserAlreadyExists);
+      expect((rejection as UserAlreadyExists).message).toBe(
+        ERROR_MESSAGES.USER.EMAIL_ALREADY_EXISTS(dto.email),
+      );
+      expect(mockUsersService.findUserByEmail).not.toHaveBeenCalled();
+      expect(mockUsersService.createUser).not.toHaveBeenCalled();
     });
 
     it('should create, emit event, and return user if not exists', async () => {
@@ -152,7 +211,7 @@ describe('AuthService', () => {
         password: 'pass',
         role: Role.CUSTOMER,
       } as CreateUserDto;
-      mockUsersService.findUserByEmail.mockResolvedValueOnce(undefined);
+      mockUsersService.isEmailRegistered.mockResolvedValueOnce(false);
       mockUsersService.createUser.mockResolvedValueOnce({ data: mockUser });
       mockUserTokenService.createToken.mockResolvedValueOnce({
         token: 'verification-token',
@@ -160,7 +219,9 @@ describe('AuthService', () => {
 
       const result = await service.registerUser(dto);
 
-      expect(mockUsersService.findUserByEmail).toHaveBeenCalledWith(dto.email);
+      expect(mockUsersService.isEmailRegistered).toHaveBeenCalledWith(
+        dto.email,
+      );
       expect(mockUsersService.createUser).toHaveBeenCalledWith(dto);
       expect(mockEmitter.emit).toHaveBeenCalledWith(
         expect.any(String),
@@ -273,6 +334,309 @@ describe('AuthService', () => {
       // (see UsersService.getPasswordCheckResult's own null-password guard).
       expect(mockUsersService.validatePassword).not.toHaveBeenCalled();
       expect(mockUsersService.hasUsablePassword).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * C1.4: the account-enumeration-critical branch. Every case below that has
+   * not proven ownership must be indistinguishable from every other, and only
+   * a caller with the correct password for a still-restorable account may
+   * learn anything at all.
+   */
+  describe('loginUser — soft-deleted accounts (C1.4)', () => {
+    const dto: LoginDto = { email: 'gone@example.com', password: 'pass' };
+
+    beforeEach(() => {
+      // No *live* account for this address — the only way into this branch.
+      mockUsersService.findUserByEmail.mockResolvedValue(null);
+    });
+
+    it('offers restore, with real dates and no tokens, when the password is correct and the window is open', async () => {
+      const deletedAt = subDays(new Date(), 3);
+      mockUsersService.findSoftDeletedUserByEmail.mockResolvedValueOnce({
+        ...mockUser,
+        deletedAt,
+      });
+      mockUsersService.getSoftDeletedPasswordCheckResult.mockResolvedValueOnce({
+        hasPassword: true,
+        isValid: true,
+      });
+
+      const thrown = await service.loginUser(dto).catch((e: unknown) => e);
+
+      expect(thrown).toBeInstanceOf(AccountPendingDeletionException);
+      expect(mockUserTokenService.createJWTTokens).not.toHaveBeenCalled();
+
+      const body = (
+        thrown as AccountPendingDeletionException
+      ).getResponse() as {
+        errorCode: string;
+        details: { deletedAt: string; restorableUntil: string };
+      };
+      expect(body.errorCode).toBe('ACCOUNT_PENDING_DELETION');
+      expect(body.details.deletedAt).toBe(deletedAt.toISOString());
+      expect(body.details.restorableUntil).toBe(
+        addDays(deletedAt, VARIABLES.SOFT_DELETE_RETENTION_DAYS).toISOString(),
+      );
+    });
+
+    // The ordering requirement: the password is verified before the deletion
+    // state is allowed to affect the response.
+    it('checks the password before revealing anything, and gives the generic error when it is wrong', async () => {
+      mockUsersService.findSoftDeletedUserByEmail.mockResolvedValueOnce({
+        ...mockUser,
+        deletedAt: subDays(new Date(), 3),
+      });
+      mockUsersService.getSoftDeletedPasswordCheckResult.mockResolvedValueOnce({
+        hasPassword: true,
+        isValid: false,
+      });
+
+      await expect(service.loginUser(dto)).rejects.toThrow(
+        InvalidCredentialsException,
+      );
+      expect(
+        mockUsersService.getSoftDeletedPasswordCheckResult,
+      ).toHaveBeenCalledWith(dto.password, mockUser.id);
+    });
+
+    // C1.7: past the window there is no prompt and no hint the account ever
+    // existed — even for a caller who did prove ownership.
+    it('gives the generic error for a correct password past the recovery window', async () => {
+      mockUsersService.findSoftDeletedUserByEmail.mockResolvedValueOnce({
+        ...mockUser,
+        deletedAt: subDays(
+          new Date(),
+          VARIABLES.SOFT_DELETE_RETENTION_DAYS + 1,
+        ),
+      });
+      mockUsersService.getSoftDeletedPasswordCheckResult.mockResolvedValueOnce({
+        hasPassword: true,
+        isValid: true,
+      });
+
+      await expect(service.loginUser(dto)).rejects.toThrow(
+        InvalidCredentialsException,
+      );
+    });
+
+    // A soft-deleted Google-only account must not get the "use Google
+    // instead" hint: that would disclose the account's existence to someone
+    // who has proven nothing.
+    it('gives the generic error — not the social-only hint — for a soft-deleted Google account', async () => {
+      mockUsersService.findSoftDeletedUserByEmail.mockResolvedValueOnce({
+        ...mockUser,
+        password: null,
+        deletedAt: subDays(new Date(), 3),
+      });
+      mockUsersService.getSoftDeletedPasswordCheckResult.mockResolvedValueOnce({
+        hasPassword: false,
+        isValid: false,
+      });
+
+      const thrown = await service.loginUser(dto).catch((e: unknown) => e);
+      expect(thrown).toBeInstanceOf(InvalidCredentialsException);
+      expect(thrown).not.toBeInstanceOf(SocialOnlyAccountException);
+    });
+
+    it('gives the generic error for an address with no account at all', async () => {
+      mockUsersService.findSoftDeletedUserByEmail.mockResolvedValueOnce(null);
+
+      await expect(service.loginUser(dto)).rejects.toThrow(
+        InvalidCredentialsException,
+      );
+      expect(
+        mockUsersService.getSoftDeletedPasswordCheckResult,
+      ).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * C1.4's enumeration requirement is about the *whole* observable response,
+   * and identical bodies were only half of it: the branches that found no row
+   * returned without any bcrypt work while the wrong-password branches paid
+   * for a full comparison, so response time separated "registered" from
+   * "never registered" — and on the restore endpoint, "has a deleted account
+   * still inside its window" from everything else.
+   *
+   * The invariant asserted here is **exactly one** credential check per
+   * attempt, real or throwaway. Two would be as distinguishable as none.
+   */
+  describe('credential checks cost the same on every rejection path (C1.4)', () => {
+    const dto: LoginDto = { email: 'gone@example.com', password: 'pass' };
+
+    const checksPerformed = () =>
+      mockUsersService.getSoftDeletedPasswordCheckResult.mock.calls.length +
+      mockUsersService.getPasswordCheckResult.mock.calls.length +
+      mockUsersService.spendPasswordCheckCost.mock.calls.length;
+
+    it('login: spends one comparison for an address with no account at all', async () => {
+      mockUsersService.findUserByEmail.mockResolvedValueOnce(null);
+      mockUsersService.findSoftDeletedUserByEmail.mockResolvedValueOnce(null);
+
+      await expect(service.loginUser(dto)).rejects.toThrow(
+        InvalidCredentialsException,
+      );
+
+      expect(mockUsersService.spendPasswordCheckCost).toHaveBeenCalledWith(
+        dto.password,
+      );
+      expect(checksPerformed()).toBe(1);
+    });
+
+    it('login: spends one comparison for a wrong password on a soft-deleted account', async () => {
+      mockUsersService.findUserByEmail.mockResolvedValueOnce(null);
+      mockUsersService.findSoftDeletedUserByEmail.mockResolvedValueOnce({
+        ...mockUser,
+        deletedAt: subDays(new Date(), 3),
+      });
+      mockUsersService.getSoftDeletedPasswordCheckResult.mockResolvedValueOnce({
+        hasPassword: true,
+        isValid: false,
+      });
+
+      await expect(service.loginUser(dto)).rejects.toThrow(
+        InvalidCredentialsException,
+      );
+
+      // The real comparison already cost what the throwaway one costs, so
+      // this branch must NOT spend a second.
+      expect(mockUsersService.spendPasswordCheckCost).not.toHaveBeenCalled();
+      expect(checksPerformed()).toBe(1);
+    });
+
+    it('login: spends one comparison for a wrong password on a live account', async () => {
+      mockUsersService.findUserByEmail.mockResolvedValueOnce(mockUser);
+      mockUsersService.getPasswordCheckResult.mockResolvedValueOnce({
+        hasPassword: true,
+        isValid: false,
+      });
+
+      await expect(service.loginUser(dto)).rejects.toThrow(
+        InvalidCredentialsException,
+      );
+
+      expect(checksPerformed()).toBe(1);
+    });
+
+    it('restore-account: spends one comparison when there is nothing restorable', async () => {
+      mockUsersService.findSoftDeletedUserByEmail.mockResolvedValueOnce(null);
+
+      await expect(service.restoreAccount(dto)).rejects.toThrow(
+        InvalidCredentialsException,
+      );
+
+      expect(mockUsersService.spendPasswordCheckCost).toHaveBeenCalledWith(
+        dto.password,
+      );
+      expect(checksPerformed()).toBe(1);
+      expect(mockUsersService.restoreAccountById).not.toHaveBeenCalled();
+    });
+
+    it('restore-account: spends one comparison for a wrong password', async () => {
+      mockUsersService.findSoftDeletedUserByEmail.mockResolvedValueOnce({
+        ...mockUser,
+        deletedAt: subDays(new Date(), 3),
+      });
+      mockUsersService.getSoftDeletedPasswordCheckResult.mockResolvedValueOnce({
+        hasPassword: true,
+        isValid: false,
+      });
+
+      await expect(service.restoreAccount(dto)).rejects.toThrow(
+        InvalidCredentialsException,
+      );
+
+      expect(mockUsersService.spendPasswordCheckCost).not.toHaveBeenCalled();
+      expect(checksPerformed()).toBe(1);
+    });
+  });
+
+  describe('restoreAccount (C1.4)', () => {
+    const dto = { email: 'gone@example.com', password: 'pass' };
+
+    it('restores and signs in a verified account, and emails a confirmation', async () => {
+      mockUsersService.findSoftDeletedUserByEmail.mockResolvedValueOnce({
+        ...mockUser,
+        deletedAt: subDays(new Date(), 3),
+      });
+      mockUsersService.getSoftDeletedPasswordCheckResult.mockResolvedValueOnce({
+        hasPassword: true,
+        isValid: true,
+      });
+      mockUsersService.restoreAccountById.mockResolvedValueOnce({
+        ...mockUser,
+        accountVerified: true,
+      });
+      mockUserTokenService.createJWTTokens.mockResolvedValueOnce({
+        access_token: 'access-token',
+        refresh_token: 'refresh-token',
+        expires_at: new Date(),
+      });
+
+      const { result, refreshToken } = await service.restoreAccount(dto);
+
+      expect(result.restored).toBe(true);
+      expect(result.requiresEmailVerification).toBe(false);
+      expect(result.access_token).toBe('access-token');
+      expect(refreshToken).toBe('refresh-token');
+      expect(mockEmitter.emit).toHaveBeenCalledWith(
+        MailEvent.ACCOUNT_RESTORED,
+        expect.objectContaining({ email: mockUser.email }),
+      );
+    });
+
+    // Restore takes precedence over the verification gate: the account comes
+    // back, but no session is issued until the email is verified.
+    it('restores an unverified account without issuing a session', async () => {
+      mockUsersService.findSoftDeletedUserByEmail.mockResolvedValueOnce({
+        ...mockUser,
+        deletedAt: subDays(new Date(), 3),
+      });
+      mockUsersService.getSoftDeletedPasswordCheckResult.mockResolvedValueOnce({
+        hasPassword: true,
+        isValid: true,
+      });
+      mockUsersService.restoreAccountById.mockResolvedValueOnce({
+        ...mockUser,
+        accountVerified: false,
+      });
+
+      const { result, refreshToken } = await service.restoreAccount(dto);
+
+      expect(result.restored).toBe(true);
+      expect(result.requiresEmailVerification).toBe(true);
+      expect(result.access_token).toBeUndefined();
+      expect(refreshToken).toBeUndefined();
+      expect(mockUserTokenService.createJWTTokens).not.toHaveBeenCalled();
+    });
+
+    it('never restores without a verified password', async () => {
+      mockUsersService.findSoftDeletedUserByEmail.mockResolvedValueOnce({
+        ...mockUser,
+        deletedAt: subDays(new Date(), 3),
+      });
+      mockUsersService.getSoftDeletedPasswordCheckResult.mockResolvedValueOnce({
+        hasPassword: true,
+        isValid: false,
+      });
+
+      await expect(service.restoreAccount(dto)).rejects.toThrow(
+        InvalidCredentialsException,
+      );
+      expect(mockUsersService.restoreAccountById).not.toHaveBeenCalled();
+    });
+
+    it('gives the same generic error when there is no restorable account', async () => {
+      mockUsersService.findSoftDeletedUserByEmail.mockResolvedValueOnce(null);
+
+      await expect(service.restoreAccount(dto)).rejects.toThrow(
+        InvalidCredentialsException,
+      );
+      expect(
+        mockUsersService.getSoftDeletedPasswordCheckResult,
+      ).not.toHaveBeenCalled();
+      expect(mockUsersService.restoreAccountById).not.toHaveBeenCalled();
     });
   });
 
@@ -480,6 +844,150 @@ describe('AuthService', () => {
 
       expect(mockUsersService.createUser).toHaveBeenCalledWith(
         expect.objectContaining({ role: Role.CUSTOMER }),
+      );
+    });
+
+    // C1.4: a Google-only account has no password, so the OAuth completion is
+    // its ownership proof and the callback restores it inline. Without this,
+    // registration would be attempted against an email a soft-deleted row
+    // still holds under a unique constraint, and the owner's sign-in would
+    // fail on a constraint violation instead of returning their account.
+    it('restores a soft-deleted account when its owner completes the Google flow (C1.4)', async () => {
+      mockOAuthStateService.consumeState.mockReturnValueOnce({
+        role: Role.CUSTOMER,
+      });
+      mockStrategy.getAccessToken.mockResolvedValueOnce('provider-token');
+      mockStrategy.getUserProfile.mockResolvedValueOnce({
+        email: 'social-gone@example.com',
+        firstname: 'Ama',
+        lastname: 'Owusu',
+        provider: 'google',
+        providerId: 'google-id-4',
+      });
+      mockUsersService.findUserByEmail.mockResolvedValueOnce(null);
+      mockUsersService.findSoftDeletedUserByEmail.mockResolvedValueOnce({
+        ...mockUser,
+        id: 8,
+        email: 'social-gone@example.com',
+        password: null,
+        deletedAt: subDays(new Date(), 5),
+      });
+      mockUsersService.restoreAccountById.mockResolvedValueOnce({
+        ...mockUser,
+        id: 8,
+        email: 'social-gone@example.com',
+        password: null,
+      });
+
+      const { refreshToken } = await service.handleOAuthCallback('google', {
+        code: 'auth-code',
+        state: 'state-123',
+      } as OAuthCallbackDto);
+
+      expect(mockUsersService.restoreAccountById).toHaveBeenCalledWith(8);
+      // No duplicate account, and the user lands logged in.
+      expect(mockUsersService.createUser).not.toHaveBeenCalled();
+      expect(refreshToken).toBe('refresh-token');
+      expect(mockEmitter.emit).toHaveBeenCalledWith(
+        MailEvent.ACCOUNT_RESTORED,
+        expect.objectContaining({ email: 'social-gone@example.com' }),
+      );
+    });
+  });
+
+  /**
+   * C1.8: "restoration after purge must be impossible by construction, not
+   * merely unexposed."
+   *
+   * There are exactly two entry points into restore — the password endpoint
+   * and the Google callback — and both compose the same two guards:
+   * `findSoftDeletedUserByEmail`, whose predicate excludes purged rows, and
+   * `restoreAccountById`, which refuses one under the row lock. This block
+   * exercises that *composition*, with the lookup modelling the real
+   * predicate over an in-memory row rather than being told what to return, so
+   * it is the closure being asserted and not the mock.
+   *
+   * (The two guards are asserted individually in `users.service.spec.ts`.)
+   */
+  describe('purge is terminal — no code path restores a purged account (C1.8)', () => {
+    const purgedRow = {
+      ...mockUser,
+      id: 99,
+      // What the purge actually leaves behind: the original address is gone,
+      // there is no password hash, and purgedAt is stamped.
+      email: 'deleted-user-99@deleted.invalid',
+      password: null,
+      deletedAt: subDays(new Date(), 60),
+      purgedAt: subDays(new Date(), 30),
+    };
+
+    beforeEach(() => {
+      mockUsersService.findUserByEmail.mockResolvedValue(null);
+      // The real query is `WHERE email = ? AND deleted_at IS NOT NULL AND
+      // purged_at IS NULL`, so it can resolve neither the original address
+      // (overwritten) nor the placeholder (purged).
+      mockUsersService.findSoftDeletedUserByEmail.mockImplementation(
+        (email: string): Promise<null> => {
+          const matches = email === purgedRow.email && !purgedRow.purgedAt;
+          return Promise.resolve(matches ? (purgedRow as never) : null);
+        },
+      );
+    });
+
+    it('cannot be restored through POST /auth/restore-account, by either address', async () => {
+      for (const email of ['gone@example.com', purgedRow.email]) {
+        await expect(
+          service.restoreAccount({ email, password: 'pass' }),
+        ).rejects.toThrow(InvalidCredentialsException);
+      }
+      expect(mockUsersService.restoreAccountById).not.toHaveBeenCalled();
+    });
+
+    // Indistinguishable from an address that was never registered, per C1.7.
+    it('cannot be discovered through login, even with the right password', async () => {
+      await expect(
+        service.loginUser({ email: purgedRow.email, password: 'pass' }),
+      ).rejects.toThrow(InvalidCredentialsException);
+      expect(
+        mockUsersService.getSoftDeletedPasswordCheckResult,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('cannot be restored through the Google callback either', async () => {
+      mockOAuthStateService.consumeState.mockReturnValueOnce({
+        role: Role.CUSTOMER,
+      });
+      mockSocialAuthStrategyFactory.getStrategy.mockReturnValue({
+        getAccessToken: jest.fn().mockResolvedValue('provider-token'),
+        getUserProfile: jest.fn().mockResolvedValue({
+          email: purgedRow.email,
+          firstname: 'Ama',
+          lastname: 'Owusu',
+          provider: 'google',
+          providerId: 'google-id-9',
+        }),
+      });
+      mockUserTokenService.createJWTTokens.mockResolvedValue({
+        access_token: 'access-token',
+        refresh_token: 'refresh-token',
+        expires_at: new Date(),
+      });
+      mockUsersService.createUser.mockResolvedValueOnce({
+        data: { ...mockUser, id: 100 },
+      });
+
+      await service.handleOAuthCallback('google', {
+        code: 'auth-code',
+        state: 'state-123',
+      } as OAuthCallbackDto);
+
+      // The purged row is invisible to the restore lookup, so the callback
+      // treats this as a brand-new signup — it never resurrects the old
+      // account, and never emits a restore confirmation for it.
+      expect(mockUsersService.restoreAccountById).not.toHaveBeenCalled();
+      expect(mockEmitter.emit).not.toHaveBeenCalledWith(
+        MailEvent.ACCOUNT_RESTORED,
+        expect.anything(),
       );
     });
   });

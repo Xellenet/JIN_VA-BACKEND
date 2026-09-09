@@ -7,8 +7,10 @@ import { CustomerProfile } from '@users/entities/customer-profile.entity';
 import { Address } from '@users/entities/address.entity';
 import { ServiceEntity } from '@services/entities/service.entity';
 import { UserTokenService } from '@users/token.service';
+import { AccountCommitmentsService } from '@users/account-commitments.service';
 import { CreateUserDto } from '@users/dto/create-user.dto';
 import { Role } from '@common/types/enums';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 
 /**
  * QA verification (google-oauth-fix, G5): a brand-new Google signup calls
@@ -57,6 +59,10 @@ describe('UsersService.createUser — brand-new Google/social signup (G5)', () =
         { provide: getRepositoryToken(Address), useValue: {} },
         { provide: getRepositoryToken(ServiceEntity), useValue: {} },
         { provide: UserTokenService, useValue: {} },
+        // C1: signup never touches either of these, but they are constructor
+        // dependencies of the real service under test.
+        { provide: AccountCommitmentsService, useValue: {} },
+        { provide: EventEmitter2, useValue: { emit: jest.fn() } },
       ],
     }).compile();
 

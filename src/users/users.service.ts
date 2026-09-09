@@ -10,7 +10,7 @@ import { UpdateMeDto } from './dto/update-me.dto';
 import { UserResponseDto } from './dto/user-response.dto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { User } from './entities/user.entity';
-import { In, Repository } from 'typeorm';
+import { EntityManager, In, IsNull, Not, Repository } from 'typeorm';
 import { UserAlreadyExists } from '@common/exceptions/user-already-exists.exception';
 import { ERROR_MESSAGES } from '@common/constants/error-messages.constants';
 import { SUCCESS_MESSAGES } from '@common/constants/success-messages.constants';
@@ -30,6 +30,47 @@ import { ArtisanProfileResponseDto } from './dto/artisan-profile-response.dto';
 import { CustomerProfileResponseDto } from './dto/customer-profile-response.dto';
 import { ServiceEntity } from '@services/entities/service.entity';
 import { UserTokenService } from './token.service';
+import { computeProfileCompleteness } from '@artisans/artisans.service';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { MailEvent } from 'mail/events/mail.events';
+import type { AccountDeletedPayload } from 'mail/events/mail.events';
+import { AccountCommitmentsService } from './account-commitments.service';
+import { DeleteAccountResponseDto } from './dto/delete-account-response.dto';
+import { AccountNotRestorableException } from '@common/exceptions/account-not-restorable.exception';
+import {
+  isWithinRecoveryWindow,
+  purgeDateFor,
+} from '@common/utils/account-recovery.util';
+import { randomUUID } from 'node:crypto';
+
+/**
+ * A real bcrypt hash, at the application's configured cost factor, of a random
+ * value that is never stored anywhere and can therefore never be submitted.
+ *
+ * It exists so that a credential check with **no hash to compare against**
+ * (no such account, or a social-only account) still costs the same ~half
+ * second as one that does. Without it, `bcrypt.compare` ran only on the
+ * branches where a matching row was found, and the response time alone
+ * separated "this address is registered" (and, on the restore endpoint,
+ * "this address has a deleted account still inside its recovery window") from
+ * "this address is unknown" — a ~60–80x signal that needed one unauthenticated
+ * request per address to read.
+ *
+ * Generated rather than hardcoded so it always tracks `SALT_OR_ROUNDS`;
+ * kicked off eagerly at module load (not awaited — bcrypt's async form runs on
+ * the thread pool) so no request ever pays for producing it, and memoized so
+ * exactly one is ever made per process.
+ *
+ * Matching it is worthless by construction: the comparison's result is
+ * discarded and the caller is told `hasPassword: false, isValid: false`
+ * regardless.
+ */
+let dummyPasswordHash: Promise<string> | null = null;
+function getDummyPasswordHash(): Promise<string> {
+  dummyPasswordHash ??= bcrypt.hash(randomUUID(), VARIABLES.SALT_OR_ROUNDS);
+  return dummyPasswordHash;
+}
+void getDummyPasswordHash();
 
 @Injectable()
 export class UsersService {
@@ -46,6 +87,8 @@ export class UsersService {
     @InjectRepository(ServiceEntity)
     private readonly servicesRepository: Repository<ServiceEntity>,
     private readonly userTokenService: UserTokenService,
+    private readonly accountCommitments: AccountCommitmentsService,
+    private readonly emitter: EventEmitter2,
   ) {}
 
   /**
@@ -183,19 +226,72 @@ export class UsersService {
    * Soft-deletes the authenticated user's account and revokes all active refresh tokens.
    * The record is retained in the database with a non-null `deletedAt` timestamp.
    *
+   * C1.1: refused with a 409 while the account still has live commitments —
+   * a pending/confirmed booking, an open or in-progress job, a payment still
+   * in flight, or an unresolved dispute. A marketplace counterparty must not
+   * be able to be abandoned mid-job, and money in flight must never be
+   * stranded on an account that is going to be purged.
+   *
+   * C1.6: nothing about the account's data is modified, anonymized or
+   * cascaded here beyond the one `deleted_at` stamp. That is precisely what
+   * makes the 30-day restore meaningful — the record set is frozen exactly as
+   * it was, so restoring is a single column going back to `NULL`.
+   *
    * @param userId - The ID of the authenticated user (from `req.user.id`).
-   * @returns `{ message }` confirming the deletion.
+   * @returns `{ message, data }` carrying `deletedAt` and the server-computed
+   *   purge date, so the client never computes the deadline itself.
    * @throws {NotFoundException} When no active user with the given ID exists.
+   * @throws {ConflictException} When the account has live commitments (C1.1).
    */
-  async deleteMe(userId: number): Promise<{ message: string }> {
+  async deleteMe(
+    userId: number,
+  ): Promise<{ message: string; data: DeleteAccountResponseDto }> {
     const user = await this.usersRepository.findOne({ where: { id: userId } });
     if (!user) {
       throw new NotFoundException(`User with ID ${userId} not found`);
     }
+
+    // C1.1: checked before anything is mutated, so a refusal leaves the
+    // account completely untouched (tokens included).
+    await this.accountCommitments.assertDeletable(userId);
+
     await this.userTokenService.revokeRefreshTokenForUser(userId);
     await this.usersRepository.softDelete({ id: userId });
     this.logger.log(`User ${userId} soft-deleted their account`);
-    return { message: SUCCESS_MESSAGES.USER.DELETED };
+
+    // Read back the timestamp Postgres actually wrote rather than assuming
+    // `new Date()`: the purge job compares against this exact value, and the
+    // date we promise the user must be the date it enforces.
+    const deleted = await this.usersRepository.findOne({
+      where: { id: userId },
+      withDeleted: true,
+    });
+    const deletedAt = deleted?.deletedAt ?? new Date();
+    const purgeAt = purgeDateFor(deletedAt);
+
+    // C1.5: unconditional — this email is the security notice for someone
+    // whose account was deleted by another party, so it is not conditional on
+    // any preference. Fire-and-forget: the listener log-and-swallows its own
+    // failures, so a mail outage can never fail the deletion request.
+    this.emitter.emit(MailEvent.ACCOUNT_DELETED, {
+      email: user.email,
+      firstname: user.firstname,
+      deletedAt,
+      purgeAt,
+    } satisfies AccountDeletedPayload);
+
+    return {
+      message: SUCCESS_MESSAGES.USER.DELETED,
+      data: plainToInstance(
+        DeleteAccountResponseDto,
+        {
+          deletedAt,
+          purgeAt,
+          retentionDays: VARIABLES.SOFT_DELETE_RETENTION_DAYS,
+        },
+        { excludeExtraneousValues: true },
+      ),
+    };
   }
 
   /**
@@ -237,12 +333,189 @@ export class UsersService {
     return this.usersRepository.findOne({ where: { id } });
   }
 
+  /**
+   * Resolves a **live** account by email. Soft-deleted rows are excluded by
+   * TypeORM's soft-delete filter, which is load-bearing well beyond login:
+   * `JwtStrategy.validate()` resolves the caller through this method, so a
+   * soft-deleted user's still-unexpired access token already fails closed.
+   *
+   * C1.4 deliberately did **not** widen this. The one place that needs to see
+   * soft-deleted rows uses {@link findSoftDeletedUserByEmail} instead.
+   */
   async findUserByEmail(email: string): Promise<User | null> {
     if (!email) {
       throw new NotFoundException('Email required');
     }
     this.logger.log(`Finding user with email ${email}`);
     return this.usersRepository.findOne({ where: { email } });
+  }
+
+  /**
+   * C1.6: whether the address is already taken by **any** account — live or
+   * soft-deleted. Registration's existence check, and nothing else.
+   *
+   * Deliberately not `findUserByEmail` (which excludes soft-deleted rows):
+   * relying on that made a soft-deleted address fall through the application's
+   * own `UserAlreadyExists` and get rejected by the `users.email` unique
+   * constraint instead, which `TypeOrmFilter` renders with a *different*
+   * message and no `meta.error`. One register probe could therefore classify
+   * any address as live / deleted / free, which C1.6 forbids.
+   *
+   * Returns a boolean, not an entity: the caller must not be able to base
+   * anything but "taken or not" on the answer, and nothing about a
+   * soft-deleted account should be loaded by an unauthenticated request.
+   *
+   * A **purged** row is not a match — its email was overwritten with the
+   * `deleted-user-<id>@deleted.invalid` placeholder, so the original address is
+   * genuinely free again (Open Question 2's resolved behaviour).
+   */
+  async isEmailRegistered(email: string): Promise<boolean> {
+    if (!email) {
+      throw new NotFoundException('Email required');
+    }
+    const existing = await this.usersRepository.findOne({
+      where: { email },
+      withDeleted: true,
+      select: ['id'],
+    });
+    return !!existing;
+  }
+
+  /**
+   * C1.4: resolves a **soft-deleted, not-yet-purged** account by email — the
+   * only lookup in the application that can see past the soft-delete filter.
+   *
+   * Two properties make this safe to add without soft-deleted accounts
+   * becoming authenticable anywhere else:
+   *
+   * 1. It can *only* return a deleted row. `deletedAt: Not(IsNull())` is part
+   *    of the predicate, not just `withDeleted: true`, so it is structurally
+   *    incapable of resolving a live user and can never be mistaken for (or
+   *    quietly substituted into) a general-purpose lookup.
+   * 2. It excludes purged rows (`purgedAt: IsNull()`), so a purged account is
+   *    never found here either — combined with the purge's scrubbed email and
+   *    nulled password, that is what makes it indistinguishable from an
+   *    address that was never registered (C1.7).
+   *
+   * Its two callers — the post-password-check branch of `loginUser()` and
+   * `restoreAccount()` — both verify credentials before acting on the result.
+   * Nothing here authenticates anybody.
+   */
+  async findSoftDeletedUserByEmail(email: string): Promise<User | null> {
+    if (!email) {
+      throw new NotFoundException('Email required');
+    }
+    return this.usersRepository.findOne({
+      where: { email, deletedAt: Not(IsNull()), purgedAt: IsNull() },
+      withDeleted: true,
+    });
+  }
+
+  /**
+   * C1.4: password check for a soft-deleted account, used to prove ownership
+   * before either the pending-deletion login rejection or a restore is
+   * allowed to happen.
+   *
+   * A separate, explicitly-named method rather than a `withDeleted` flag on
+   * {@link getPasswordCheckResult}: like {@link findSoftDeletedUserByEmail},
+   * it constrains itself to `deletedAt IS NOT NULL AND purged_at IS NULL`, so
+   * it cannot be repurposed to authenticate a live or purged account even by
+   * accident. A purged row also has a null password hash, so it would fail
+   * here regardless.
+   */
+  async getSoftDeletedPasswordCheckResult(
+    password: string,
+    userId: number,
+  ): Promise<{ hasPassword: boolean; isValid: boolean }> {
+    const user = await this.usersRepository.findOne({
+      where: { id: userId, deletedAt: Not(IsNull()), purgedAt: IsNull() },
+      withDeleted: true,
+      select: ['password'],
+    });
+    return this.comparePasswordHash(password, user?.password ?? null);
+  }
+
+  /**
+   * C1.4/C1.7: clears `deletedAt` on a soft-deleted account, under a row lock
+   * so that this and a concurrent purge of the same account cannot both
+   * proceed — exactly one wins, cleanly.
+   *
+   * The lock is what makes the day-30/31 race safe in both directions:
+   * - **Restore wins**: `deletedAt` is `NULL` by the time the purge re-reads
+   *   the row inside its own lock, so the purge skips it and takes no
+   *   destructive action.
+   * - **Purge wins**: `purgedAt` is set by the time this re-reads the row, so
+   *   the restore fails with a clear "permanently deleted" 410 — never a 500,
+   *   and never a half-anonymized row that is somehow authenticable again.
+   *
+   * The row is re-read **by ID inside the transaction** rather than trusting
+   * the caller's earlier lookup, which is the whole point: the state that
+   * matters is the state at the moment the lock is held.
+   *
+   * Restoring is a single column going back to `NULL` — no relationship is
+   * touched, because C1.6 guarantees none of them were touched during the
+   * window (profile, services, portfolio, jobs, bookings, reviews,
+   * favourites and payout details are all still attached to this row).
+   *
+   * Idempotent: restoring an already-live account is a no-op that returns the
+   * account.
+   *
+   * @throws {AccountNotRestorableException} When already purged, or past the
+   *   recovery window.
+   * @throws {NotFoundException} When no such row exists at all.
+   */
+  async restoreAccountById(userId: number): Promise<User> {
+    return this.usersRepository.manager.transaction(
+      async (manager: EntityManager) => {
+        const repo = manager.getRepository(User);
+        const locked = await repo.findOne({
+          where: { id: userId },
+          withDeleted: true,
+          lock: { mode: 'pessimistic_write' },
+        });
+
+        if (!locked) {
+          throw new NotFoundException(`User with ID ${userId} not found`);
+        }
+
+        // C1.8: restoration after purge is refused here, in the same lock the
+        // purge itself takes, so there is no window in which it could succeed.
+        if (locked.purgedAt) {
+          this.logger.warn(
+            `Refused restore of purged account ${userId} (purged at ${locked.purgedAt.toISOString()})`,
+          );
+          throw AccountNotRestorableException.permanentlyDeleted();
+        }
+
+        if (!locked.deletedAt) {
+          this.logger.log(
+            `Restore requested for account ${userId} that is already active`,
+          );
+          return locked;
+        }
+
+        if (!isWithinRecoveryWindow(locked.deletedAt)) {
+          this.logger.warn(
+            `Refused restore of account ${userId}: recovery window closed`,
+          );
+          throw AccountNotRestorableException.windowExpired();
+        }
+
+        // `restore()` is TypeORM's purpose-built inverse of `softDelete()`:
+        // it sets `deleted_at` back to NULL and touches nothing else.
+        await repo.restore({ id: userId });
+        this.logger.log(`Restored soft-deleted account ${userId}`);
+
+        const restored = await repo.findOne({ where: { id: userId } });
+        if (!restored) {
+          // Would mean the row vanished between the update and the read while
+          // we hold its write lock — impossible, but never return a stale
+          // still-deleted entity to a caller that is about to issue tokens.
+          throw new NotFoundException(`User with ID ${userId} not found`);
+        }
+        return restored;
+      },
+    );
   }
 
   async validatePassword(password: string, userId: number): Promise<boolean> {
@@ -296,11 +569,50 @@ export class UsersService {
       where: { id: userId },
       select: ['password'],
     });
-    if (!user?.password) {
+    return this.comparePasswordHash(password, user?.password ?? null);
+  }
+
+  /**
+   * Shared bcrypt comparison for every password check in this service, so the
+   * "a null hash is never a match" rule (G5/G10) is stated once instead of
+   * re-implemented per call site.
+   *
+   * A null hash still costs one comparison — against
+   * {@link getDummyPasswordHash}, result discarded — so that a social-only
+   * account and an account with a password are not separable by response time.
+   * The G5/G10 rule that a null hash never reaches `bcrypt.compare` is
+   * preserved: the null is never the argument, the throwaway hash is.
+   */
+  private async comparePasswordHash(
+    password: string,
+    hash: string | null,
+  ): Promise<{ hasPassword: boolean; isValid: boolean }> {
+    if (!hash) {
+      await this.spendPasswordCheckCost(password);
       return { hasPassword: false, isValid: false };
     }
-    const isValid = await bcrypt.compare(password, user.password);
-    return { hasPassword: true, isValid };
+    return { hasPassword: true, isValid: await bcrypt.compare(password, hash) };
+  }
+
+  /**
+   * C1.4: spends exactly one bcrypt comparison and discards the result, so a
+   * rejection path that never found an account costs the same as one that did.
+   *
+   * Call this on **every** credential-checking branch that returns without
+   * comparing a real hash — `AuthService`'s "no live and no soft-deleted
+   * account for this email" branch, and `restoreAccount`'s "nothing
+   * restorable" branch. Both are the enumeration-critical paths: their bodies
+   * are already byte-identical to the wrong-password rejection, and this is
+   * what makes their *timing* identical too.
+   *
+   * Exactly one comparison per attempt is the invariant to preserve — not
+   * "at least one". Two would be as distinguishable as none.
+   */
+  async spendPasswordCheckCost(password: string): Promise<void> {
+    // `bcrypt.compare` throws on an undefined/null data argument; a rejection
+    // path must never turn into a 500 because the body was odd, and an empty
+    // string costs the same to compare as any other.
+    await bcrypt.compare(password ?? '', await getDummyPasswordHash());
   }
 
   async findOne(id: number) {
@@ -330,6 +642,12 @@ export class UsersService {
    * Returns the artisan profile for a given user, including linked services and
    * the user's base data with addresses.
    *
+   * C2.1: the response carries a populated `missingFields` — always present,
+   * `[]` when the profile is complete. It used to be silently absent on this
+   * route (the DTO declared it, only `ArtisansService.toPrivate()` filled it,
+   * and that is unreachable from here), which left the artisan-facing
+   * completeness indicator with nothing to list.
+   *
    * @param userId - The user ID whose artisan profile to retrieve.
    * @returns `{ message, data: ArtisanProfileResponseDto }`.
    * @throws {NotFoundException} When no artisan profile exists for the user.
@@ -357,6 +675,20 @@ export class UsersService {
   /**
    * Applies a partial update to an artisan's profile, optionally replacing the
    * linked services list. Pass `serviceIds: []` to unlink all services.
+   *
+   * C2.2: recomputes and persists `isProfileComplete` on every save through
+   * this route. This is the route both the Profile page and the Settings page
+   * actually save through, and it previously never recomputed the flag — only
+   * the `/artisans/me` routes did. The effect was that an artisan could fill
+   * in every required field, save successfully, and stay flagged incomplete
+   * and invisible in customer search indefinitely, unless they happened to
+   * also add or remove a service afterwards.
+   *
+   * The recompute runs against the **post-merge** profile, not the request
+   * body: the Profile page and the Settings page send different, overlapping
+   * field subsets, so completeness has to be judged on the whole resulting
+   * profile or a partial payload would look incomplete purely because it
+   * didn't mention the other page's fields.
    *
    * @param userId - The user ID whose artisan profile to update.
    * @param updateArtisanProfileDto - Fields to update.
@@ -395,12 +727,23 @@ export class UsersService {
     }
 
     Object.assign(profile, profileUpdates);
+
+    // C2.2: exactly the same logic the `/artisans/me` routes already apply —
+    // imported, not re-implemented, so there is only ever one definition of
+    // "complete" (and therefore of who is searchable).
+    const { isComplete } = computeProfileCompleteness(profile);
+    profile.isProfileComplete = isComplete;
+
     const saved = await this.artisanProfilesRepository.save(profile);
 
     const updated = await this.artisanProfilesRepository.findOne({
       where: { id: saved.id },
       relations: ['user', 'user.addresses', 'services'],
     });
+
+    this.logger.log(
+      `Artisan ${userId} updated their profile (isProfileComplete=${isComplete})`,
+    );
 
     return {
       message: SUCCESS_MESSAGES.ARTISAN_PROFILE.UPDATED,
@@ -566,12 +909,45 @@ export class UsersService {
     return { message: SUCCESS_MESSAGES.USER.ADDRESS_REMOVED };
   }
 
+  /**
+   * C2.1: `missingFields` is not a persisted column — only the derived
+   * `isProfileComplete` boolean is — so it has to be computed fresh and
+   * stitched onto the transformed DTO, exactly as
+   * `ArtisansService.toPrivate()` does for the `/artisans/me` routes. Without
+   * this, the field the DTO (and therefore Swagger) promises was simply absent
+   * from both `/users/me/artisan-profile` responses, and the frontend had no
+   * way to distinguish "complete" from "the field wasn't serialized".
+   *
+   * The caller **must** have loaded the `services` relation: completeness
+   * counts offered services, and an unloaded relation would report `services`
+   * as missing on a profile that has some.
+   */
   private toArtisanProfileResponse(
     profile: ArtisanProfile,
   ): ArtisanProfileResponseDto {
-    return plainToInstance(ArtisanProfileResponseDto, profile, {
+    const dto = plainToInstance(ArtisanProfileResponseDto, profile, {
       excludeExtraneousValues: true,
     });
+
+    const { isComplete, missingFields } = computeProfileCompleteness(profile);
+    dto.missingFields = missingFields;
+
+    // `isProfileComplete` stays sourced from the persisted column, because
+    // that column — not this computation — is what the search hard-filter
+    // reads. If the two ever disagree, the artisan's real search visibility is
+    // the persisted value, so reporting anything else would be a lie in one
+    // direction or the other. A disagreement means some write path skipped the
+    // recompute (the C2.2 bug's signature), so say so loudly rather than
+    // papering over it on a read.
+    if (dto.isProfileComplete !== isComplete) {
+      this.logger.warn(
+        `Artisan profile ${profile.id} has a stale isProfileComplete flag ` +
+          `(persisted=${dto.isProfileComplete}, computed=${isComplete}); ` +
+          `missing=[${missingFields.join(', ')}]`,
+      );
+    }
+
+    return dto;
   }
 
   private toCustomerProfileResponse(

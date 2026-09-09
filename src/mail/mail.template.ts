@@ -50,6 +50,10 @@ export class MailTemplateService {
         return 'Your Password Has Been Reset';
       case 'user.password-changed':
         return 'Your Password Has Been Changed';
+      case 'user.account-deleted':
+        return 'Your JinVa Account Has Been Deleted';
+      case 'user.account-restored':
+        return 'Your JinVa Account Has Been Restored';
       case 'artisan.profile.verified':
         return 'Your Identity Has Been Verified';
       case 'artisan.verification.rejected':

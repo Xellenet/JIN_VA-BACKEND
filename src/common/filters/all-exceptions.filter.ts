@@ -26,6 +26,37 @@ interface StructuredErrorResponse {
   errorCode?: string;
   /** Seconds until the caller may retry. Surfaced as `meta.retryAfterSeconds`. */
   retryAfterSeconds?: number;
+  /**
+   * C1.4: a small bag of primitive, machine-readable facts the client needs in
+   * order to *act* on the error rather than merely display it — currently only
+   * the pending-deletion login rejection's `deletedAt`/`restorableUntil`,
+   * which the login form prints as real dates instead of computing "+30 days"
+   * itself.
+   *
+   * Still opt-in and still not a passthrough of the exception's response
+   * object: only primitive values survive, and only under `meta.details`.
+   * Anything an exception puts here is, by definition, something it has
+   * decided is safe to hand the client — never load internals into it.
+   */
+  details?: Record<string, unknown>;
+}
+
+/** Only primitives cross the boundary — no nested objects, no functions. */
+function sanitizeDetails(
+  details: Record<string, unknown> | undefined,
+): Record<string, string | number | boolean> | undefined {
+  if (typeof details !== 'object' || details === null) return undefined;
+  const safe: Record<string, string | number | boolean> = {};
+  for (const [key, value] of Object.entries(details)) {
+    if (
+      typeof value === 'string' ||
+      typeof value === 'boolean' ||
+      (typeof value === 'number' && Number.isFinite(value))
+    ) {
+      safe[key] = value;
+    }
+  }
+  return Object.keys(safe).length > 0 ? safe : undefined;
 }
 
 @Catch()
@@ -48,6 +79,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
     let errorName: string;
     let errorCode: string | undefined;
     let retryAfterSeconds: number | undefined;
+    let details: Record<string, string | number | boolean> | undefined;
 
     if (exception instanceof HttpException) {
       const rawResponse: unknown = exception.getResponse();
@@ -68,6 +100,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       ) {
         retryAfterSeconds = structured.retryAfterSeconds;
       }
+      details = sanitizeDetails(structured.details);
     } else if (exception instanceof Error) {
       message = exception.message;
       errorName = exception.name;
@@ -88,12 +121,14 @@ export class AllExceptionsFilter implements ExceptionFilter {
     let safeMessage: string | string[];
     let safeError: string | undefined;
     let safeRetryAfterSeconds: number | undefined;
+    let safeDetails: Record<string, string | number | boolean> | undefined;
     const isClientError = status >= 400 && status < 500;
 
     if (isClientError) {
       safeMessage = message;
       safeError = errorCode ?? errorName;
       safeRetryAfterSeconds = retryAfterSeconds;
+      safeDetails = details;
     } else {
       // 5xx: never hand the client internals in production, including the code.
       safeMessage = isProduction
@@ -101,6 +136,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
         : message;
       safeError = isProduction ? undefined : (errorCode ?? errorName);
       safeRetryAfterSeconds = isProduction ? undefined : retryAfterSeconds;
+      safeDetails = isProduction ? undefined : details;
     }
 
     const errorResponse: ErrorResponse = {
@@ -114,6 +150,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
         ...(safeRetryAfterSeconds !== undefined
           ? { retryAfterSeconds: safeRetryAfterSeconds }
           : {}),
+        ...(safeDetails ? { details: safeDetails } : {}),
       },
     };
 

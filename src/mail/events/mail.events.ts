@@ -7,6 +7,16 @@ export const MailEvent = {
   PASSWORD_RESET_SUCCESS: 'user.password-reset-success',
   PASSWORD_CHANGED: 'user.password-changed',
   SOCIAL_USER_REGISTERED: 'user.social-registered',
+  /**
+   * C1.5: sent unconditionally on every successful account deletion. This is
+   * the security notice for someone whose account was deleted by another
+   * party, so it is never suppressed by a notification preference and never
+   * carries a restore token — it links to `/login`, where restoring requires
+   * the account's own credentials.
+   */
+  ACCOUNT_DELETED: 'user.account-deleted',
+  /** C1.4: sent when a soft-deleted account is restored inside its window. */
+  ACCOUNT_RESTORED: 'user.account-restored',
 } as const;
 
 export interface UserRegisteredPayload {
@@ -48,6 +58,24 @@ export interface SocialUserRegisteredPayload {
   provider: string;
 }
 
+export interface AccountDeletedPayload {
+  email: string;
+  firstname: string;
+  /** When the account was soft-deleted. */
+  deletedAt: Date;
+  /**
+   * C1.5: the exact instant the account is permanently purged
+   * (`deletedAt` + `SOFT_DELETE_RETENTION_DAYS`). The listener formats this as
+   * a calendar date — the email must state a real date, not "30 days".
+   */
+  purgeAt: Date;
+}
+
+export interface AccountRestoredPayload {
+  email: string;
+  firstname: string;
+}
+
 export type MailEventPayloads = {
   [MailEvent.USER_REGISTERED]: UserRegisteredPayload;
   [MailEvent.ORDER_PLACED]: OrderPlacedPayload;
@@ -56,4 +84,6 @@ export type MailEventPayloads = {
   [MailEvent.PASSWORD_RESET_SUCCESS]: PasswordResetSuccessPayload;
   [MailEvent.PASSWORD_CHANGED]: PasswordChangedPayload;
   [MailEvent.SOCIAL_USER_REGISTERED]: SocialUserRegisteredPayload;
+  [MailEvent.ACCOUNT_DELETED]: AccountDeletedPayload;
+  [MailEvent.ACCOUNT_RESTORED]: AccountRestoredPayload;
 };

@@ -21,6 +21,7 @@ import { Job } from '@jobs/entities/job.entity';
 import { Booking } from '../bookings/entities/booking.entity';
 import { Role } from '@common/types/enums';
 import { SUCCESS_MESSAGES } from '@common/constants/success-messages.constants';
+import { VARIABLES } from '@common/constants/variables.constants';
 import { APP_EVENTS } from '@common/events/app.events';
 import type { MessageReceivedPayload } from '@common/events/app.events';
 
@@ -269,13 +270,7 @@ export class MessagesService {
 
       return {
         id: conv.id,
-        contact: {
-          id: contact?.id,
-          firstname: contact?.firstname,
-          lastname: contact?.lastname,
-          profilePicture: contact?.profilePicture ?? null,
-          role: contact?.role,
-        },
+        contact: this.toContact(contact),
         lastMessage: last
           ? {
               id: last.id,
@@ -423,14 +418,21 @@ export class MessagesService {
     });
     const messages = recent.reverse();
 
-    const customer =
-      conversation.participantA.id === customerUserId
+    // C1: same null-relation case as `assertParticipant` — a dispute can
+    // outlive one of its parties' accounts, and the admin view must still
+    // render (with the placeholder name `toDisplayIdentity` supplies) rather
+    // than 500 while a dispute is being resolved. Each side is matched against
+    // its own id rather than one slot being inferred from the other, so a null
+    // participant resolves to null and is labelled from the dispute's role
+    // instead of being mistaken for the surviving party.
+    const sideOf = (userId: number): User | null =>
+      conversation.participantA?.id === userId
         ? conversation.participantA
-        : conversation.participantB;
-    const artisan =
-      conversation.participantA.id === artisanUserId
-        ? conversation.participantA
-        : conversation.participantB;
+        : conversation.participantB?.id === userId
+          ? conversation.participantB
+          : null;
+    const customer = sideOf(customerUserId);
+    const artisan = sideOf(artisanUserId);
 
     return {
       message: 'Dispute conversation retrieved.',
@@ -580,24 +582,58 @@ export class MessagesService {
     return new Map(rows.map((r) => [Number(r.conversationId), r]));
   }
 
-  private toParticipant(user?: User) {
+  /**
+   * C1/C1.7: the display identity of one side of a conversation, safe for a
+   * participant whose account has since been deleted.
+   *
+   * `Conversation.participantA`/`participantB` are `ManyToOne(() => User)` and
+   * `conversations` is not itself soft-deletable, so TypeORM appends
+   * `AND users.deleted_at IS NULL` to the relation's LEFT join and the
+   * conversation row still loads with that side `null` — during the 30-day
+   * window *and* after the purge, which deliberately leaves `deletedAt` set.
+   *
+   * The names fall back to the same "Deleted User" the purge writes onto the
+   * row itself (`VARIABLES.PURGED_FIRSTNAME`/`PURGED_LASTNAME`), so a thread
+   * reads identically whether the counterparty is inside the window or purged.
+   * Emitting them as `undefined` dropped both keys from the JSON entirely,
+   * which is why the frontend rendered a departed counterparty as
+   * "undefined undefined" — a placeholder belongs here rather than being
+   * invented per call site. `id` and `role` stay absent: there is no user to
+   * link to or badge.
+   */
+  private toDisplayIdentity(user?: User | null) {
     return {
       id: user?.id,
-      firstname: user?.firstname,
-      lastname: user?.lastname,
+      firstname: user?.firstname ?? VARIABLES.PURGED_FIRSTNAME,
+      lastname: user?.lastname ?? VARIABLES.PURGED_LASTNAME,
       profilePicture: user?.profilePicture ?? null,
-    } as ConversationResponseDto['participantA'];
+    };
+  }
+
+  private toParticipant(user?: User | null) {
+    return this.toDisplayIdentity(
+      user,
+    ) as ConversationResponseDto['participantA'];
+  }
+
+  /** MB3: the other participant, resolved from the caller's point of view. */
+  private toContact(user?: User | null) {
+    return {
+      ...this.toDisplayIdentity(user),
+      role: user?.role,
+    } as ConversationResponseDto['contact'];
   }
 
   /** AD1: labels a participant by role so the admin view can tag each bubble. */
-  private toLabelledParticipant(user: User, fallbackRole: Role) {
+  private toLabelledParticipant(
+    user: User | null | undefined,
+    fallbackRole: Role,
+  ) {
     return {
-      id: user.id,
-      firstname: user.firstname,
-      lastname: user.lastname,
-      profilePicture: user.profilePicture ?? null,
-      role: user.role ?? fallbackRole,
-    };
+      ...this.toDisplayIdentity(user),
+      // The dispute knows which side this is even when the account is gone.
+      role: user?.role ?? fallbackRole,
+    } as DisputeConversationResponseDto['customer'];
   }
 
   private async loadConversationOrFail(
@@ -611,10 +647,25 @@ export class MessagesService {
     return conversation;
   }
 
+  /**
+   * C1: optional chaining because either participant relation comes back
+   * `null` once that account is soft-deleted or purged — see
+   * {@link toDisplayIdentity}.
+   *
+   * Unguarded, `conversation.participantA.id` threw a `TypeError` before the
+   * `||` could short-circuit, which `AllExceptionsFilter` turned into a **500
+   * on the still-live party's own thread** — `GET /messages/:id` and
+   * `PATCH /messages/:id/read` both. It broke only the half of affected threads
+   * where the departed counterparty happened to occupy the `participantA` slot,
+   * so from the user's side it looked random.
+   *
+   * Still fails closed: a null participant matches no caller id, so a genuine
+   * non-participant keeps getting the 403.
+   */
   private assertParticipant(conversation: Conversation, userId: number): void {
     const isParticipant =
-      conversation.participantA.id === userId ||
-      conversation.participantB.id === userId;
+      conversation.participantA?.id === userId ||
+      conversation.participantB?.id === userId;
     if (!isParticipant) {
       throw new ForbiddenException(
         'You are not a participant in this conversation.',

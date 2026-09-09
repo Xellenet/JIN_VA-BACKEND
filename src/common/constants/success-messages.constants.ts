@@ -106,7 +106,15 @@ export const SUCCESS_MESSAGES = {
     PASSWORD_CHANGED: 'Password changed successfully',
     VERIFICATION_EMAIL_RESENT:
       'If an account with that email exists and is not yet verified, a new verification link has been sent.',
-    ACCOUNT_RESTORED: 'Account restored successfully. You can now log in.',
+    /** C1.4: restore succeeded and the caller is signed in. */
+    ACCOUNT_RESTORED: 'Your account has been restored.',
+    /**
+     * C1.4: restore succeeded, but the account had not verified its email
+     * before deletion, so no session was issued — restore takes precedence
+     * over the verification gate, and then the gate applies as normal.
+     */
+    ACCOUNT_RESTORED_VERIFY_EMAIL:
+      'Your account has been restored. Verify your email address to sign in.',
     LOGGED_OUT: 'User logged out successfully',
   },
 };

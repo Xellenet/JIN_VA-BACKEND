@@ -30,6 +30,8 @@ const FILENAME = '11fc2f6a-517a-4354-bb3e-1a023cdd2940.jpg';
 describe('KycMediaService', () => {
   let localRead: jest.Mock;
   let activeRead: jest.Mock;
+  let localDelete: jest.Mock;
+  let activeDelete: jest.Mock;
   let activeProviderName: string;
   let service: KycMediaService;
 
@@ -37,17 +39,21 @@ describe('KycMediaService', () => {
     jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
     localRead = jest.fn().mockResolvedValue(null);
     activeRead = jest.fn().mockResolvedValue(null);
+    localDelete = jest.fn().mockResolvedValue(undefined);
+    activeDelete = jest.fn().mockResolvedValue(undefined);
     activeProviderName = 'local';
 
     const local = {
       providerName: 'local',
       readPrivate: localRead,
+      delete: localDelete,
     } as unknown as LocalStorageProvider;
     const factory = {
       getProvider: (): IStorageProvider =>
         ({
           providerName: activeProviderName,
           readPrivate: activeRead,
+          delete: activeDelete,
         }) as unknown as IStorageProvider,
     } as unknown as StorageProviderFactory;
 
@@ -141,6 +147,58 @@ describe('KycMediaService', () => {
       expect(message).not.toContain('documents');
       expect(message).not.toContain(FILENAME);
       expect(message).not.toContain('s3');
+    });
+  });
+
+  /**
+   * C1.7: the account purge's storage half. Nulling the URL columns is not
+   * enough — the objects themselves have to go, or a purged ex-artisan's
+   * national-ID scan and selfie stay readable through
+   * `GET /uploads/kyc/:folder/:filename`, which knows nothing about purges.
+   */
+  describe('deleteByReference (C1.7)', () => {
+    const REFERENCE = `/uploads/documents/${FILENAME}`;
+
+    it('deletes from local disk and from the active provider, so a pre-cutover object is not left behind', async () => {
+      activeProviderName = 's3';
+
+      await expect(service.deleteByReference(REFERENCE)).resolves.toBe(true);
+
+      expect(localDelete).toHaveBeenCalledWith(FILENAME, 'documents');
+      expect(activeDelete).toHaveBeenCalledWith(FILENAME, 'documents');
+    });
+
+    it('does not delete twice when local disk IS the active provider', async () => {
+      activeProviderName = 'local';
+
+      await service.deleteByReference(REFERENCE);
+
+      expect(localDelete).toHaveBeenCalledTimes(1);
+      expect(activeDelete).not.toHaveBeenCalled();
+    });
+
+    it('resolves the selfies folder too', async () => {
+      await expect(
+        service.deleteByReference(`/uploads/selfies/${FILENAME}`),
+      ).resolves.toBe(true);
+      expect(localDelete).toHaveBeenCalledWith(FILENAME, 'selfies');
+    });
+
+    it('reports false and touches no store for a reference it cannot resolve', async () => {
+      jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+
+      for (const reference of [
+        '',
+        '/uploads/documents/',
+        `/uploads/avatars/${FILENAME}`, // a public folder is not KYC media
+        `/uploads/documents/../../.env`,
+        'https://cdn.example.com/somewhere-else.jpg',
+      ]) {
+        await expect(service.deleteByReference(reference)).resolves.toBe(false);
+      }
+
+      expect(localDelete).not.toHaveBeenCalled();
+      expect(activeDelete).not.toHaveBeenCalled();
     });
   });
 

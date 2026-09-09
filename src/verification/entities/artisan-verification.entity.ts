@@ -40,14 +40,21 @@ export class ArtisanVerification {
   @Column({ name: 'date_of_birth', type: 'date', nullable: true })
   dateOfBirth?: string;
 
-  @Column({ name: 'document_front_url', type: 'text' })
-  documentFrontUrl!: string;
+  /**
+   * C1.7: nullable so the account purge can clear it after deleting the
+   * stored object. Always set on submission — `SubmitVerificationDto` requires
+   * it — so a null here means "this artisan's account was purged", never "the
+   * submission was incomplete".
+   */
+  @Column({ name: 'document_front_url', type: 'text', nullable: true })
+  documentFrontUrl?: string;
 
   @Column({ name: 'document_back_url', type: 'text', nullable: true })
   documentBackUrl?: string;
 
-  @Column({ name: 'selfie_url', type: 'text' })
-  selfieUrl!: string;
+  /** C1.7: nullable for the same reason as {@link documentFrontUrl}. */
+  @Column({ name: 'selfie_url', type: 'text', nullable: true })
+  selfieUrl?: string;
 
   @Column({ name: 'additional_notes', type: 'text', nullable: true })
   additionalNotes?: string;

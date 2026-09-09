@@ -9,6 +9,7 @@ import { setupSwagger } from './config/swagger.config';
 import { Logger, ValidationPipe } from '@nestjs/common';
 import cookieParser from 'cookie-parser';
 import { applyLegacyMediaServing } from './uploads/legacy-media.config';
+import { resolveTrustProxyHops } from './config/trust-proxy.config';
 import type { Logger as WinstonLogger } from 'winston';
 
 async function bootstrap() {
@@ -19,6 +20,30 @@ async function bootstrap() {
   const logger = app.get<WinstonLogger>(WINSTON_MODULE_NEST_PROVIDER);
 
   app.useLogger(logger);
+
+  /**
+   * The auth rate limits key on the client IP, so `req.ip` has to actually *be*
+   * the client. `resolveTrustProxyHops` owns that decision — including
+   * refusing to boot a production deployment that never said whether it sits
+   * behind a proxy, because "unset" used to mean "trust nothing" *and* be the
+   * default, which is the one setting that silently collapses every per-IP
+   * limit into a single platform-wide bucket. Read the header comment in
+   * `src/config/trust-proxy.config.ts` for the full reasoning.
+   *
+   * The setting is always logged, in every configuration, so the effective
+   * value is visible in the boot log rather than inferred from its absence.
+   */
+  const trustProxy = resolveTrustProxyHops();
+  const bootLogger = new Logger('Bootstrap');
+  if (trustProxy.hops > 0) {
+    app.set('trust proxy', trustProxy.hops);
+  }
+  if (trustProxy.warn) {
+    bootLogger.warn(trustProxy.description);
+  } else {
+    bootLogger.log(trustProxy.description);
+  }
+
   app.useGlobalFilters(new AllExceptionsFilter(logger), new TypeOrmFilter());
   app.enableCors({
     origin: process.env.ALLOWED_ORIGINS?.split(','),

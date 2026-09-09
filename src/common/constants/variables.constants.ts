@@ -10,7 +10,33 @@ export const VARIABLES = {
   ACCESS_TOKEN_EXPIRES_IN_MINUTES: 15,
   REFRESH_TOKEN_EXPIRES_IN_DAYS: 7,
   RESEND_VERIFICATION_COOLDOWN_SECONDS: 60,
+  /**
+   * C1: the account-recovery window. A soft-deleted account is restorable by
+   * its owner for this many days after `deletedAt`; the purge job targets
+   * accounts whose `deletedAt` is **strictly** more than this many days ago,
+   * so an account at exactly day 30 is still recoverable (the boundary
+   * deliberately favours the user).
+   */
   SOFT_DELETE_RETENTION_DAYS: 30,
+  /**
+   * C1.7: `ACCOUNT_PURGE_MODE` must equal this exact string for the daily
+   * purge job to take destructive action. Anything else — including unset,
+   * which is the default in every environment — keeps the job in log-only
+   * mode: it reports the candidates it *would* purge and changes nothing.
+   */
+  ACCOUNT_PURGE_MODE_DESTRUCTIVE: 'destructive',
+  /**
+   * C1.7: domain used for the irreversible email placeholder written over a
+   * purged account's address (`deleted-user-<id>@<domain>`). `.invalid` is
+   * reserved by RFC 2606 and can never be a deliverable address. The
+   * placeholder is derived from the user ID only — it carries no trace of the
+   * original address, so it is not reversible, and it stays unique and stable
+   * across reruns (which is what makes the purge idempotent).
+   */
+  PURGED_EMAIL_DOMAIN: 'deleted.invalid',
+  /** C1.7: fixed replacement name on a purged row — renders as "Deleted User". */
+  PURGED_FIRSTNAME: 'Deleted',
+  PURGED_LASTNAME: 'User',
 
   /** COOKIE CONSTANTS */
   REFRESH_TOKEN_COOKIE_NAME: 'refresh_token',

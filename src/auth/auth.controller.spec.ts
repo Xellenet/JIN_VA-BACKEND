@@ -6,6 +6,10 @@ import { UserResponseDto } from '@users/dto/user-response.dto';
 import { LoginDto } from './dto/login.dto';
 import { LoginResponseDto } from './dto/login-response.dto';
 import { Role } from '@common/types/enums';
+import {
+  AuthCredentialsThrottlerGuard,
+  AuthEmailThrottlerGuard,
+} from './guards/auth-throttler.guard';
 
 describe('AuthController', () => {
   let controller: AuthController;
@@ -41,11 +45,28 @@ describe('AuthController', () => {
     process.env.FRONTEND_URL = ORIGINAL_FRONTEND_URL;
   });
 
+  /**
+   * These specs call the handlers directly, so guards never run — but the
+   * throttler guards attached to most of these routes are real providers with
+   * real dependencies (`THROTTLER:MODULE_OPTIONS`, supplied by
+   * `ThrottlingModule` in the running app), and Nest instantiates a
+   * controller's guards while compiling the module. Stubbing them keeps this a
+   * controller unit test instead of dragging the throttler configuration in;
+   * the limits themselves are covered by `guards/auth-throttler.guard.spec.ts`
+   * and `test/auth-rate-limit.e2e-spec.ts`.
+   */
+  const allowAll = { canActivate: () => true };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [AuthController],
       providers: [{ provide: AuthService, useValue: mockAuthService }],
-    }).compile();
+    })
+      .overrideGuard(AuthCredentialsThrottlerGuard)
+      .useValue(allowAll)
+      .overrideGuard(AuthEmailThrottlerGuard)
+      .useValue(allowAll)
+      .compile();
 
     controller = module.get<AuthController>(AuthController);
     authService = module.get<AuthService>(AuthService);
