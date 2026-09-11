@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { QueryFailedError } from 'typeorm';
 import {
   BadRequestException,
   ForbiddenException,
@@ -71,6 +72,21 @@ describe('DisputesService', () => {
       },
       raisedBy: customerUser,
     }) as unknown as Dispute;
+
+  /** A Postgres unique violation as TypeORM surfaces it. */
+  const uniqueViolation = (constraint: string) => {
+    const driverError = Object.assign(new Error('duplicate key value'), {
+      code: '23505',
+      constraint,
+    });
+    return Object.assign(
+      new QueryFailedError('UPDATE disputes SET ...', [], driverError),
+      { code: '23505', constraint },
+    );
+  };
+
+  /** The specific index that makes a payment claimable by one dispute (B3). */
+  const moneyClaimConflict = () => uniqueViolation('uq_disputes_money_payment');
 
   const heldPayment = (over: Partial<Payment> = {}) =>
     ({
@@ -580,6 +596,116 @@ describe('DisputesService', () => {
         moneyAmount: null,
         moneyPaymentId: null,
       });
+    });
+
+    /**
+     * B3. The sibling guard reads `moneyAction`, which used to be written
+     * only *after* the provider call, so two disputes on one payment could
+     * both pass it and both move money. The claim now writes
+     * `moneyAction`/`moneyPaymentId` up front, which puts
+     * `uq_disputes_money_payment` in front of the provider call instead of
+     * behind it.
+     */
+    it('B3: claims the payment in the same UPDATE as the verdict, before the provider call', async () => {
+      withHeldPayment();
+
+      await service.resolve(admin, 5, {
+        outcome: DisputeOutcome.REFUND_CLIENT,
+        resolution: 'Client is entitled to their money back.',
+      });
+
+      const setCalls = updateQb.set.mock.calls as [Record<string, unknown>][];
+      expect(setCalls[0][0]).toEqual(
+        expect.objectContaining({
+          status: DisputeStatus.RESOLVED,
+          moneyAction: DisputeMoneyAction.REFUND,
+          moneyPaymentId: 300,
+          // The amount is only ever written from a completed movement.
+          moneyAmount: null,
+        }),
+      );
+      // The claim really did precede the provider call.
+      expect(updateQb.execute.mock.invocationCallOrder[0]).toBeLessThan(
+        paymentsService.adminRefund.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('B3: a verdict that moves no money releases the payment claim instead of holding it', async () => {
+      disputeRepo.findOne.mockResolvedValueOnce(
+        disputeRaisedByCustomer(DisputeStatus.UNDER_REVIEW),
+      );
+
+      await service.resolve(admin, 5, {
+        outcome: DisputeOutcome.MUTUAL,
+        resolution: 'Both parties settled this between themselves.',
+      });
+
+      const setCalls = updateQb.set.mock.calls as [Record<string, unknown>][];
+      expect(setCalls[0][0]).toEqual(
+        expect.objectContaining({ moneyAction: null, moneyPaymentId: null }),
+      );
+    });
+
+    it('B3: a sibling claiming the payment first degrades to NONE instead of a 500', async () => {
+      withHeldPayment();
+      // The claim loses the race on `uq_disputes_money_payment`: another
+      // dispute on this booking took the payment between our plan and our
+      // write. Postgres raises this *before* any money can move.
+      updateQb.execute.mockRejectedValueOnce(moneyClaimConflict());
+
+      const result = await service.resolve(admin, 5, {
+        outcome: DisputeOutcome.REFUND_CLIENT,
+        resolution: 'Ruling for the client on the evidence provided.',
+      });
+
+      // No second movement, no unhandled failure — the same answer the serial
+      // sibling guard gives.
+      expect(paymentsService.adminRefund).not.toHaveBeenCalled();
+      expect(result.data.moneyAction).toBe(DisputeMoneyAction.NONE);
+      expect(result.data.moneySkippedReason).toMatch(
+        /claimed the money action on this payment first/i,
+      );
+      // And the verdict itself is still recorded: the retry writes NONE.
+      const setCalls = updateQb.set.mock.calls as [Record<string, unknown>][];
+      expect(setCalls[1][0]).toEqual(
+        expect.objectContaining({
+          status: DisputeStatus.RESOLVED,
+          outcome: DisputeOutcome.REFUND_CLIENT,
+          moneyAction: null,
+          moneyPaymentId: null,
+        }),
+      );
+    });
+
+    it('B3: any other unique violation still propagates rather than being read as a sibling claim', async () => {
+      withHeldPayment();
+      updateQb.execute.mockRejectedValueOnce(
+        uniqueViolation('some_other_unique_index'),
+      );
+
+      await expect(
+        service.resolve(admin, 5, {
+          outcome: DisputeOutcome.REFUND_CLIENT,
+          resolution: 'Ruling for the client on the evidence provided.',
+        }),
+      ).rejects.toThrow(QueryFailedError);
+      expect(paymentsService.adminRefund).not.toHaveBeenCalled();
+    });
+
+    it('B3: a failure recording the money result never becomes a 500 after money moved', async () => {
+      withHeldPayment();
+      // Claim succeeds, refund succeeds, the final "what moved" write fails.
+      updateQb.execute
+        .mockResolvedValueOnce({ affected: 1 })
+        .mockRejectedValueOnce(new Error('connection terminated unexpectedly'));
+
+      const result = await service.resolve(admin, 5, {
+        outcome: DisputeOutcome.REFUND_CLIENT,
+        resolution: 'Client is entitled to their money back.',
+      });
+
+      expect(paymentsService.adminRefund).toHaveBeenCalledTimes(1);
+      expect(result.data.moneyAction).toBe(DisputeMoneyAction.REFUND);
     });
 
     it('is safe under concurrent resolution — the loser gets a clear message and never moves money', async () => {

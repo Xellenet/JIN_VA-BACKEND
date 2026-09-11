@@ -276,6 +276,44 @@ describe('admin-disputes-closeout — fix-round regressions (e2e)', () => {
     }
   }
 
+  /**
+   * Runs `act()` and, the first time a ruling's **sibling-money guard** reads
+   * the dispute table, commits `duringGuard()` afterwards — so `act()`'s guard
+   * result is the pre-ruling one.
+   *
+   * That is B3's race with the timing pinned: the guard answers "no sibling has
+   * moved money on this payment", the other ruling then moves it, and only
+   * afterwards does this ruling reach its own write. The guard is recognised by
+   * the one query in the service that filters on `moneyPaymentId`.
+   */
+  async function withCommitDuringSiblingGuard<T>(
+    duringGuard: () => Promise<unknown>,
+    act: () => Promise<T>,
+  ): Promise<T> {
+    let armed = true;
+    const holder = disputeRepo as unknown as { findOne: DisputeFindOne };
+    const hadOwnFindOne = Object.hasOwn(disputeRepo, 'findOne');
+    const load = holder.findOne.bind(disputeRepo) as DisputeFindOne;
+
+    holder.findOne = async (options) => {
+      const where = options?.where;
+      const isSiblingGuard =
+        !!where && !Array.isArray(where) && 'moneyPaymentId' in where;
+      const loaded = await load(options);
+      if (armed && isSiblingGuard) {
+        armed = false;
+        await duringGuard();
+      }
+      return loaded;
+    };
+    try {
+      return await act();
+    } finally {
+      if (hadOwnFindOne) holder.findOne = load;
+      else Reflect.deleteProperty(disputeRepo, 'findOne');
+    }
+  }
+
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
@@ -648,6 +686,171 @@ describe('admin-disputes-closeout — fix-round regressions (e2e)', () => {
         )
         .getCount();
       expect(contradictory).toBe(0);
+    });
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // B3 — two disputes, one payment, one movement
+  // ───────────────────────────────────────────────────────────────────────────
+
+  describe('B3: two disputes on one payment cannot both move the money', () => {
+    it('lets only one claim the payment when the sibling guard is raced, with no 500', async () => {
+      const { booking, payment } = await makeDisputableChain({
+        withPayment: true,
+      });
+      const clientDispute = await raiseDispute(
+        customerToken,
+        booking.id,
+        DisputeCategory.WORK_QUALITY,
+      );
+      const artisanDispute = await raiseDispute(
+        artisanToken,
+        booking.id,
+        DisputeCategory.PAYMENT_AMOUNT,
+      );
+
+      // The artisan's dispute is ruled first in wall-clock terms, but its
+      // sibling guard has already answered "nothing has moved" by the time the
+      // client's dispute refunds the whole payment.
+      const second = await withCommitDuringSiblingGuard(
+        () =>
+          resolve(clientDispute, {
+            outcome: 'REFUND_CLIENT',
+            resolution: NOTE,
+          }).expect(200),
+        () =>
+          resolve(artisanDispute, {
+            outcome: 'RELEASE_ARTISAN',
+            resolution: NOTE,
+          }),
+      );
+
+      // Before the fix this reached the provider, released the money a second
+      // time, and *then* hit the unique index on the too-late write — i.e. a
+      // 500 after money had moved twice.
+      expect(second.status).toBe(200);
+      const { data } = body<{
+        moneyAction: string;
+        moneySkippedReason: string | null;
+      }>(second);
+      expect(data.moneyAction).toBe('NONE');
+      expect(data.moneySkippedReason).toMatch(/claimed the money action/i);
+
+      // Exactly one movement across both rulings.
+      expect(paystack.createRefund).toHaveBeenCalledTimes(1);
+      expect(paystack.initiateTransfer).not.toHaveBeenCalled();
+
+      const paymentAfter = await paymentRepo.findOneByOrFail({
+        id: payment!.id,
+      });
+      expect(Number(paymentAfter.refundedAmount)).toBe(200);
+      expect(paymentAfter.transferCode ?? null).toBeNull();
+
+      // Both verdicts are recorded; only one holds the payment.
+      const first = await disputeRepo.findOneByOrFail({ id: clientDispute });
+      const other = await disputeRepo.findOneByOrFail({ id: artisanDispute });
+      expect(first.moneyAction).toBe(DisputeMoneyAction.REFUND);
+      expect(first.moneyPaymentId).toBe(payment!.id);
+      expect(other.status).toBe(DisputeStatus.RESOLVED);
+      expect(other.outcome).toBe('RELEASE_ARTISAN');
+      expect(other.moneyAction).toBe(DisputeMoneyAction.NONE);
+      expect(other.moneyPaymentId ?? null).toBeNull();
+    });
+
+    it('holds under two genuinely simultaneous rulings on one payment', async () => {
+      const { booking, payment } = await makeDisputableChain({
+        withPayment: true,
+      });
+      const clientDispute = await raiseDispute(
+        customerToken,
+        booking.id,
+        DisputeCategory.WORK_QUALITY,
+      );
+      const artisanDispute = await raiseDispute(
+        artisanToken,
+        booking.id,
+        DisputeCategory.PAYMENT_AMOUNT,
+      );
+
+      const [a, b] = await Promise.all([
+        resolve(clientDispute, {
+          outcome: 'REFUND_CLIENT',
+          resolution: NOTE,
+          refundAmountGhs: 120,
+        }),
+        resolve(artisanDispute, {
+          outcome: 'RELEASE_ARTISAN',
+          resolution: NOTE,
+        }),
+      ]);
+
+      // Whichever order they land in: both are valid rulings, neither is a
+      // 500, and the money moves once.
+      expect([a.status, b.status]).toEqual([200, 200]);
+      const actions = [a, b]
+        .map((res) => body<{ moneyAction: string }>(res).data.moneyAction)
+        .sort();
+      expect(actions).toEqual(['NONE', 'REFUND']);
+
+      expect(paystack.createRefund).toHaveBeenCalledTimes(1);
+      expect(paystack.initiateTransfer).not.toHaveBeenCalled();
+      const paymentAfter = await paymentRepo.findOneByOrFail({
+        id: payment!.id,
+      });
+      expect(Number(paymentAfter.refundedAmount)).toBe(120);
+    });
+
+    it('leaves the payment claimable again when the winner’s money action fails', async () => {
+      const { booking, payment } = await makeDisputableChain({
+        withPayment: true,
+      });
+      const clientDispute = await raiseDispute(
+        customerToken,
+        booking.id,
+        DisputeCategory.WORK_QUALITY,
+      );
+      const artisanDispute = await raiseDispute(
+        artisanToken,
+        booking.id,
+        DisputeCategory.PAYMENT_AMOUNT,
+      );
+
+      paystack.createRefund.mockRejectedValueOnce(
+        new Error('Paystack declined the refund (forced failure)'),
+      );
+      await resolve(clientDispute, {
+        outcome: 'REFUND_CLIENT',
+        resolution: NOTE,
+      }).expect(400);
+
+      // The failed ruling released its claim, so the sibling can still act.
+      const second = await resolve(artisanDispute, {
+        outcome: 'RELEASE_ARTISAN',
+        resolution: NOTE,
+      });
+      expect(second.status).toBe(200);
+      expect(body<{ moneyAction: string }>(second).data.moneyAction).toBe(
+        'RELEASE',
+      );
+
+      const paymentAfter = await paymentRepo.findOneByOrFail({
+        id: payment!.id,
+      });
+      expect(paymentAfter.transferCode).toBeTruthy();
+    });
+
+    it('at most one dispute holds the money claim on any payment (the index invariant)', async () => {
+      const duplicates = await disputeRepo
+        .createQueryBuilder('d')
+        .select('d.money_payment_id', 'paymentId')
+        .where('d.money_payment_id IS NOT NULL')
+        .andWhere('d.money_action <> :none', {
+          none: DisputeMoneyAction.NONE,
+        })
+        .groupBy('d.money_payment_id')
+        .having('COUNT(*) > 1')
+        .getRawMany();
+      expect(duplicates).toEqual([]);
     });
   });
 });
