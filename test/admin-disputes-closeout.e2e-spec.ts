@@ -784,20 +784,32 @@ describe('admin-disputes-closeout — fix-round regressions (e2e)', () => {
         }),
       ]);
 
-      // Whichever order they land in: both are valid rulings, neither is a
-      // 500, and the money moves once.
+      // Which of the two wins the payment claim is a genuine race and is
+      // deliberately not asserted. What must hold either way: both are valid
+      // rulings, neither is a 500 (the pre-fix failure mode), and the money
+      // moves exactly once.
       expect([a.status, b.status]).toEqual([200, 200]);
-      const actions = [a, b]
-        .map((res) => body<{ moneyAction: string }>(res).data.moneyAction)
-        .sort();
-      expect(actions).toEqual(['NONE', 'REFUND']);
+      const actions = [a, b].map(
+        (res) => body<{ moneyAction: string }>(res).data.moneyAction,
+      );
+      const movedActions = actions.filter((action) => action !== 'NONE');
+      expect(movedActions).toHaveLength(1);
 
-      expect(paystack.createRefund).toHaveBeenCalledTimes(1);
-      expect(paystack.initiateTransfer).not.toHaveBeenCalled();
+      const gatewayCalls =
+        paystack.createRefund.mock.calls.length +
+        paystack.initiateTransfer.mock.calls.length;
+      expect(gatewayCalls).toBe(1);
+
       const paymentAfter = await paymentRepo.findOneByOrFail({
         id: payment!.id,
       });
-      expect(Number(paymentAfter.refundedAmount)).toBe(120);
+      if (movedActions[0] === 'REFUND') {
+        expect(Number(paymentAfter.refundedAmount)).toBe(120);
+        expect(paymentAfter.transferCode ?? null).toBeNull();
+      } else {
+        expect(Number(paymentAfter.refundedAmount ?? 0)).toBe(0);
+        expect(paymentAfter.transferCode).toBeTruthy();
+      }
     });
 
     it('leaves the payment claimable again when the winner’s money action fails', async () => {
@@ -910,6 +922,75 @@ describe('admin-disputes-closeout — fix-round regressions (e2e)', () => {
         .expect(200);
 
       expect(body<{ payment: unknown }>(res).data.payment).toBeNull();
+    });
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // B5 — the amplifier is capped (defence in depth, not the fix)
+  // ───────────────────────────────────────────────────────────────────────────
+
+  describe('B5: respond and resolve are rate-limited per user', () => {
+    /**
+     * The limit is `DISPUTE_WRITE_RATE_LIMIT_PER_MINUTE` (default 20) per user
+     * **per route**. Each test below uses a freshly created account so it
+     * cannot be affected by, or affect, the other cases in this file — the
+     * tracker is the user id and the bucket key includes the handler.
+     *
+     * The requests deliberately target a nonexistent dispute: the guard runs
+     * before the handler, so a `404` still consumes quota, and nothing needs
+     * to be written to prove the limit exists.
+     */
+    const DISPUTE_WRITE_LIMIT = 20;
+
+    it('429s a party who bursts responses, with a specific code and retry hint', async () => {
+      const { token } = await makeUser(`Burst${uniq}`, Role.CUSTOMER);
+      const statuses: number[] = [];
+
+      for (let i = 0; i <= DISPUTE_WRITE_LIMIT; i++) {
+        const res = await request(server())
+          .post('/api/v1/disputes/99999999/respond')
+          .set('Authorization', `Bearer ${token}`)
+          .send({
+            response: `Burst attempt ${i} against a dispute that does not exist.`,
+          });
+        statuses.push(res.status);
+      }
+
+      // Everything up to the limit is answered on its merits (404 — no such
+      // dispute); the one past it is refused by the guard.
+      expect(statuses.slice(0, DISPUTE_WRITE_LIMIT)).not.toContain(429);
+      expect(statuses[DISPUTE_WRITE_LIMIT]).toBe(429);
+
+      const blocked = await request(server())
+        .post('/api/v1/disputes/99999999/respond')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ response: 'One more attempt after the limit was reached.' });
+      expect(blocked.status).toBe(429);
+      // Never a bare "Too many requests".
+      const payload = blocked.body as { message?: string };
+      expect(payload.message).toMatch(/too many dispute updates/i);
+    });
+
+    it('429s an admin who bursts rulings, on a counter of its own', async () => {
+      const { token } = await makeUser(`BurstAdmin${uniq}`, Role.ADMIN);
+      let last = 0;
+
+      for (let i = 0; i <= DISPUTE_WRITE_LIMIT; i++) {
+        const res = await request(server())
+          .patch('/api/v1/admin/disputes/99999999/resolve')
+          .set('Authorization', `Bearer ${token}`)
+          .send({ outcome: 'MUTUAL', resolution: NOTE });
+        last = res.status;
+      }
+
+      expect(last).toBe(429);
+
+      // A *different* route for the same admin is unaffected: the limit is
+      // shared configuration, not a shared counter.
+      const otherRoute = await request(server())
+        .get('/api/v1/admin/disputes/summary')
+        .set('Authorization', `Bearer ${token}`);
+      expect(otherRoute.status).toBe(200);
     });
   });
 });

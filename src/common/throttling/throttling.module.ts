@@ -22,6 +22,22 @@ const DEFAULT_AUTH_CREDENTIALS_RATE_LIMIT = 10;
 const DEFAULT_AUTH_EMAIL_RATE_LIMIT = 5;
 
 /**
+ * Default when `DISPUTE_WRITE_RATE_LIMIT_PER_MINUTE` is unset, applied per
+ * authenticated user and per route (`generateKey` includes the handler, so a
+ * party's `respond` bucket and an admin's `resolve` bucket are separate).
+ *
+ * 20/minute is far above human speed for either action — a party submits one
+ * response per dispute ever, and an admin rules one dispute at a time after
+ * reading both sides — while cutting an automated burst down by orders of
+ * magnitude. It is deliberately not tighter: the limit is defence in depth
+ * behind the atomic writes on both endpoints, not the thing keeping them
+ * correct, and a limit low enough to interfere with a legitimate admin working
+ * through a queue (or with the e2e suite exercising the money path) would buy
+ * nothing.
+ */
+const DEFAULT_DISPUTE_WRITE_RATE_LIMIT = 20;
+
+/**
  * Reads a positive-integer limit from configuration, falling back to the
  * compiled-in default for anything unset, non-numeric or <= 0 — a typo'd env
  * var must not silently become "limit 0" (which would reject every request) or
@@ -88,6 +104,15 @@ function readLimit(
               config,
               'AUTH_EMAIL_RATE_LIMIT_PER_MINUTE',
               DEFAULT_AUTH_EMAIL_RATE_LIMIT,
+            ),
+          },
+          {
+            name: THROTTLER_NAMES.DISPUTE_WRITE,
+            ttl: ONE_MINUTE_MS,
+            limit: readLimit(
+              config,
+              'DISPUTE_WRITE_RATE_LIMIT_PER_MINUTE',
+              DEFAULT_DISPUTE_WRITE_RATE_LIMIT,
             ),
           },
         ],
