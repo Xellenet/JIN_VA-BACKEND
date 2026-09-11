@@ -238,6 +238,35 @@ describe('DisputesService', () => {
       expect(emitter.emit).not.toHaveBeenCalled();
     });
 
+    /** B1, lower-stakes instance: same full-entity `save()` defect. */
+    it('B1: starts a review with a status-guarded UPDATE, never a full-entity save', async () => {
+      disputeRepo.findOne.mockResolvedValueOnce(
+        disputeRaisedByCustomer(DisputeStatus.OPEN),
+      );
+
+      await service.startReview(admin.id, 5);
+
+      expect(disputeRepo.save).not.toHaveBeenCalled();
+      expect(updateQb.set).toHaveBeenCalledWith({
+        status: DisputeStatus.UNDER_REVIEW,
+      });
+      expect(updateQb.andWhere).toHaveBeenCalledWith('status = :open', {
+        open: DisputeStatus.OPEN,
+      });
+    });
+
+    it('B1: refuses to start a review on a dispute resolved mid-request', async () => {
+      disputeRepo.findOne
+        .mockResolvedValueOnce(disputeRaisedByCustomer(DisputeStatus.OPEN))
+        .mockResolvedValueOnce(disputeRaisedByCustomer(DisputeStatus.RESOLVED));
+      updateQb.execute.mockResolvedValueOnce({ affected: 0 });
+
+      await expect(service.startReview(admin.id, 5)).rejects.toThrow(
+        /current status is RESOLVED/i,
+      );
+      expect(disputeRepo.save).not.toHaveBeenCalled();
+    });
+
     it.each([DisputeStatus.RESOLVED, DisputeStatus.CLOSED])(
       'still refuses to resolve an already-%s dispute (existing guard must not regress)',
       async (status) => {
@@ -530,13 +559,78 @@ describe('DisputesService', () => {
         response: 'I attended but nobody was there to let me in.',
       });
 
-      expect(disputeRepo.save).toHaveBeenCalledWith(
+      expect(updateQb.set).toHaveBeenCalledWith(
         expect.objectContaining({
           response: 'I attended but nobody was there to let me in.',
           respondedById: artisanUser.id,
         }),
       );
       expect(result.data.viewerRole).toBe('COUNTERPARTY');
+    });
+
+    /**
+     * B1 (HIGH). The response used to be written with `repo.save(dispute)` on
+     * the entity loaded at the top of the request, and `save()` writes back
+     * every column that differs from a fresh read — so a `resolve()` that
+     * committed in between was silently reverted, taking a settled,
+     * already-paid dispute back to `OPEN`.
+     */
+    it('B1: writes only the three response columns, never the whole row', async () => {
+      disputeRepo.findOne.mockResolvedValueOnce(
+        disputeRaisedByCustomer(DisputeStatus.UNDER_REVIEW),
+      );
+
+      await service.respond(artisanUser.id, 5, {
+        response: 'I attended but nobody was there to let me in.',
+      });
+
+      // No full-entity save anywhere on this path.
+      expect(disputeRepo.save).not.toHaveBeenCalled();
+      // And the write cannot carry a status with it.
+      const setCalls = updateQb.set.mock.calls as [Record<string, unknown>][];
+      const written = setCalls[0][0];
+      expect(Object.keys(written).sort()).toEqual([
+        'respondedAt',
+        'respondedById',
+        'response',
+      ]);
+      expect(written).not.toHaveProperty('status');
+    });
+
+    it('B1: guards both preconditions in the WHERE clause, not just in the read', async () => {
+      disputeRepo.findOne.mockResolvedValueOnce(
+        disputeRaisedByCustomer(DisputeStatus.OPEN),
+      );
+
+      await service.respond(artisanUser.id, 5, {
+        response: 'Here is my account of what happened on the day.',
+      });
+
+      expect(updateQb.andWhere).toHaveBeenCalledWith('response IS NULL');
+      expect(updateQb.andWhere).toHaveBeenCalledWith(
+        'status IN (:...active)',
+        expect.objectContaining({
+          active: [DisputeStatus.OPEN, DisputeStatus.UNDER_REVIEW],
+        }),
+      );
+    });
+
+    it('B1: a resolve committing mid-request rejects the response instead of reverting the ruling', async () => {
+      disputeRepo.findOne
+        // The party's load: still actionable at this point.
+        .mockResolvedValueOnce(disputeRaisedByCustomer(DisputeStatus.OPEN))
+        // The re-read after the conditional write matched nothing: an admin
+        // ruled in between.
+        .mockResolvedValueOnce(disputeRaisedByCustomer(DisputeStatus.RESOLVED));
+      updateQb.execute.mockResolvedValueOnce({ affected: 0 });
+
+      await expect(
+        service.respond(artisanUser.id, 5, {
+          response: 'Submitting my side just as the admin rules on it.',
+        }),
+      ).rejects.toThrow(/RESOLVED and can no longer receive a response/i);
+
+      expect(disputeRepo.save).not.toHaveBeenCalled();
     });
 
     it('refuses a second response', async () => {

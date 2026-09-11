@@ -229,6 +229,23 @@ export class DisputesService {
    * only while the dispute is still open work. The raiser already has the
    * `reason` field; letting them "respond" too would give one side two
    * statements.
+   *
+   * The write is a **conditional `UPDATE` of three columns**, not
+   * `repo.save(dispute)` — deliberately, and it must stay that way
+   * (security-report.md, `admin-disputes-closeout`, B1/HIGH). `save()` on a
+   * loaded entity writes back *every defined column whose value differs from a
+   * fresh read of the row*, so an admin's `resolve()` committing between the
+   * load above and the save would have been silently reverted: the response
+   * write carried the stale `status` with it and put a `RESOLVED` dispute —
+   * whose money had already moved — back to `OPEN`. That re-opened the money
+   * path (`planMoneyAction`'s sibling guard excludes the dispute's own row, so
+   * a second ruling could not see that *this* dispute had already moved money)
+   * and un-revoked admin access to the two parties' private message thread,
+   * which AD2 revokes precisely on the dispute reaching a settled state.
+   *
+   * Writing only the three response columns under a `WHERE` that re-states
+   * both preconditions also makes "you may respond only once" atomic rather
+   * than a check-then-write.
    */
   async respond(userId: number, disputeId: number, dto: RespondToDisputeDto) {
     const dispute = await this.loadOrFail(disputeId, PARTICIPANT_RELATIONS);
@@ -243,6 +260,52 @@ export class DisputesService {
         'You raised this dispute — your account of events is the claim itself. Only the other party can add a response.',
       );
     }
+    // Fast path for the specific message. The authority on both of these is
+    // the `WHERE` clause below, not this read.
+    this.assertRespondable(dispute);
+
+    const respondedAt = new Date();
+    const write = await this.repo
+      .createQueryBuilder()
+      .update(Dispute)
+      .set({
+        response: dto.response,
+        respondedById: userId,
+        respondedAt,
+      })
+      .where('id = :id', { id: disputeId })
+      .andWhere('response IS NULL')
+      .andWhere('status IN (:...active)', { active: ACTIVE_STATUSES })
+      .execute();
+
+    if (!write.affected) {
+      // The row changed between the read and the write. Re-read it and return
+      // whichever of the two errors now applies, rather than the state this
+      // request started from.
+      const current = await this.loadOrFail(disputeId);
+      this.assertRespondable(current);
+      throw new BadRequestException(
+        'Your response could not be recorded because this dispute changed while you were writing it. Reload the dispute and try again.',
+      );
+    }
+
+    dispute.response = dto.response;
+    dispute.respondedBy = { id: userId } as User;
+    dispute.respondedById = userId;
+    dispute.respondedAt = respondedAt;
+
+    return {
+      message: 'Your response has been recorded. Our team can now see it.',
+      data: this.toPartyDto(dispute, userId),
+    };
+  }
+
+  /**
+   * The two preconditions on a response that describe the *dispute* rather
+   * than the caller. Shared by the pre-check and the post-write re-read so a
+   * party gets the identical message whichever one decided it.
+   */
+  private assertRespondable(dispute: Dispute): void {
     if (!ACTIVE_STATUSES.includes(dispute.status)) {
       throw new BadRequestException(
         `This dispute is ${dispute.status} and can no longer receive a response.`,
@@ -253,17 +316,6 @@ export class DisputesService {
         'You have already responded to this dispute. Contact support if you need to add something.',
       );
     }
-
-    dispute.response = dto.response;
-    dispute.respondedBy = { id: userId } as User;
-    dispute.respondedById = userId;
-    dispute.respondedAt = new Date();
-    await this.repo.save(dispute);
-
-    return {
-      message: 'Your response has been recorded. Our team can now see it.',
-      data: this.toPartyDto(dispute, userId),
-    };
   }
 
   // ─── Admin-facing ────────────────────────────────────────────────────────────
@@ -529,6 +581,13 @@ export class DisputesService {
     };
   }
 
+  /**
+   * A single conditional `UPDATE` of `status`, for the same reason
+   * {@link respond} is (B1): `repo.save(dispute)` on the loaded entity wrote
+   * back every column that had changed in the database since the load, so an
+   * admin starting a review could revert a concurrent ruling — the lower-stakes
+   * instance of the same defect.
+   */
   async startReview(adminId: number, id: number) {
     const dispute = await this.loadOrFail(id);
     if (dispute.status !== DisputeStatus.OPEN) {
@@ -536,8 +595,21 @@ export class DisputesService {
         `Cannot start review — current status is ${dispute.status}.`,
       );
     }
-    dispute.status = DisputeStatus.UNDER_REVIEW;
-    await this.repo.save(dispute);
+
+    const claim = await this.repo
+      .createQueryBuilder()
+      .update(Dispute)
+      .set({ status: DisputeStatus.UNDER_REVIEW })
+      .where('id = :id', { id })
+      .andWhere('status = :open', { open: DisputeStatus.OPEN })
+      .execute();
+    if (!claim.affected) {
+      const current = await this.loadOrFail(id);
+      throw new BadRequestException(
+        `Cannot start review — current status is ${current.status}.`,
+      );
+    }
+
     return { message: 'Dispute is now UNDER_REVIEW.' };
   }
 
