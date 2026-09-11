@@ -20,6 +20,7 @@ import { GetDisputesQueryDto } from './dto/get-disputes-query.dto';
 import { ResolveDisputeDto, CloseDisputeDto } from './dto/resolve-dispute.dto';
 import { RespondToDisputeDto } from './dto/respond-dispute.dto';
 import {
+  DisputePaymentDto,
   DisputeResponseDto,
   PartyDisputeResponseDto,
 } from './dto/dispute-response.dto';
@@ -570,7 +571,14 @@ export class DisputesService {
         ...this.toDto(dispute),
         counterparty: this.counterpartySummary(dispute),
         jobId: job?.id ?? null,
-        payment,
+        /**
+         * B4: mapped, not the entity. Returning `payment` raw published
+         * `accessCode`/`authorizationUrl` (checkout handles) and
+         * `transferCode`/`transferReference` (payout handles) to the browser,
+         * none of which the dialog reads — and meant any column later added
+         * to `Payment` would be published automatically.
+         */
+        payment: payment ? this.toPaymentDto(payment) : null,
         /** DQ3: enough about the work to identify it without a second lookup. */
         work,
         siblingDisputes: siblings.map((s) => ({
@@ -1537,6 +1545,16 @@ export class DisputesService {
           : {}),
         ...(dispute.category ? { category: dispute.category } : {}),
       },
+    });
+  }
+
+  /**
+   * B4: the payment block on the admin dispute read, narrowed to the fields
+   * that surface actually uses. See {@link DisputePaymentDto}.
+   */
+  private toPaymentDto(payment: Payment): DisputePaymentDto {
+    return plainToInstance(DisputePaymentDto, payment, {
+      excludeExtraneousValues: true,
     });
   }
 

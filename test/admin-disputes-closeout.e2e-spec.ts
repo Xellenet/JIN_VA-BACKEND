@@ -853,4 +853,63 @@ describe('admin-disputes-closeout — fix-round regressions (e2e)', () => {
       expect(duplicates).toEqual([]);
     });
   });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // B4 — the payment block carries no provider handles
+  // ───────────────────────────────────────────────────────────────────────────
+
+  describe('B4: GET /admin/disputes/:id no longer returns the raw Payment entity', () => {
+    it('exposes only the five fields the dispute surface reads', async () => {
+      const { booking, payment } = await makeDisputableChain({
+        withPayment: true,
+      });
+      const disputeId = await raiseDispute(customerToken, booking.id);
+
+      const res = await request(server())
+        .get(`/api/v1/admin/disputes/${disputeId}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .expect(200);
+
+      const paymentBlock = body<{ payment: Record<string, unknown> }>(res).data
+        .payment;
+      expect(Object.keys(paymentBlock).sort()).toEqual([
+        'amount',
+        'id',
+        'paidAt',
+        'refundedAmount',
+        'status',
+      ]);
+      expect(paymentBlock.id).toBe(payment!.id);
+      expect(Number(paymentBlock.amount)).toBe(200);
+      expect(paymentBlock.status).toBe(PaymentStatus.HELD);
+
+      // The handles that used to ride along, asserted by value so a rename
+      // cannot make this test pass vacuously.
+      const raw = JSON.stringify(res.body);
+      expect(raw).not.toContain(`ACCESS_fix_dc_${uniq}`);
+      expect(raw).not.toContain(`TRFREF_fix_dc_${uniq}`);
+      expect(raw).not.toContain('checkout.paystack.test');
+      expect(raw).not.toContain(payment!.reference);
+      for (const leaked of [
+        'accessCode',
+        'authorizationUrl',
+        'transferCode',
+        'transferReference',
+      ]) {
+        expect(raw).not.toContain(leaked);
+      }
+    });
+
+    it('still reports no payment as null rather than as an error', async () => {
+      const { booking } = await makeDisputableChain({ withPayment: false });
+      const disputeId = await raiseDispute(customerToken, booking.id);
+
+      const res = await request(server())
+        .get(`/api/v1/admin/disputes/${disputeId}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .expect(200);
+
+      expect(body<{ payment: unknown }>(res).data.payment).toBeNull();
+    });
+  });
 });

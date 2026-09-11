@@ -5,6 +5,7 @@ import {
   DisputeMoneyAction,
   DisputeOutcome,
   DisputeStatus,
+  PaymentStatus,
 } from '@common/types/enums';
 
 class DisputeUserDto {
@@ -12,6 +13,49 @@ class DisputeUserDto {
   @Expose() @ApiProperty() firstname!: string;
   @Expose() @ApiProperty() lastname!: string;
   @Expose() @ApiPropertyOptional() profilePicture?: string;
+}
+
+/**
+ * The payment facts the admin dispute detail surface reads — and nothing else.
+ *
+ * `GET /admin/disputes/:id` used to return the raw `Payment` entity, so every
+ * column on it rode along to the browser: `authorization_url` and `access_code`
+ * (live Paystack checkout-session handles), `transfer_code` and
+ * `transfer_reference` (payout handles), plus, by construction, any column
+ * added to `Payment` in future. The resolve dialog reads `amount`,
+ * `refundedAmount`, `status` and `paidAt`, so those — with the id — are what
+ * this exposes. Availability of the two money verdicts is **not** derived from
+ * this block by the frontend; `moneyOptions` on the same response is the source
+ * of truth for that. security-report.md B4.
+ *
+ * `amount` and `refundedAmount` are TypeORM decimals, so they arrive as
+ * strings; that is unchanged from the entity shape the frontend already
+ * handles.
+ */
+export class DisputePaymentDto {
+  @Expose() @ApiProperty() id!: number;
+
+  @Expose()
+  @ApiProperty({
+    description: 'Gross amount the client paid, as a decimal string.',
+    example: '1850.00',
+  })
+  amount!: string;
+
+  @Expose()
+  @ApiProperty({
+    description: 'Cumulative amount refunded so far, as a decimal string.',
+    example: '0.00',
+  })
+  refundedAmount!: string;
+
+  @Expose()
+  @ApiProperty({ enum: PaymentStatus })
+  status!: PaymentStatus;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Null for a payment never collected.' })
+  paidAt?: Date;
 }
 
 class DisputeBookingDto {
