@@ -490,4 +490,164 @@ describe('admin-disputes-closeout — fix-round regressions (e2e)', () => {
       expect(after.status).toBe(DisputeStatus.RESOLVED);
     });
   });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // B2 / QA-DC1-01 — a rolled-back ruling must leave no trace
+  // ───────────────────────────────────────────────────────────────────────────
+
+  describe('B2: a failed money action rolls the whole ruling back', () => {
+    it('restores all six verdict columns, not just status', async () => {
+      const { booking, payment } = await makeDisputableChain({
+        withPayment: true,
+      });
+      const disputeId = await raiseDispute(customerToken, booking.id);
+
+      paystack.createRefund.mockRejectedValueOnce(
+        new Error('Paystack declined the refund (forced failure)'),
+      );
+
+      const res = await resolve(disputeId, {
+        outcome: 'REFUND_CLIENT',
+        resolution: NOTE,
+        adminNotes: 'Internal note attached to a ruling that never happened.',
+      });
+
+      expect(res.status).toBe(400);
+      expect(body<unknown>(res).message).toMatch(/has NOT been resolved/i);
+
+      const after = await disputeRepo.findOneByOrFail({ id: disputeId });
+      expect(after.status).toBe(DisputeStatus.OPEN);
+      expect(after.outcome ?? null).toBeNull();
+      expect(after.resolution ?? null).toBeNull();
+      expect(after.resolvedById ?? null).toBeNull();
+      expect(after.resolvedAt ?? null).toBeNull();
+      expect(after.moneyAction ?? null).toBeNull();
+      // Not in either report's list, but written by the same claim and cleared
+      // by the same rollback.
+      expect(after.adminNotes ?? null).toBeNull();
+      // B3's claim columns have to come back off the row too, or the payment
+      // stays claimed by a ruling that never happened.
+      expect(after.moneyAmount ?? null).toBeNull();
+      expect(after.moneyPaymentId ?? null).toBeNull();
+
+      const paymentAfter = await paymentRepo.findOneByOrFail({
+        id: payment!.id,
+      });
+      expect(Number(paymentAfter.refundedAmount ?? 0)).toBe(0);
+      expect(paymentAfter.status).toBe(PaymentStatus.HELD);
+    });
+
+    it('leaves no verdict on the admin read and no phantom outcome on the party read', async () => {
+      const { booking } = await makeDisputableChain({ withPayment: true });
+      const disputeId = await raiseDispute(customerToken, booking.id);
+
+      paystack.createRefund.mockRejectedValueOnce(
+        new Error('Paystack declined the refund (forced failure)'),
+      );
+      await resolve(disputeId, {
+        outcome: 'REFUND_CLIENT',
+        resolution: NOTE,
+      }).expect(400);
+
+      const adminRead = await request(server())
+        .get(`/api/v1/admin/disputes/${disputeId}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .expect(200);
+      const adminDispute = body<Record<string, unknown>>(adminRead).data;
+      expect(adminDispute.status).toBe(DisputeStatus.OPEN);
+      // DC1.5: no row badge change on a rolled-back ruling. The queue renders
+      // the badge straight off `outcome`, so it has to be absent.
+      expect(adminDispute.outcome ?? null).toBeNull();
+      expect(adminDispute.resolvedAt ?? null).toBeNull();
+
+      const partyRead = await request(server())
+        .get(`/api/v1/disputes/my/${disputeId}`)
+        .set('Authorization', `Bearer ${customerToken}`)
+        .expect(200);
+      const partyDispute = body<Record<string, unknown>>(partyRead).data;
+      expect(partyDispute.outcome ?? null).toBeNull();
+      expect(partyDispute.resolution ?? null).toBeNull();
+      expect(partyDispute.resolvedAt ?? null).toBeNull();
+    });
+
+    it('keeps the dispute out of the resolved side of the SLA figures', async () => {
+      const { booking } = await makeDisputableChain({ withPayment: true });
+      const disputeId = await raiseDispute(customerToken, booking.id);
+
+      paystack.createRefund.mockRejectedValueOnce(
+        new Error('Paystack declined the refund (forced failure)'),
+      );
+      await resolve(disputeId, {
+        outcome: 'REFUND_CLIENT',
+        resolution: NOTE,
+      }).expect(400);
+
+      // `getResolutionMetrics` counts a dispute as resolved on
+      // `resolved_at IS NOT NULL` and as open on its status, so a rolled-back
+      // ruling used to land in both and drag a fabricated resolution time into
+      // the platform average.
+      const summary = await request(server())
+        .get('/api/v1/admin/disputes/summary')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .expect(200);
+      const { counts, sla } = body<{
+        counts: { resolved: number; closed: number };
+        sla: { resolvedCount: number };
+      }>(summary).data;
+      expect(sla.resolvedCount).toBeLessThanOrEqual(
+        counts.resolved + counts.closed,
+      );
+    });
+
+    it('is still resolvable afterwards, with the money moving exactly once', async () => {
+      const { booking, payment } = await makeDisputableChain({
+        withPayment: true,
+      });
+      const disputeId = await raiseDispute(customerToken, booking.id);
+
+      paystack.createRefund.mockRejectedValueOnce(
+        new Error('Paystack declined the refund (forced failure)'),
+      );
+      await resolve(disputeId, {
+        outcome: 'REFUND_CLIENT',
+        resolution: NOTE,
+      }).expect(400);
+
+      // The dispute is actionable again, which is the whole point of rolling
+      // back — and the retry must not be blocked by a stale money claim.
+      const retry = await resolve(disputeId, {
+        outcome: 'REFUND_CLIENT',
+        resolution: NOTE,
+      });
+      expect(retry.status).toBe(200);
+      const { data } = body<{ moneyAction: string; moneyAmount: number }>(
+        retry,
+      );
+      expect(data.moneyAction).toBe('REFUND');
+      expect(Number(data.moneyAmount)).toBe(200);
+
+      const paymentAfter = await paymentRepo.findOneByOrFail({
+        id: payment!.id,
+      });
+      expect(Number(paymentAfter.refundedAmount)).toBe(200);
+      expect(paystack.createRefund).toHaveBeenCalledTimes(2); // one failed, one accepted
+    });
+
+    it('never leaves an actionable dispute carrying a verdict (the migration invariant)', async () => {
+      // The state the repair migration cleared, asserted as an invariant so a
+      // future regression shows up as a failing test rather than as a wrong
+      // badge in the admin queue.
+      const contradictory = await disputeRepo
+        .createQueryBuilder('d')
+        .where('d.status IN (:...active)', {
+          active: [DisputeStatus.OPEN, DisputeStatus.UNDER_REVIEW],
+        })
+        .andWhere(
+          '(d.outcome IS NOT NULL OR d.resolution IS NOT NULL ' +
+            'OR d.resolved_by_id IS NOT NULL OR d.resolved_at IS NOT NULL)',
+        )
+        .getCount();
+      expect(contradictory).toBe(0);
+    });
+  });
 });

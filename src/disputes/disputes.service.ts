@@ -647,9 +647,13 @@ export class DisputesService {
       throw new BadRequestException(`Dispute is already ${dispute.status}.`);
     }
 
+    // Captured for the rollback in step 3. Normalised to `null` rather than
+    // left `undefined` because `null` is the only value that actually clears a
+    // column — see the rollback itself.
     const previousStatus = dispute.status;
     const previousOutcome = dispute.outcome ?? null;
     const previousResolution = dispute.resolution ?? null;
+    const previousAdminNotes = dispute.adminNotes ?? null;
 
     // 1 ── decide what the money side is going to do, before writing anything.
     const plan = await this.planMoneyAction(dispute, dto);
@@ -708,16 +712,35 @@ export class DisputesService {
         this.logger.error(
           `Dispute ${id}: ${plan.action} on payment ${plan.paymentId} failed — rolling the ruling back. ${detail}`,
         );
+        /**
+         * Every value here is an explicit `null`, never `undefined`.
+         * `UpdateQueryBuilder.createUpdateExpression` drops `undefined`
+         * values from the statement entirely ("it doesn't make sense to
+         * update undefined properties, so just skip them"), so the previous
+         * `previousOutcome ?? undefined` form cleared **nothing** on a first
+         * ruling — the normal case, where the `previous*` values are null.
+         * Only `status` was ever restored, and a ruling that never took
+         * effect kept its verdict, note, resolver and timestamp: an `Open`
+         * row wearing a verdict badge in the admin queue, a phantom
+         * `outcome` handed to both parties by the party read, and a dispute
+         * counted as *both* resolved and open by `getResolutionMetrics`
+         * (which keys on `resolved_at IS NOT NULL`), corrupting the platform
+         * SLA figures. qa-report.md QA-DC1-01 / security-report.md B2; the
+         * same defect `1d5ce20` fixed in `AdminService`.
+         */
         await this.repo
           .createQueryBuilder()
           .update(Dispute)
           .set({
             status: previousStatus,
-            outcome: previousOutcome ?? undefined,
-            resolution: previousResolution ?? undefined,
-            resolvedById: undefined,
-            resolvedAt: undefined,
-            moneyAction: undefined,
+            outcome: previousOutcome,
+            resolution: previousResolution,
+            adminNotes: previousAdminNotes,
+            resolvedById: null,
+            resolvedAt: null,
+            moneyAction: null,
+            moneyAmount: null,
+            moneyPaymentId: null,
           })
           .where('id = :id', { id })
           .execute();
@@ -735,8 +758,11 @@ export class DisputesService {
       .update(Dispute)
       .set({
         moneyAction: moved ? moved.action : DisputeMoneyAction.NONE,
-        moneyAmount: moved ? moved.amount : undefined,
-        moneyPaymentId: moved ? moved.paymentId : undefined,
+        // `null`, not `undefined`: an `undefined` is skipped rather than
+        // written, so a `NONE` result would inherit whatever these columns
+        // happened to hold.
+        moneyAmount: moved ? moved.amount : null,
+        moneyPaymentId: moved ? moved.paymentId : null,
       })
       .where('id = :id', { id })
       .execute();
@@ -1285,8 +1311,12 @@ export class DisputesService {
           counterpartyUserId,
           outcome,
           resolution,
-          verdict: dispute.outcome,
-          moneyAction: dispute.moneyAction,
+          // `?? undefined`: these columns are nullable, and the payload's
+          // contract is "absent", not "null" — every consumer tests for
+          // presence (`notifications.service.ts`), so a null would read the
+          // same but type as a lie.
+          verdict: dispute.outcome ?? undefined,
+          moneyAction: dispute.moneyAction ?? undefined,
           moneyAmount:
             dispute.moneyAmount != null
               ? Number(dispute.moneyAmount)

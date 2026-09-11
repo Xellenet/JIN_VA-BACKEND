@@ -487,6 +487,101 @@ describe('DisputesService', () => {
       expect(auditService.record).not.toHaveBeenCalled();
     });
 
+    /**
+     * B2 / QA-DC1-01. The rollback used to pass `previousOutcome ?? undefined`
+     * and friends, and `UpdateQueryBuilder` strips `undefined` values from the
+     * statement — so on a first ruling (where every `previous*` is null)
+     * nothing but `status` was actually restored.
+     */
+    it('B2: the rollback clears every verdict column with an explicit null, not undefined', async () => {
+      withHeldPayment();
+      paymentsService.adminRefund.mockRejectedValueOnce(
+        new Error('Paystack refund declined: insufficient settlement balance'),
+      );
+
+      await expect(
+        service.resolve(admin, 5, {
+          outcome: DisputeOutcome.REFUND_CLIENT,
+          resolution: 'Ruling for the client on the evidence.',
+          adminNotes: 'Internal note attached to a ruling that failed.',
+        }),
+      ).rejects.toThrow(BadRequestException);
+
+      const setCalls = updateQb.set.mock.calls as [Record<string, unknown>][];
+      const rollback = setCalls[setCalls.length - 1][0];
+      expect(rollback).toEqual({
+        status: DisputeStatus.UNDER_REVIEW,
+        outcome: null,
+        resolution: null,
+        adminNotes: null,
+        resolvedById: null,
+        resolvedAt: null,
+        moneyAction: null,
+        moneyAmount: null,
+        moneyPaymentId: null,
+      });
+      // The bug in one assertion: not one of them may be `undefined`, because
+      // an `undefined` is silently dropped from the UPDATE.
+      for (const value of Object.values(rollback)) {
+        expect(value).not.toBeUndefined();
+      }
+    });
+
+    it('B2: a rollback onto a dispute that already had a verdict restores that verdict', async () => {
+      // A second ruling on a dispute that was previously resolved and reopened
+      // by hand: the rollback must restore what was there, not blanket-null it.
+      disputeRepo.findOne
+        .mockResolvedValueOnce({
+          ...disputeRaisedByCustomer(DisputeStatus.UNDER_REVIEW),
+          outcome: DisputeOutcome.MUTUAL,
+          resolution: 'An earlier ruling that is still on the row.',
+          adminNotes: 'An earlier internal note.',
+        } as Dispute)
+        .mockResolvedValueOnce(null);
+      jobRepo.findOne.mockResolvedValue({
+        id: 200,
+        service: null,
+      } as unknown as Job);
+      paymentRepo.findOne.mockResolvedValue(heldPayment());
+      paymentsService.adminRefund.mockRejectedValueOnce(
+        new Error('Paystack refund declined'),
+      );
+
+      await expect(
+        service.resolve(admin, 5, {
+          outcome: DisputeOutcome.REFUND_CLIENT,
+          resolution: 'Replacing the earlier ruling with a refund.',
+        }),
+      ).rejects.toThrow(BadRequestException);
+
+      const setCalls = updateQb.set.mock.calls as [Record<string, unknown>][];
+      expect(setCalls[setCalls.length - 1][0]).toEqual(
+        expect.objectContaining({
+          outcome: DisputeOutcome.MUTUAL,
+          resolution: 'An earlier ruling that is still on the row.',
+          adminNotes: 'An earlier internal note.',
+        }),
+      );
+    });
+
+    it('B2: a NONE result writes explicit nulls for the money amount and payment', async () => {
+      disputeRepo.findOne.mockResolvedValueOnce(
+        disputeRaisedByCustomer(DisputeStatus.UNDER_REVIEW),
+      );
+
+      await service.resolve(admin, 5, {
+        outcome: DisputeOutcome.MUTUAL,
+        resolution: 'Both parties settled this between themselves.',
+      });
+
+      const setCalls = updateQb.set.mock.calls as [Record<string, unknown>][];
+      expect(setCalls[setCalls.length - 1][0]).toEqual({
+        moneyAction: DisputeMoneyAction.NONE,
+        moneyAmount: null,
+        moneyPaymentId: null,
+      });
+    });
+
     it('is safe under concurrent resolution — the loser gets a clear message and never moves money', async () => {
       withHeldPayment();
       // The conditional UPDATE matched no row: someone else resolved it first.

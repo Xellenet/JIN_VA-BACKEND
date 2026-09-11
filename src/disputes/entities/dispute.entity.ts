@@ -76,10 +76,22 @@ export class Dispute {
 
   /** DR1: admin-only internal notes. Never exposed on a party-facing read. */
   @Column({ name: 'admin_notes', type: 'text', nullable: true })
-  adminNotes?: string;
+  adminNotes?: string | null;
 
+  /**
+   * Every column a ruling writes is typed `| null` from here down,
+   * deliberately: a failed money action has to be able to *clear* them, and
+   * `undefined` cannot express that. TypeORM skips an `undefined` property —
+   * `save()` reads it as "not provided" and `UpdateQueryBuilder` strips it
+   * from the statement outright ("it doesn't make sense to update undefined
+   * properties, so just skip them") — so only an explicit `null` empties a
+   * nullable column. Passing `undefined` is what left a rolled-back ruling's
+   * verdict, note, resolver and timestamp on the row (qa-report.md
+   * QA-DC1-01, security-report.md B2), the same defect `1d5ce20` fixed for
+   * `User.bannedAt`/`suspendedAt`.
+   */
   @Column({ name: 'resolution', type: 'text', nullable: true })
-  resolution?: string;
+  resolution?: string | null;
 
   /**
    * DR1: which of the three PRD verdicts the admin ruled. Set only on
@@ -87,13 +99,18 @@ export class Dispute {
    * exactly as it does today.
    */
   @Column({ name: 'outcome', type: 'varchar', length: 20, nullable: true })
-  outcome?: DisputeOutcome;
+  outcome?: DisputeOutcome | null;
 
   /**
    * DR2: what actually happened to the money. `NONE` is a real, common answer
    * (MUTUAL verdict, no linked payment, or a payment already
    * refunded/released), and is recorded explicitly rather than left null so a
    * reader can tell "we decided no money moves" from "nobody has ruled yet".
+   *
+   * Together with `moneyPaymentId` this is also the *claim* on a payment: it
+   * is written before the provider call so the partial unique index
+   * `uq_disputes_money_payment` can stop a sibling dispute moving the same
+   * money concurrently (B3), and cleared again if the movement fails.
    */
   @Column({
     name: 'money_action',
@@ -101,9 +118,13 @@ export class Dispute {
     length: 20,
     nullable: true,
   })
-  moneyAction?: DisputeMoneyAction;
+  moneyAction?: DisputeMoneyAction | null;
 
-  /** DR2: GHS amount actually moved by the money action. Null when NONE. */
+  /**
+   * DR2: GHS amount actually moved by the money action. Null when NONE, and
+   * null while a movement is still in flight — unlike `moneyAction`, this is
+   * only ever written from a *completed* movement.
+   */
   @Column({
     name: 'money_amount',
     type: 'decimal',
@@ -111,7 +132,7 @@ export class Dispute {
     scale: 2,
     nullable: true,
   })
-  moneyAmount?: number;
+  moneyAmount?: number | null;
 
   /**
    * DR2: the payment the money action was carried out against. Deliberately
@@ -119,17 +140,17 @@ export class Dispute {
    * ruling time and must survive the payment row being removed.
    */
   @Column({ name: 'money_payment_id', type: 'int', nullable: true })
-  moneyPaymentId?: number;
+  moneyPaymentId?: number | null;
 
   @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'resolved_by_id' })
-  resolvedBy?: User;
+  resolvedBy?: User | null;
 
   @Column({ name: 'resolved_by_id', nullable: true })
-  resolvedById?: number;
+  resolvedById?: number | null;
 
   @Column({ name: 'resolved_at', type: 'timestamptz', nullable: true })
-  resolvedAt?: Date;
+  resolvedAt?: Date | null;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;
