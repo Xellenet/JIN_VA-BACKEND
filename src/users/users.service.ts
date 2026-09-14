@@ -239,10 +239,16 @@ export class UsersService {
    * it was, so restoring is a single column going back to `NULL`.
    *
    * @param userId - The ID of the authenticated user (from `req.user.id`).
+   * L4: also refused with a distinct 409 when the caller is an ADMIN and no
+   * other usable admin account remains — the one deletion here that resolving
+   * something cannot clear, and the one that is genuinely unrecoverable
+   * (ADMIN is seed-only and there is no admin-side restore tooling).
+   *
    * @returns `{ message, data }` carrying `deletedAt` and the server-computed
    *   purge date, so the client never computes the deadline itself.
    * @throws {NotFoundException} When no active user with the given ID exists.
-   * @throws {ConflictException} When the account has live commitments (C1.1).
+   * @throws {ConflictException} When the account has live commitments (C1.1),
+   *   or is the platform's last usable administrator (L4).
    */
   async deleteMe(
     userId: number,
@@ -252,9 +258,12 @@ export class UsersService {
       throw new NotFoundException(`User with ID ${userId} not found`);
     }
 
-    // C1.1: checked before anything is mutated, so a refusal leaves the
-    // account completely untouched (tokens included).
-    await this.accountCommitments.assertDeletable(userId);
+    // C1.1 + L4: checked before anything is mutated, so a refusal leaves the
+    // account completely untouched (tokens included) and — per item 2 — the
+    // controller clears no cookie. The role comes from the row just loaded,
+    // never from the caller's token: the token is the thing an attacker would
+    // hold, and this decides whether the last-administrator guard applies.
+    await this.accountCommitments.assertDeletable(userId, user.role);
 
     await this.userTokenService.revokeRefreshTokenForUser(userId);
     await this.usersRepository.softDelete({ id: userId });

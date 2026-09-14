@@ -27,6 +27,23 @@ export const ERROR_MESSAGES = {
     DELETION_BLOCKED: (blockers: string[]) =>
       `Your account can't be deleted yet — ${joinClauses(blockers)}. ` +
       `Resolve these first, then try again.`,
+    /**
+     * L4: the deletion that cannot be undone by resolving anything. An ADMIN
+     * account is seed-only (S3 blocks the role on public registration) and
+     * there is no admin tooling to view, restore or force-purge a deleted
+     * account, so an admin who self-deletes leaves the platform with no
+     * administrative capability for 30 days and then permanently.
+     *
+     * Phrased as the consequence, not as a count: it deliberately does not
+     * say how many admin accounts exist. Amount-free and digit-free like the
+     * live-commitments refusal, and it follows the same "Your account can't
+     * be deleted …, then try again." shape so any surface rendering a backend
+     * refusal verbatim shows something sensible.
+     */
+    DELETION_BLOCKED_LAST_ADMIN:
+      `Your account can't be deleted — deleting it would leave JinVa without ` +
+      `an administrator. Another administrator account has to be in place ` +
+      `first, then try again.`,
   },
   AUTH: {
     INVALID_CREDENTIALS: 'Invalid email or password',

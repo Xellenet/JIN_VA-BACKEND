@@ -1,14 +1,16 @@
 import { ConflictException, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, Repository } from 'typeorm';
+import { Brackets, IsNull, Not, Repository } from 'typeorm';
 import { Booking } from '../bookings/entities/booking.entity';
 import { Job } from '@jobs/entities/job.entity';
 import { Payment } from '../payments/entities/payment.entity';
 import { Dispute } from '../disputes/entities/dispute.entity';
+import { User } from './entities/user.entity';
 import {
   BookingStatus,
   DisputeStatus,
   PaymentStatus,
+  Role,
   Status,
 } from '@common/types/enums';
 import { ERROR_MESSAGES } from '@common/constants/error-messages.constants';
@@ -65,8 +67,9 @@ export interface DeletionBlocker {
 }
 
 /**
- * C1.1: answers one question — "does this account still owe anybody
- * anything?" — for `UsersService.deleteMe()`.
+ * C1.1: answers one question — "may this account be deleted?" — for
+ * `UsersService.deleteMe()`: does it still owe anybody anything, and (L4)
+ * would deleting it leave the platform with no administrator?
  *
  * It exists as its own provider rather than as more methods on `UsersService`
  * because the answer spans four other modules' tables (bookings, jobs,
@@ -91,6 +94,9 @@ export class AccountCommitmentsService {
     private readonly paymentsRepository: Repository<Payment>,
     @InjectRepository(Dispute)
     private readonly disputesRepository: Repository<Dispute>,
+    /** L4: count-only, for the last-administrator guard below. */
+    @InjectRepository(User)
+    private readonly usersRepository: Repository<User>,
   ) {}
 
   /**
@@ -98,9 +104,31 @@ export class AccountCommitmentsService {
    * returns quietly when nothing is.
    *
    * @param userId - The account being deleted.
-   * @throws {ConflictException} When any live commitment exists.
+   * @param role - That account's role, read from the database row rather than
+   *   from the caller's token, since it decides whether the last-administrator
+   *   guard applies at all.
+   * @throws {ConflictException} When the caller is the platform's last usable
+   *   administrator (`LAST_ADMIN_CANNOT_DELETE`), or when any live commitment
+   *   exists (`ACCOUNT_HAS_LIVE_COMMITMENTS`).
    */
-  async assertDeletable(userId: number): Promise<void> {
+  async assertDeletable(userId: number, role: Role): Promise<void> {
+    // L4 first, and on its own. The two refusals must never stack into one
+    // confusing double message, and this is the one that takes precedence
+    // because it is the only one the user cannot clear by resolving something:
+    // "resolve these first, then try again" would be wrong advice for an
+    // account that is refused no matter what it settles. Checked before the
+    // four commitment counts, so the refusal also costs one query instead of
+    // five.
+    if (role === Role.ADMIN && !(await this.hasAnotherUsableAdmin(userId))) {
+      this.logger.warn(
+        `Refused account deletion for user ${userId}: last usable ADMIN account`,
+      );
+      throw new ConflictException({
+        message: ERROR_MESSAGES.USER.DELETION_BLOCKED_LAST_ADMIN,
+        errorCode: 'LAST_ADMIN_CANNOT_DELETE',
+      });
+    }
+
     const blockers = await this.findDeletionBlockers(userId);
     if (blockers.length === 0) return;
 
@@ -115,6 +143,43 @@ export class AccountCommitmentsService {
       ),
       errorCode: 'ACCOUNT_HAS_LIVE_COMMITMENTS',
     });
+  }
+
+  /**
+   * L4: whether another administrator could still administer the platform if
+   * this account went away.
+   *
+   * Count-based rather than a blanket ban on admin deletion: an admin with a
+   * colleague in place is an ordinary account and deletes normally. What is
+   * refused is the deletion that leaves nobody, which is unrecoverable by
+   * design — ADMIN is seed-only (S3 rejects the role on public registration)
+   * and this round adds no admin tooling to restore or force-purge a deleted
+   * account, so the 30-day window elapses and then the capability is gone.
+   *
+   * **Usable is the operative word.** A second ADMIN row that cannot sign in
+   * and act is not cover, so a soft-deleted, purged, banned or suspended one
+   * does not count: `deletedAt`/`purgedAt` mean the row is on its own way out
+   * (and `JwtStrategy` refuses a soft-deleted principal), `isBanned` is
+   * refused at login by the same guard, and a suspended admin cannot transact.
+   * `deletedAt: IsNull()` is stated explicitly even though TypeORM's
+   * soft-delete filter would apply it anyway — the guarantee is too important
+   * to leave implicit in a default.
+   *
+   * Returns a boolean, never the count: the refusal must not be able to
+   * disclose how many administrators the platform has.
+   */
+  private async hasAnotherUsableAdmin(userId: number): Promise<boolean> {
+    const others = await this.usersRepository.count({
+      where: {
+        id: Not(userId),
+        role: Role.ADMIN,
+        deletedAt: IsNull(),
+        purgedAt: IsNull(),
+        isBanned: false,
+        isSuspended: false,
+      },
+    });
+    return others > 0;
   }
 
   /**
