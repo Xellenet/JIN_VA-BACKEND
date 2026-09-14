@@ -131,7 +131,15 @@ export class AuthService {
 
     this.emitIfArtisan(user);
 
-    return plainToInstance(UserResponseDto, user);
+    // L3: `user` is the entity `createUser` just saved, which still carries the
+    // bcrypt hash in memory regardless of the column's `select: false` — so
+    // this response used to hand the caller back their own freshly-computed
+    // hash. `excludeExtraneousValues` keeps the body to the fields
+    // `UserResponseDto` actually declares (the DTO no longer declares
+    // `password` at all); see the DTO's own note for why both halves exist.
+    return plainToInstance(UserResponseDto, user, {
+      excludeExtraneousValues: true,
+    });
   }
 
   /**
@@ -231,7 +239,9 @@ export class AuthService {
       access_token,
       expires_at,
       message: SUCCESS_MESSAGES.AUTH.USER_LOGGED_IN,
-      data: plainToInstance(UserResponseDto, user),
+      data: plainToInstance(UserResponseDto, user, {
+        excludeExtraneousValues: true,
+      }),
     });
     return { result, refreshToken: refresh_token };
   }
@@ -406,7 +416,9 @@ export class AuthService {
           message: SUCCESS_MESSAGES.AUTH.ACCOUNT_RESTORED_VERIFY_EMAIL,
           restored: true,
           requiresEmailVerification: true,
-          data: plainToInstance(UserResponseDto, user),
+          data: plainToInstance(UserResponseDto, user, {
+            excludeExtraneousValues: true,
+          }),
         }),
       };
     }
@@ -423,7 +435,9 @@ export class AuthService {
         requiresEmailVerification: false,
         access_token,
         expires_at,
-        data: plainToInstance(UserResponseDto, user),
+        data: plainToInstance(UserResponseDto, user, {
+          excludeExtraneousValues: true,
+        }),
       }),
       refreshToken: refresh_token,
     };
@@ -657,7 +671,9 @@ export class AuthService {
       access_token,
       expires_at,
       message: SUCCESS_MESSAGES.AUTH.TOKENS_REFRESHED,
-      data: plainToInstance(UserResponseDto, user),
+      data: plainToInstance(UserResponseDto, user, {
+        excludeExtraneousValues: true,
+      }),
     });
     return { result, refreshToken: refresh_token };
   }
@@ -720,7 +736,13 @@ export class AuthService {
       access_token,
       expires_at,
       message: SUCCESS_MESSAGES.AUTH.PASSWORD_CHANGED,
-      data: plainToInstance(UserResponseDto, user),
+      // L3: `user.password` was reassigned above with the hash of the password
+      // the caller just typed, and this is the object being serialised — the
+      // exclusion (plus the DTO no longer declaring `password`) is what keeps
+      // it out of the body.
+      data: plainToInstance(UserResponseDto, user, {
+        excludeExtraneousValues: true,
+      }),
     });
     return { result, refreshToken: refresh_token };
   }
@@ -845,7 +867,9 @@ export class AuthService {
       access_token,
       expires_at,
       message: SUCCESS_MESSAGES.AUTH.USER_LOGGED_IN,
-      data: plainToInstance(UserResponseDto, user),
+      data: plainToInstance(UserResponseDto, user, {
+        excludeExtraneousValues: true,
+      }),
     });
     return { result, refreshToken: refresh_token };
   }

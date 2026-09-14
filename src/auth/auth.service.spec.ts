@@ -23,6 +23,7 @@ import { VARIABLES } from '@common/constants/variables.constants';
 import { ERROR_MESSAGES } from '@common/constants/error-messages.constants';
 import { MailEvent } from 'mail/events/mail.events';
 import { addDays, subDays } from 'date-fns';
+import { plainToInstance } from 'class-transformer';
 
 describe('AuthService', () => {
   let service: AuthService;
@@ -38,6 +39,7 @@ describe('AuthService', () => {
   };
   const mockUsersService = {
     findUserByEmail: jest.fn(),
+    findUserById: jest.fn(),
     isEmailRegistered: jest.fn(),
     createUser: jest.fn(),
     validatePassword: jest.fn(),
@@ -989,6 +991,163 @@ describe('AuthService', () => {
         MailEvent.ACCOUNT_RESTORED,
         expect.anything(),
       );
+    });
+  });
+
+  /**
+   * Item 1 (security `L3` / qa `B5`): no auth response may carry credential
+   * material or admin-only moderation state.
+   *
+   * Register and change-password are asserted specifically because they are
+   * the two sites where the hash is genuinely non-empty: both serialise an
+   * in-memory `User` that carries a freshly-computed hash regardless of the
+   * column's `select: false`, and change-password — the one QA never tested —
+   * returns the hash of the password the caller typed a moment earlier.
+   *
+   * Assertions run against the JSON the client would actually receive
+   * (`JSON.parse(JSON.stringify(…))`), not against the instance, so a key that
+   * exists with an `undefined` value cannot pass by accident and a key that
+   * really would be serialised cannot hide.
+   */
+  describe('no credential material or admin-only fields in auth responses (L3/B5)', () => {
+    /** Everything a real `users` row carries into these two call sites. */
+    const rowWithSecrets = () => ({
+      id: 42,
+      email: 'hygiene@example.com',
+      username: 'hygiene',
+      firstname: 'Hy',
+      lastname: 'Giene',
+      phoneNumber: '024-000-0000',
+      role: Role.ARTISAN,
+      accountVerified: true,
+      // Credential material. Present in memory despite `select: false`.
+      password: '$2b$12$AbCdEfGhIjKlMnOpQrStUvWxYz0123456789abcdefg',
+      // Admin-only moderation state — `suspensionReason` is documented on the
+      // entity as "shown to the admin, not to the user".
+      isBanned: true,
+      bannedAt: new Date('2026-01-01T00:00:00.000Z'),
+      bannedById: 3,
+      isSuspended: true,
+      suspendedAt: new Date('2026-01-02T00:00:00.000Z'),
+      suspendedById: 3,
+      suspensionReason: 'internal moderation note',
+      deletedAt: new Date('2026-01-03T00:00:00.000Z'),
+      purgedAt: null,
+      createdAt: new Date('2025-12-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-01-04T00:00:00.000Z'),
+    });
+
+    const FORBIDDEN_KEYS = [
+      'password',
+      'isBanned',
+      'bannedAt',
+      'bannedById',
+      'isSuspended',
+      'suspendedAt',
+      'suspendedById',
+      'suspensionReason',
+      'deletedAt',
+      'purgedAt',
+    ];
+
+    /** What the frontend drives redirects and the dashboard shell from. */
+    const REQUIRED_KEYS = ['id', 'email', 'role'];
+
+    const asWireFormat = (payload: unknown): Record<string, unknown> =>
+      JSON.parse(JSON.stringify(payload)) as Record<string, unknown>;
+
+    const assertClean = (userPayload: unknown, whole: unknown) => {
+      // No `$2b$`-prefixed string anywhere in the response, at any depth.
+      expect(JSON.stringify(whole)).not.toContain('$2b$');
+      const keys = Object.keys(asWireFormat(userPayload));
+      for (const key of FORBIDDEN_KEYS) {
+        expect(keys).not.toContain(key);
+      }
+      for (const key of REQUIRED_KEYS) {
+        expect(keys).toContain(key);
+      }
+    };
+
+    it('POST /auth/register returns no password key and no hash anywhere in the body', async () => {
+      mockUsersService.isEmailRegistered.mockResolvedValueOnce(false);
+      mockUsersService.createUser.mockResolvedValueOnce({
+        data: rowWithSecrets(),
+      });
+      mockUserTokenService.createToken.mockResolvedValueOnce({
+        token: 'verification-token',
+      });
+
+      const result = await service.registerUser({
+        email: 'hygiene@example.com',
+        password: 'CorrectHorse1!',
+        role: Role.ARTISAN,
+      } as CreateUserDto);
+
+      assertClean(result, result);
+    });
+
+    it('POST /auth/change-password returns no password key, including the hash it just computed', async () => {
+      const row = rowWithSecrets();
+      mockUsersService.findUserById.mockResolvedValueOnce(row);
+      mockUsersService.validatePassword.mockResolvedValueOnce(true);
+      mockUsersService.updateUserData.mockResolvedValueOnce(undefined);
+      mockUserTokenService.revokeRefreshTokenForUser.mockResolvedValueOnce(
+        undefined,
+      );
+      mockUserTokenService.createJWTTokens.mockResolvedValueOnce({
+        access_token: 'access-token',
+        refresh_token: 'refresh-token',
+        expires_at: new Date(),
+      });
+
+      const { result } = await service.changePassword(
+        {
+          currentPassword: 'CorrectHorse1!',
+          newPassword: 'NewHorse1!',
+          confirmNewPassword: 'NewHorse1!',
+        } as never,
+        row.id,
+      );
+
+      // The hash really was rewritten onto the object being serialised —
+      // without that, this test would pass for the wrong reason.
+      expect(row.password.startsWith('$2b$')).toBe(true);
+      expect(row.password).not.toBe(rowWithSecrets().password);
+      assertClean(result.data, result);
+    });
+
+    it('POST /auth/login carries only declared profile fields', async () => {
+      mockUsersService.findUserByEmail.mockResolvedValueOnce(rowWithSecrets());
+      mockUserTokenService.createJWTTokens.mockResolvedValueOnce({
+        access_token: 'access-token',
+        refresh_token: 'refresh-token',
+        expires_at: new Date(),
+      });
+
+      const { result } = await service.loginUser({
+        email: 'hygiene@example.com',
+        password: 'CorrectHorse1!',
+      });
+
+      assertClean(result.data, result);
+    });
+
+    /**
+     * The structural half of the fix, and the one that outlives this round: a
+     * future call site that forgets `excludeExtraneousValues` must still be
+     * unable to leak. Deleting the `password` property was not enough on its
+     * own — with the option off, class-transformer copies every own property
+     * of the source — so `UserResponseDto` carries a class-level `@Exclude()`.
+     */
+    it('cannot leak the hash even from a call site that forgets the exclusion option', () => {
+      const dto = plainToInstance(UserResponseDto, rowWithSecrets());
+
+      const keys = Object.keys(asWireFormat(dto));
+      expect(JSON.stringify(dto)).not.toContain('$2b$');
+      for (const key of FORBIDDEN_KEYS) {
+        expect(keys).not.toContain(key);
+      }
+      expect(keys).toEqual(expect.arrayContaining(REQUIRED_KEYS));
     });
   });
 });
