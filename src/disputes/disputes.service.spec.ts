@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { QueryFailedError } from 'typeorm';
 import {
   BadRequestException,
   ForbiddenException,
@@ -71,6 +72,21 @@ describe('DisputesService', () => {
       },
       raisedBy: customerUser,
     }) as unknown as Dispute;
+
+  /** A Postgres unique violation as TypeORM surfaces it. */
+  const uniqueViolation = (constraint: string) => {
+    const driverError = Object.assign(new Error('duplicate key value'), {
+      code: '23505',
+      constraint,
+    });
+    return Object.assign(
+      new QueryFailedError('UPDATE disputes SET ...', [], driverError),
+      { code: '23505', constraint },
+    );
+  };
+
+  /** The specific index that makes a payment claimable by one dispute (B3). */
+  const moneyClaimConflict = () => uniqueViolation('uq_disputes_money_payment');
 
   const heldPayment = (over: Partial<Payment> = {}) =>
     ({
@@ -236,6 +252,35 @@ describe('DisputesService', () => {
       await service.startReview(admin.id, 5);
 
       expect(emitter.emit).not.toHaveBeenCalled();
+    });
+
+    /** B1, lower-stakes instance: same full-entity `save()` defect. */
+    it('B1: starts a review with a status-guarded UPDATE, never a full-entity save', async () => {
+      disputeRepo.findOne.mockResolvedValueOnce(
+        disputeRaisedByCustomer(DisputeStatus.OPEN),
+      );
+
+      await service.startReview(admin.id, 5);
+
+      expect(disputeRepo.save).not.toHaveBeenCalled();
+      expect(updateQb.set).toHaveBeenCalledWith({
+        status: DisputeStatus.UNDER_REVIEW,
+      });
+      expect(updateQb.andWhere).toHaveBeenCalledWith('status = :open', {
+        open: DisputeStatus.OPEN,
+      });
+    });
+
+    it('B1: refuses to start a review on a dispute resolved mid-request', async () => {
+      disputeRepo.findOne
+        .mockResolvedValueOnce(disputeRaisedByCustomer(DisputeStatus.OPEN))
+        .mockResolvedValueOnce(disputeRaisedByCustomer(DisputeStatus.RESOLVED));
+      updateQb.execute.mockResolvedValueOnce({ affected: 0 });
+
+      await expect(service.startReview(admin.id, 5)).rejects.toThrow(
+        /current status is RESOLVED/i,
+      );
+      expect(disputeRepo.save).not.toHaveBeenCalled();
     });
 
     it.each([DisputeStatus.RESOLVED, DisputeStatus.CLOSED])(
@@ -458,6 +503,211 @@ describe('DisputesService', () => {
       expect(auditService.record).not.toHaveBeenCalled();
     });
 
+    /**
+     * B2 / QA-DC1-01. The rollback used to pass `previousOutcome ?? undefined`
+     * and friends, and `UpdateQueryBuilder` strips `undefined` values from the
+     * statement — so on a first ruling (where every `previous*` is null)
+     * nothing but `status` was actually restored.
+     */
+    it('B2: the rollback clears every verdict column with an explicit null, not undefined', async () => {
+      withHeldPayment();
+      paymentsService.adminRefund.mockRejectedValueOnce(
+        new Error('Paystack refund declined: insufficient settlement balance'),
+      );
+
+      await expect(
+        service.resolve(admin, 5, {
+          outcome: DisputeOutcome.REFUND_CLIENT,
+          resolution: 'Ruling for the client on the evidence.',
+          adminNotes: 'Internal note attached to a ruling that failed.',
+        }),
+      ).rejects.toThrow(BadRequestException);
+
+      const setCalls = updateQb.set.mock.calls as [Record<string, unknown>][];
+      const rollback = setCalls[setCalls.length - 1][0];
+      expect(rollback).toEqual({
+        status: DisputeStatus.UNDER_REVIEW,
+        outcome: null,
+        resolution: null,
+        adminNotes: null,
+        resolvedById: null,
+        resolvedAt: null,
+        moneyAction: null,
+        moneyAmount: null,
+        moneyPaymentId: null,
+      });
+      // The bug in one assertion: not one of them may be `undefined`, because
+      // an `undefined` is silently dropped from the UPDATE.
+      for (const value of Object.values(rollback)) {
+        expect(value).not.toBeUndefined();
+      }
+    });
+
+    it('B2: a rollback onto a dispute that already had a verdict restores that verdict', async () => {
+      // A second ruling on a dispute that was previously resolved and reopened
+      // by hand: the rollback must restore what was there, not blanket-null it.
+      disputeRepo.findOne
+        .mockResolvedValueOnce({
+          ...disputeRaisedByCustomer(DisputeStatus.UNDER_REVIEW),
+          outcome: DisputeOutcome.MUTUAL,
+          resolution: 'An earlier ruling that is still on the row.',
+          adminNotes: 'An earlier internal note.',
+        } as Dispute)
+        .mockResolvedValueOnce(null);
+      jobRepo.findOne.mockResolvedValue({
+        id: 200,
+        service: null,
+      } as unknown as Job);
+      paymentRepo.findOne.mockResolvedValue(heldPayment());
+      paymentsService.adminRefund.mockRejectedValueOnce(
+        new Error('Paystack refund declined'),
+      );
+
+      await expect(
+        service.resolve(admin, 5, {
+          outcome: DisputeOutcome.REFUND_CLIENT,
+          resolution: 'Replacing the earlier ruling with a refund.',
+        }),
+      ).rejects.toThrow(BadRequestException);
+
+      const setCalls = updateQb.set.mock.calls as [Record<string, unknown>][];
+      expect(setCalls[setCalls.length - 1][0]).toEqual(
+        expect.objectContaining({
+          outcome: DisputeOutcome.MUTUAL,
+          resolution: 'An earlier ruling that is still on the row.',
+          adminNotes: 'An earlier internal note.',
+        }),
+      );
+    });
+
+    it('B2: a NONE result writes explicit nulls for the money amount and payment', async () => {
+      disputeRepo.findOne.mockResolvedValueOnce(
+        disputeRaisedByCustomer(DisputeStatus.UNDER_REVIEW),
+      );
+
+      await service.resolve(admin, 5, {
+        outcome: DisputeOutcome.MUTUAL,
+        resolution: 'Both parties settled this between themselves.',
+      });
+
+      const setCalls = updateQb.set.mock.calls as [Record<string, unknown>][];
+      expect(setCalls[setCalls.length - 1][0]).toEqual({
+        moneyAction: DisputeMoneyAction.NONE,
+        moneyAmount: null,
+        moneyPaymentId: null,
+      });
+    });
+
+    /**
+     * B3. The sibling guard reads `moneyAction`, which used to be written
+     * only *after* the provider call, so two disputes on one payment could
+     * both pass it and both move money. The claim now writes
+     * `moneyAction`/`moneyPaymentId` up front, which puts
+     * `uq_disputes_money_payment` in front of the provider call instead of
+     * behind it.
+     */
+    it('B3: claims the payment in the same UPDATE as the verdict, before the provider call', async () => {
+      withHeldPayment();
+
+      await service.resolve(admin, 5, {
+        outcome: DisputeOutcome.REFUND_CLIENT,
+        resolution: 'Client is entitled to their money back.',
+      });
+
+      const setCalls = updateQb.set.mock.calls as [Record<string, unknown>][];
+      expect(setCalls[0][0]).toEqual(
+        expect.objectContaining({
+          status: DisputeStatus.RESOLVED,
+          moneyAction: DisputeMoneyAction.REFUND,
+          moneyPaymentId: 300,
+          // The amount is only ever written from a completed movement.
+          moneyAmount: null,
+        }),
+      );
+      // The claim really did precede the provider call.
+      expect(updateQb.execute.mock.invocationCallOrder[0]).toBeLessThan(
+        paymentsService.adminRefund.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('B3: a verdict that moves no money releases the payment claim instead of holding it', async () => {
+      disputeRepo.findOne.mockResolvedValueOnce(
+        disputeRaisedByCustomer(DisputeStatus.UNDER_REVIEW),
+      );
+
+      await service.resolve(admin, 5, {
+        outcome: DisputeOutcome.MUTUAL,
+        resolution: 'Both parties settled this between themselves.',
+      });
+
+      const setCalls = updateQb.set.mock.calls as [Record<string, unknown>][];
+      expect(setCalls[0][0]).toEqual(
+        expect.objectContaining({ moneyAction: null, moneyPaymentId: null }),
+      );
+    });
+
+    it('B3: a sibling claiming the payment first degrades to NONE instead of a 500', async () => {
+      withHeldPayment();
+      // The claim loses the race on `uq_disputes_money_payment`: another
+      // dispute on this booking took the payment between our plan and our
+      // write. Postgres raises this *before* any money can move.
+      updateQb.execute.mockRejectedValueOnce(moneyClaimConflict());
+
+      const result = await service.resolve(admin, 5, {
+        outcome: DisputeOutcome.REFUND_CLIENT,
+        resolution: 'Ruling for the client on the evidence provided.',
+      });
+
+      // No second movement, no unhandled failure — the same answer the serial
+      // sibling guard gives.
+      expect(paymentsService.adminRefund).not.toHaveBeenCalled();
+      expect(result.data.moneyAction).toBe(DisputeMoneyAction.NONE);
+      expect(result.data.moneySkippedReason).toMatch(
+        /claimed the money action on this payment first/i,
+      );
+      // And the verdict itself is still recorded: the retry writes NONE.
+      const setCalls = updateQb.set.mock.calls as [Record<string, unknown>][];
+      expect(setCalls[1][0]).toEqual(
+        expect.objectContaining({
+          status: DisputeStatus.RESOLVED,
+          outcome: DisputeOutcome.REFUND_CLIENT,
+          moneyAction: null,
+          moneyPaymentId: null,
+        }),
+      );
+    });
+
+    it('B3: any other unique violation still propagates rather than being read as a sibling claim', async () => {
+      withHeldPayment();
+      updateQb.execute.mockRejectedValueOnce(
+        uniqueViolation('some_other_unique_index'),
+      );
+
+      await expect(
+        service.resolve(admin, 5, {
+          outcome: DisputeOutcome.REFUND_CLIENT,
+          resolution: 'Ruling for the client on the evidence provided.',
+        }),
+      ).rejects.toThrow(QueryFailedError);
+      expect(paymentsService.adminRefund).not.toHaveBeenCalled();
+    });
+
+    it('B3: a failure recording the money result never becomes a 500 after money moved', async () => {
+      withHeldPayment();
+      // Claim succeeds, refund succeeds, the final "what moved" write fails.
+      updateQb.execute
+        .mockResolvedValueOnce({ affected: 1 })
+        .mockRejectedValueOnce(new Error('connection terminated unexpectedly'));
+
+      const result = await service.resolve(admin, 5, {
+        outcome: DisputeOutcome.REFUND_CLIENT,
+        resolution: 'Client is entitled to their money back.',
+      });
+
+      expect(paymentsService.adminRefund).toHaveBeenCalledTimes(1);
+      expect(result.data.moneyAction).toBe(DisputeMoneyAction.REFUND);
+    });
+
     it('is safe under concurrent resolution — the loser gets a clear message and never moves money', async () => {
       withHeldPayment();
       // The conditional UPDATE matched no row: someone else resolved it first.
@@ -530,13 +780,78 @@ describe('DisputesService', () => {
         response: 'I attended but nobody was there to let me in.',
       });
 
-      expect(disputeRepo.save).toHaveBeenCalledWith(
+      expect(updateQb.set).toHaveBeenCalledWith(
         expect.objectContaining({
           response: 'I attended but nobody was there to let me in.',
           respondedById: artisanUser.id,
         }),
       );
       expect(result.data.viewerRole).toBe('COUNTERPARTY');
+    });
+
+    /**
+     * B1 (HIGH). The response used to be written with `repo.save(dispute)` on
+     * the entity loaded at the top of the request, and `save()` writes back
+     * every column that differs from a fresh read — so a `resolve()` that
+     * committed in between was silently reverted, taking a settled,
+     * already-paid dispute back to `OPEN`.
+     */
+    it('B1: writes only the three response columns, never the whole row', async () => {
+      disputeRepo.findOne.mockResolvedValueOnce(
+        disputeRaisedByCustomer(DisputeStatus.UNDER_REVIEW),
+      );
+
+      await service.respond(artisanUser.id, 5, {
+        response: 'I attended but nobody was there to let me in.',
+      });
+
+      // No full-entity save anywhere on this path.
+      expect(disputeRepo.save).not.toHaveBeenCalled();
+      // And the write cannot carry a status with it.
+      const setCalls = updateQb.set.mock.calls as [Record<string, unknown>][];
+      const written = setCalls[0][0];
+      expect(Object.keys(written).sort()).toEqual([
+        'respondedAt',
+        'respondedById',
+        'response',
+      ]);
+      expect(written).not.toHaveProperty('status');
+    });
+
+    it('B1: guards both preconditions in the WHERE clause, not just in the read', async () => {
+      disputeRepo.findOne.mockResolvedValueOnce(
+        disputeRaisedByCustomer(DisputeStatus.OPEN),
+      );
+
+      await service.respond(artisanUser.id, 5, {
+        response: 'Here is my account of what happened on the day.',
+      });
+
+      expect(updateQb.andWhere).toHaveBeenCalledWith('response IS NULL');
+      expect(updateQb.andWhere).toHaveBeenCalledWith(
+        'status IN (:...active)',
+        expect.objectContaining({
+          active: [DisputeStatus.OPEN, DisputeStatus.UNDER_REVIEW],
+        }),
+      );
+    });
+
+    it('B1: a resolve committing mid-request rejects the response instead of reverting the ruling', async () => {
+      disputeRepo.findOne
+        // The party's load: still actionable at this point.
+        .mockResolvedValueOnce(disputeRaisedByCustomer(DisputeStatus.OPEN))
+        // The re-read after the conditional write matched nothing: an admin
+        // ruled in between.
+        .mockResolvedValueOnce(disputeRaisedByCustomer(DisputeStatus.RESOLVED));
+      updateQb.execute.mockResolvedValueOnce({ affected: 0 });
+
+      await expect(
+        service.respond(artisanUser.id, 5, {
+          response: 'Submitting my side just as the admin rules on it.',
+        }),
+      ).rejects.toThrow(/RESOLVED and can no longer receive a response/i);
+
+      expect(disputeRepo.save).not.toHaveBeenCalled();
     });
 
     it('refuses a second response', async () => {

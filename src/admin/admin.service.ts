@@ -162,8 +162,11 @@ export class AdminService {
     if (!user.isBanned)
       throw new BadRequestException('User is not currently banned.');
     user.isBanned = false;
-    user.bannedAt = undefined;
-    user.bannedById = undefined;
+    // `null`, not `undefined`: TypeORM's `save()` omits `undefined` properties
+    // from the UPDATE, so these two columns kept the previous ban's timestamp
+    // and actor forever and an unbanned account still read as banned-at-X.
+    user.bannedAt = null;
+    user.bannedById = null;
     await this.usersRepo.save(user);
 
     await this.recordUserAction(admin, user, AdminActionType.USER_UNBAN, null);
@@ -211,16 +214,27 @@ export class AdminService {
     };
   }
 
-  /** AT3: full reactivation — every restriction the suspension applied is lifted. */
+  /**
+   * AT3: full reactivation — every restriction the suspension applied is
+   * lifted, and every trace of it is cleared off the row.
+   *
+   * The clears are `null`, not `undefined`. TypeORM's `save()` treats an
+   * `undefined` property as "not provided" and leaves it out of the UPDATE
+   * entirely, so reactivation used to flip `isSuspended` to false while
+   * leaving `suspendedAt`, `suspendedById` and `suspensionReason` populated.
+   * The account worked again, but every admin surface reading those fields
+   * still showed it as suspended-on-X-because-Y — a reactivated user carrying
+   * a live-looking suspension reason indefinitely.
+   */
   async activateUser(admin: User, userId: number) {
     const user = await this.loadUserOrFail(userId);
     if (!user.isSuspended)
       throw new BadRequestException('User is not currently suspended.');
 
     user.isSuspended = false;
-    user.suspendedAt = undefined;
-    user.suspendedById = undefined;
-    user.suspensionReason = undefined;
+    user.suspendedAt = null;
+    user.suspendedById = null;
+    user.suspensionReason = null;
     await this.usersRepo.save(user);
 
     await this.recordUserAction(

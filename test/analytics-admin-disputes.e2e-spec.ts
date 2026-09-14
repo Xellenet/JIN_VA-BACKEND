@@ -10,18 +10,23 @@ import { User } from '@users/entities/user.entity';
 import { ArtisanProfile } from '@users/entities/artisan-profile.entity';
 import { ServiceEntity } from '@services/entities/service.entity';
 import { Booking } from '../src/bookings/entities/booking.entity';
+import { Job } from '@jobs/entities/job.entity';
 import { Dispute } from '../src/disputes/entities/dispute.entity';
 import { Notification } from '../src/notifications/entities/notification.entity';
 import { AdminAction } from '../src/admin-audit/entities/admin-action.entity';
 import { UserTokenService } from '@users/token.service';
+import { AdminAnalyticsService } from '../src/analytics/admin-analytics.service';
+import { DisputesService } from '../src/disputes/disputes.service';
 import {
   AdminActionType,
+  AnalyticsRange,
   BookingStatus,
   DisputeCategory,
   DisputeMoneyAction,
   DisputeOutcome,
   DisputeStatus,
   Role,
+  Status,
 } from '@common/types/enums';
 
 /**
@@ -63,11 +68,16 @@ function envelopeMessage(res: request.Response): string | undefined {
   return (res.body as Envelope<unknown>).message;
 }
 
+/** The rollup exactly as `AdminAnalyticsService.build()` returns it (DC2.4). */
+type Rollup = Awaited<ReturnType<AdminAnalyticsService['build']>>;
+
 interface AdminAnalytics {
   range: string;
   bucket: string;
   generatedAt: string;
   cached: boolean;
+  /** DC2.4: the sections that could not be computed. `[]` on a healthy rollup. */
+  degraded: string[];
   kpis: {
     totalUsers: number;
     grossRevenue: number;
@@ -120,6 +130,7 @@ interface PartyDispute {
   category: DisputeCategory;
   reason: string;
   response?: string;
+  booking?: { id: number };
   viewerRole: 'RAISER' | 'COUNTERPARTY';
   canRespond: boolean;
   outcome?: DisputeOutcome;
@@ -133,10 +144,13 @@ describe('Analytics, admin tooling & disputes (e2e)', () => {
   let profileRepo: Repository<ArtisanProfile>;
   let serviceRepo: Repository<ServiceEntity>;
   let bookingRepo: Repository<Booking>;
+  let jobRepo: Repository<Job>;
   let disputeRepo: Repository<Dispute>;
   let notificationRepo: Repository<Notification>;
   let auditRepo: Repository<AdminAction>;
   let tokenService: UserTokenService;
+  let analyticsService: AdminAnalyticsService;
+  let disputesService: DisputesService;
 
   let artisanUser: User;
   let artisanToken: string;
@@ -152,6 +166,8 @@ describe('Analytics, admin tooling & disputes (e2e)', () => {
   const createdDisputeIds: number[] = [];
   const createdBookingIds: number[] = [];
   const createdUserIds: number[] = [];
+  const createdJobIds: number[] = [];
+  const createdProfileIds: number[] = [];
 
   const server = () => app.getHttpServer();
   const uniq = Date.now();
@@ -259,10 +275,13 @@ describe('Analytics, admin tooling & disputes (e2e)', () => {
     profileRepo = moduleFixture.get(getRepositoryToken(ArtisanProfile));
     serviceRepo = moduleFixture.get(getRepositoryToken(ServiceEntity));
     bookingRepo = moduleFixture.get(getRepositoryToken(Booking));
+    jobRepo = moduleFixture.get(getRepositoryToken(Job));
     disputeRepo = moduleFixture.get(getRepositoryToken(Dispute));
     notificationRepo = moduleFixture.get(getRepositoryToken(Notification));
     auditRepo = moduleFixture.get(getRepositoryToken(AdminAction));
     tokenService = moduleFixture.get(UserTokenService);
+    analyticsService = moduleFixture.get(AdminAnalyticsService);
+    disputesService = moduleFixture.get(DisputesService);
 
     service = await serviceRepo.save(
       serviceRepo.create({
@@ -283,6 +302,7 @@ describe('Analytics, admin tooling & disputes (e2e)', () => {
         isProfileComplete: true,
       }),
     );
+    createdProfileIds.push(artisanProfile.id);
 
     ({ user: customer, token: customerToken } = await makeUser(
       'Customer',
@@ -326,10 +346,17 @@ describe('Analytics, admin tooling & disputes (e2e)', () => {
     if (createdDisputeIds.length) {
       await ignore(() => disputeRepo.delete({ id: In(createdDisputeIds) }));
     }
+    // Jobs hold an ON DELETE RESTRICT FK to the service, so they must be hard
+    // -deleted (soft-deleted rows included) before the service row goes.
+    if (createdJobIds.length) {
+      await ignore(() => jobRepo.delete({ id: In(createdJobIds) }));
+    }
     if (createdBookingIds.length) {
       await ignore(() => bookingRepo.delete({ id: In(createdBookingIds) }));
     }
-    await ignore(() => profileRepo.delete({ id: artisanProfile.id }));
+    if (createdProfileIds.length) {
+      await ignore(() => profileRepo.delete({ id: In(createdProfileIds) }));
+    }
     if (createdUserIds.length) {
       await ignore(() => userRepo.delete({ id: In(createdUserIds) }));
     }
@@ -812,6 +839,89 @@ describe('Analytics, admin tooling & disputes (e2e)', () => {
       expect(mine.length).toBeGreaterThan(0);
       expect(mine.every((d) => d.viewerRole === 'COUNTERPARTY')).toBe(true);
     });
+
+    /**
+     * DC3.6 (backend half). Both parties may each file one dispute on the same
+     * booking — the duplicate guard is per *raiser*
+     * (`{ bookingId, raisedById }`), not per booking. `GET /disputes/my` then
+     * returns two disputes with the same `booking.id` to both of them.
+     *
+     * The frontend's strip picks which dispute to link a viewer to using
+     * `viewerRole` and `canRespond` (it must prefer the one this viewer raised,
+     * then the one they can respond to, and never array order). That rule is
+     * only implementable if these two fields are derived **per row, per
+     * caller** — so this test pins exactly that, from both sides at once.
+     * Deliberately last in this block: the DP2 test above asserts the artisan
+     * is the counterparty on every dispute, which stops being true once the
+     * artisan files one of their own.
+     */
+    it('DC3.6: derives viewerRole and canRespond per row when both parties filed on one booking', async () => {
+      const booking = await makeBooking();
+      const byCustomer = await raiseDispute(customerToken, booking.id);
+      const byArtisan = await raiseDispute(
+        artisanToken,
+        booking.id,
+        DisputeCategory.CLIENT_NO_ACCESS,
+      );
+      expect(byCustomer).not.toBe(byArtisan);
+
+      const onThisBooking = async (token: string) => {
+        const res = await request(server())
+          .get('/api/v1/disputes/my')
+          .set('Authorization', `Bearer ${token}`);
+        expect(res.status).toBe(200);
+        return envelope<PartyDispute[]>(res).filter(
+          (d) => Number(d.booking?.id) === booking.id,
+        );
+      };
+
+      // Each party sees both disputes on the booking…
+      const customerView = await onThisBooking(customerToken);
+      const artisanView = await onThisBooking(artisanToken);
+      expect(customerView.map((d) => d.id).sort()).toEqual(
+        [byCustomer, byArtisan].sort(),
+      );
+      expect(artisanView.map((d) => d.id).sort()).toEqual(
+        [byCustomer, byArtisan].sort(),
+      );
+
+      // …but each row is labelled from that caller's own side, so the strip
+      // never has to guess and never has to fall back to array order.
+      const customerOwn = customerView.find((d) => d.id === byCustomer)!;
+      const customerAgainst = customerView.find((d) => d.id === byArtisan)!;
+      expect(customerOwn.viewerRole).toBe('RAISER');
+      expect(customerOwn.canRespond).toBe(false);
+      expect(customerAgainst.viewerRole).toBe('COUNTERPARTY');
+      expect(customerAgainst.canRespond).toBe(true);
+
+      const artisanOwn = artisanView.find((d) => d.id === byArtisan)!;
+      const artisanAgainst = artisanView.find((d) => d.id === byCustomer)!;
+      expect(artisanOwn.viewerRole).toBe('RAISER');
+      expect(artisanOwn.canRespond).toBe(false);
+      expect(artisanAgainst.viewerRole).toBe('COUNTERPARTY');
+      expect(artisanAgainst.canRespond).toBe(true);
+
+      // Exactly one dispute per viewer is theirs, and exactly one is answerable
+      // — the two conditions the frontend's selection rule keys on.
+      for (const view of [customerView, artisanView]) {
+        expect(view.filter((d) => d.viewerRole === 'RAISER')).toHaveLength(1);
+        expect(view.filter((d) => d.canRespond)).toHaveLength(1);
+      }
+
+      // The single read agrees with the list read, from both sides.
+      for (const [token, id, role] of [
+        [customerToken, byCustomer, 'RAISER'],
+        [customerToken, byArtisan, 'COUNTERPARTY'],
+        [artisanToken, byArtisan, 'RAISER'],
+        [artisanToken, byCustomer, 'COUNTERPARTY'],
+      ] as const) {
+        const res = await request(server())
+          .get(`/api/v1/disputes/my/${id}`)
+          .set('Authorization', `Bearer ${token}`);
+        expect(res.status).toBe(200);
+        expect(envelope<PartyDispute>(res).viewerRole).toBe(role);
+      }
+    });
   });
 
   // ─── AT3: suspension ─────────────────────────────────────────────────────────
@@ -920,6 +1030,270 @@ describe('Analytics, admin tooling & disputes (e2e)', () => {
           (r) => r.targetType === 'USER' && r.targetId === stranger.id,
         ),
       ).toBe(true);
+    });
+  });
+
+  // ─── DC2: the platform-analytics rollup ──────────────────────────────────────
+
+  /**
+   * DC2.1–DC2.6. This block is deliberately **last**: it seeds jobs and extra
+   * artisan profiles, and the AN1 block above asserts that a brand-new artisan
+   * produces honest zeroes.
+   *
+   * The pre-fix failure this covers: `topArtisans()` aliased its user join as
+   * `user` (a Postgres reserved word) and referenced `user.id` inside a raw
+   * correlated subquery, immediately followed by a newline. TypeORM's
+   * alias rewriter matches a property with `[^ =(),]+`, which does not exclude
+   * newlines, so the lookup key became `id\n`, missed, and the identifier
+   * shipped unquoted — `42601 syntax error at or near "."`. One `Promise.all`
+   * then turned that single sub-query failure into a 500 for the whole
+   * endpoint, on every range, for weeks.
+   *
+   * Both halves need a **real database** to be caught: a mocked query builder
+   * cannot produce a SQL syntax error, which is exactly how this shipped.
+   */
+  describe('DC2: platform analytics returns data for every range', () => {
+    /** Out-of-band weighted ratings, purely to pin the ORDER BY in assertions. */
+    const TOP_WEIGHTED = 9.99;
+    const NO_JOBS_WEIGHTED = 9.96;
+
+    let noJobsArtisan: User;
+    let bannedArtisan: User;
+    let deletedArtisan: User;
+    let unratedArtisan: User;
+
+    async function makeArtisan(
+      label: string,
+      profile: Partial<ArtisanProfile>,
+    ): Promise<User> {
+      const { user } = await makeUser(label, Role.ARTISAN);
+      const saved = await profileRepo.save(
+        profileRepo.create({
+          user,
+          currency: 'GHS',
+          isVerified: true,
+          isProfileComplete: true,
+          ...profile,
+        }),
+      );
+      createdProfileIds.push(saved.id);
+      return user;
+    }
+
+    async function makeJob(
+      artisan: User,
+      status: Status,
+      opts: { softDeleted?: boolean } = {},
+    ): Promise<Job> {
+      const job = await jobRepo.save(
+        jobRepo.create({
+          customer,
+          service,
+          location: 'Accra',
+          status,
+          acceptedArtisan: artisan,
+          currency: 'GHS',
+        }),
+      );
+      createdJobIds.push(job.id);
+      if (opts.softDeleted) await jobRepo.softDelete(job.id);
+      return job;
+    }
+
+    beforeAll(async () => {
+      // The round's own artisan becomes the #1 ranked one, with a job mix that
+      // makes `completedJobs` a figure with exactly one right answer: 2.
+      artisanProfile.averageRating = 4.75;
+      artisanProfile.weightedRating = TOP_WEIGHTED;
+      artisanProfile.totalReviews = 42;
+      artisanProfile.businessName = `QA AAD Top Artisan ${uniq}`;
+      await profileRepo.save(artisanProfile);
+
+      await makeJob(artisanUser, Status.COMPLETED);
+      await makeJob(artisanUser, Status.COMPLETED);
+      // Must not count: soft-deleted, and still in flight.
+      await makeJob(artisanUser, Status.COMPLETED, { softDeleted: true });
+      await makeJob(artisanUser, Status.IN_PROGRESS);
+
+      noJobsArtisan = await makeArtisan('AnalyticsNoJobs', {
+        averageRating: 4.6,
+        weightedRating: NO_JOBS_WEIGHTED,
+        totalReviews: 5,
+      });
+
+      // Ranked above everything real, so if any exclusion rule regressed these
+      // rows would appear at the top of the list rather than hide in the tail.
+      bannedArtisan = await makeArtisan('AnalyticsBanned', {
+        averageRating: 5,
+        weightedRating: 9.98,
+        totalReviews: 9,
+      });
+      await userRepo.update(bannedArtisan.id, { isBanned: true });
+
+      deletedArtisan = await makeArtisan('AnalyticsDeleted', {
+        averageRating: 5,
+        weightedRating: 9.97,
+        totalReviews: 9,
+      });
+      await userRepo.softDelete(deletedArtisan.id);
+
+      // Below TOP_ARTISAN_MIN_REVIEWS — "top by rating" needs a real review.
+      unratedArtisan = await makeArtisan('AnalyticsUnrated', {
+        averageRating: 0,
+        weightedRating: 9.95,
+        totalReviews: 0,
+      });
+    });
+
+    // ─── DC2.2: every range returns 200 with a populated kpis block ───────────
+
+    it.each([['7d'], ['30d'], ['90d'], ['1y']])(
+      'returns 200 with a populated kpis block for range=%s',
+      async (range) => {
+        const res = await request(server())
+          .get(`/api/v1/admin/analytics?range=${range}`)
+          .set('Authorization', `Bearer ${adminToken}`);
+
+        expect(res.status).toBe(200);
+        const data = envelope<AdminAnalytics>(res);
+        expect(data.range).toBe(range);
+        expect(data.degraded).toEqual([]);
+        expect(data.kpis).not.toBeNull();
+        expect(typeof data.kpis.totalUsers).toBe('number');
+        expect(data.kpis.totalUsers).toBeGreaterThan(0);
+        expect(typeof data.kpis.grossRevenue).toBe('number');
+        expect(Array.isArray(data.topArtisans)).toBe(true);
+      },
+    );
+
+    it('returns 200 with no range param at all, defaulting to 30d', async () => {
+      const res = await request(server())
+        .get('/api/v1/admin/analytics')
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.status).toBe(200);
+      const data = envelope<AdminAnalytics>(res);
+      expect(data.range).toBe('30d');
+      expect(data.degraded).toEqual([]);
+      expect(data.kpis).not.toBeNull();
+      expect(typeof data.kpis.totalUsers).toBe('number');
+    });
+
+    // ─── DC2.5: a cold start caches all four ranges ───────────────────────────
+
+    it('serves all four ranges from the cold-start cache, not an on-demand build', async () => {
+      for (const range of ['7d', '30d', '90d', '1y']) {
+        const res = await request(server())
+          .get(`/api/v1/admin/analytics?range=${range}`)
+          .set('Authorization', `Bearer ${adminToken}`);
+
+        expect(res.status).toBe(200);
+        const data = envelope<AdminAnalytics>(res);
+        // `cached: true` can only be true if onModuleInit's refresh succeeded
+        // for this range — the pre-fix cron cached 0/4 and logged it as info.
+        expect(data.cached).toBe(true);
+        expect(typeof data.generatedAt).toBe('string');
+      }
+    });
+
+    // ─── DC2.3: topArtisans returns correct data, not merely a 200 ────────────
+
+    it('executes the real topArtisans SQL and returns correct, correctly-typed rows', async () => {
+      // Straight through the service, so this is the actual query against the
+      // actual database rather than a rollup cached before the fixtures landed.
+      const rollup: Rollup = await analyticsService.build(
+        AnalyticsRange.LAST_30_DAYS,
+      );
+
+      expect(rollup.degraded).toEqual([]);
+      expect(rollup.topArtisans).not.toBeNull();
+      const rows = rollup.topArtisans!;
+      expect(Array.isArray(rows)).toBe(true);
+
+      const top = rows.find((r) => r.userId === artisanUser.id);
+      expect(top).toBeDefined();
+      // Exactly the two non-deleted COMPLETED jobs — the soft-deleted
+      // COMPLETED one and the IN_PROGRESS one are excluded.
+      expect(top!.completedJobs).toBe(2);
+      expect(typeof top!.completedJobs).toBe('number');
+      expect(top!.totalReviews).toBe(42);
+      expect(typeof top!.averageRating).toBe('number');
+      expect(top!.name).toBe(
+        `${artisanUser.firstname} ${artisanUser.lastname}`,
+      );
+
+      // An artisan with no jobs reads 0 — a number, not null and not "0".
+      const noJobs = rows.find((r) => r.userId === noJobsArtisan.id);
+      expect(noJobs).toBeDefined();
+      expect(noJobs!.completedJobs).toBe(0);
+      expect(typeof noJobs!.completedJobs).toBe('number');
+
+      // Excluded: banned, soft-deleted, and below the review threshold.
+      const ids = rows.map((r) => r.userId);
+      expect(ids).not.toContain(bannedArtisan.id);
+      expect(ids).not.toContain(deletedArtisan.id);
+      expect(ids).not.toContain(unratedArtisan.id);
+
+      // Every row clears the minimum-review bar, and the ordering holds.
+      expect(rows.every((r) => r.totalReviews >= 1)).toBe(true);
+      const weighted = rows.map((r) => r.weightedRating);
+      expect(weighted).toEqual([...weighted].sort((a, b) => b - a));
+    });
+
+    // ─── DC2.4: one failing sub-query costs one figure, not the endpoint ──────
+
+    it('returns every other section when one sub-query throws, names the failure, and logs it', async () => {
+      const boom = new Error('forced sub-query failure for DC2.4');
+      const subQuery = jest
+        .spyOn(disputesService, 'getResolutionMetrics')
+        .mockRejectedValueOnce(boom);
+      const errorLog = jest
+        .spyOn(analyticsService['logger'], 'error')
+        .mockImplementation();
+
+      try {
+        const rollup: Rollup = await analyticsService.build(
+          AnalyticsRange.LAST_7_DAYS,
+        );
+
+        // The failed section is named, and is `null` — never 0, never [].
+        expect(rollup.degraded).toEqual(['disputes']);
+        expect(rollup.disputes).toBeNull();
+
+        // Everything else still came back, from the real database.
+        expect(rollup.kpis).not.toBeNull();
+        expect(typeof rollup.kpis!.totalUsers).toBe('number');
+        expect(rollup.previous).not.toBeNull();
+        expect(Array.isArray(rollup.series.userGrowth)).toBe(true);
+        expect(Array.isArray(rollup.series.bookingVolume)).toBe(true);
+        expect(Array.isArray(rollup.series.revenue)).toBe(true);
+        expect(Array.isArray(rollup.topServiceCategories)).toBe(true);
+        expect(Array.isArray(rollup.topArtisans)).toBe(true);
+
+        // The failure is loud, and says which section and which range.
+        const logged = errorLog.mock.calls.map(([msg]) => String(msg));
+        expect(
+          logged.some(
+            (msg) =>
+              msg.includes('"disputes"') &&
+              msg.includes('7d') &&
+              msg.includes(boom.message),
+          ),
+        ).toBe(true);
+      } finally {
+        errorLog.mockRestore();
+        subQuery.mockRestore();
+      }
+    });
+
+    it('recovers completely on the next build once the sub-query works again', async () => {
+      const rollup: Rollup = await analyticsService.build(
+        AnalyticsRange.LAST_7_DAYS,
+      );
+
+      expect(rollup.degraded).toEqual([]);
+      expect(rollup.disputes).not.toBeNull();
+      expect(typeof rollup.disputes!.slaHours).toBe('number');
     });
   });
 });

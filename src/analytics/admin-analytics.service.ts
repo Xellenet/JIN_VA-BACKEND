@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ObjectLiteral, Repository, SelectQueryBuilder } from 'typeorm';
 import { User } from '@users/entities/user.entity';
@@ -51,6 +51,26 @@ export interface SeriesPoint {
 }
 
 /**
+ * DC2.4: the section names that can appear in a rollup's `degraded` list.
+ *
+ * They are the response's own paths, so a consumer can map a name straight to
+ * the field it must render as unavailable. Documented verbatim in
+ * `api-contract.md`.
+ */
+export const ANALYTICS_SECTIONS = [
+  'kpis',
+  'previous',
+  'series.userGrowth',
+  'series.bookingVolume',
+  'series.revenue',
+  'topServiceCategories',
+  'topArtisans',
+  'disputes',
+] as const;
+
+export type AnalyticsSection = (typeof ANALYTICS_SECTIONS)[number];
+
+/**
  * AN1/AP1–AP4: the platform-wide analytics rollup behind
  * `GET /admin/analytics`.
  *
@@ -74,6 +94,8 @@ export interface SeriesPoint {
  */
 @Injectable()
 export class AdminAnalyticsService {
+  private readonly logger = new Logger(AdminAnalyticsService.name);
+
   constructor(
     @InjectRepository(User)
     private readonly usersRepo: Repository<User>,
@@ -89,19 +111,29 @@ export class AdminAnalyticsService {
     private readonly disputesService: DisputesService,
   ) {}
 
+  /**
+   * DC2.4: one failing sub-query costs one figure, not the whole endpoint.
+   *
+   * This used to be a single `Promise.all`, which meant any one of the eight
+   * sub-queries rejecting rejected the entire rollup — KPIs, every series,
+   * categories and the dispute SLA included. A syntax error in one raw
+   * subquery therefore took `GET /admin/analytics` down completely, and the
+   * 10-minute refresh cron failed the same way with no fallback.
+   *
+   * `Promise.allSettled` isolates each section. The hard guardrail on the
+   * partial result is that a **failed section is `null`, never `0` and never
+   * `[]`** — an admin must be able to tell "we could not compute revenue"
+   * apart from "revenue was GH₵ 0.00". Every failed section is additionally
+   * named in `degraded` and logged at error level with the range and the
+   * section name, so the outage is loud rather than a plausible-looking zero.
+   *
+   * See `docs/team/admin-disputes-closeout/api-contract.md` — a `null` section
+   * means "unavailable, render it as unavailable".
+   */
   async build(range: AnalyticsRange) {
     const w = resolveWindow(range);
 
-    const [
-      kpis,
-      previousKpis,
-      userGrowth,
-      bookingVolume,
-      revenue,
-      topCategories,
-      topArtisans,
-      disputes,
-    ] = await Promise.all([
+    const settled = await Promise.allSettled([
       this.scalarKpis(w.from, w.to),
       // AN3: the immediately preceding equivalent period, so a trend chip is
       // a real comparison or absent — never an invented percentage.
@@ -114,7 +146,33 @@ export class AdminAnalyticsService {
       this.topServiceCategories(w),
       this.topArtisans(),
       this.disputesService.getResolutionMetrics(w.from ?? undefined, w.to),
-    ]);
+    ] as const);
+
+    const degraded: AnalyticsSection[] = [];
+    const unwrap = <T>(
+      result: PromiseSettledResult<T>,
+      section: AnalyticsSection,
+    ): T | null => {
+      if (result.status === 'fulfilled') return result.value;
+      degraded.push(section);
+      const reason: unknown = result.reason;
+      this.logger.error(
+        `Platform analytics section "${section}" failed for range ${range}: ${
+          reason instanceof Error ? reason.message : String(reason)
+        }`,
+        reason instanceof Error ? reason.stack : undefined,
+      );
+      return null;
+    };
+
+    const kpis = unwrap(settled[0], 'kpis');
+    const previousKpis = unwrap(settled[1], 'previous');
+    const userGrowth = unwrap(settled[2], 'series.userGrowth');
+    const bookingVolume = unwrap(settled[3], 'series.bookingVolume');
+    const revenue = unwrap(settled[4], 'series.revenue');
+    const topCategories = unwrap(settled[5], 'topServiceCategories');
+    const topArtisans = unwrap(settled[6], 'topArtisans');
+    const disputes = unwrap(settled[7], 'disputes');
 
     return {
       range: w.range,
@@ -123,7 +181,12 @@ export class AdminAnalyticsService {
       to: w.to.toISOString(),
       generatedAt: new Date().toISOString(),
       kpis,
-      /** `null` for a range with nothing before it — omit the trend, don't fake it. */
+      /**
+       * `null` for a range with nothing before it — omit the trend, don't fake
+       * it. Also `null` when the comparison period failed to compute, in which
+       * case `previous` is listed in `degraded`; the two cases are told apart
+       * by that list, never by the value.
+       */
       previous: previousKpis,
       series: {
         userGrowth,
@@ -133,6 +196,12 @@ export class AdminAnalyticsService {
       topServiceCategories: topCategories,
       topArtisans,
       disputes,
+      /**
+       * DC2.4: the sections that could not be computed. Empty on a healthy
+       * rollup. A named section's value is `null` and must be rendered as
+       * unavailable — never as a zero, an empty list or a flat line.
+       */
+      degraded: degraded,
     };
   }
 
@@ -456,29 +525,56 @@ export class AdminAnalyticsService {
    * way to re-derive it for a 7-day window without re-implementing the
    * formula. Documented as all-time in `api-contract.md` so the screen can
    * label it rather than imply it moves with the range selector.
+   *
+   * ─── DC2.2: why this join alias is `au` and not `user` ──────────────────
+   *
+   * This query used to alias the joined user as `user`, which is a Postgres
+   * **reserved word**, and referenced `user.id` inside the raw correlated
+   * subquery below. TypeORM rewrites `alias.property` into
+   * `"alias"."column"` across the finished SQL, but its property matcher is
+   * `[^ =(),]+` — a class that does not exclude newlines. The subquery had
+   * `user.id` immediately followed by a line break, so the matcher swallowed
+   * the newline, looked up the key `id\n`, found nothing, and shipped
+   * `user.id` **unquoted**. Postgres then failed the whole statement with
+   * `42601 syntax error at or near "."`, which took the entire
+   * `GET /admin/analytics` rollup down for every range.
+   *
+   * Three things keep that from recurring, and none of them relies on
+   * TypeORM's rewriting firing inside a raw string:
+   *  1. the alias is `au` — short, lower-case and not a reserved word, so
+   *     even an unquoted, unrewritten `au.id` is valid SQL (Postgres folds
+   *     unquoted identifiers to lower case, which matches the emitted
+   *     `"au"` alias). Renaming kills the trap class rather than patching
+   *     this one instance;
+   *  2. the raw subquery spells the correlation out as `"au"."id"` —
+   *     already-quoted identifiers are invisible to the rewriter's regex, so
+   *     the fragment is correct whether or not the rewrite runs;
+   *  3. the status is a **bound parameter**, not interpolated.
+   *
+   * `test/analytics-admin-disputes.e2e-spec.ts` executes this SQL against a
+   * real database, which is the only kind of test that can catch a syntax
+   * error here.
    */
   private async topArtisans() {
     const rows = await this.profileRepo
       .createQueryBuilder('ap')
-      .innerJoin('ap.user', 'user')
+      .innerJoin('ap.user', 'au')
       .select('ap.id', 'artisanProfileId')
-      .addSelect('user.id', 'userId')
-      .addSelect('user.firstname', 'firstname')
-      .addSelect('user.lastname', 'lastname')
+      .addSelect('au.id', 'userId')
+      .addSelect('au.firstname', 'firstname')
+      .addSelect('au.lastname', 'lastname')
       .addSelect('ap.business_name', 'businessName')
       .addSelect('ap.average_rating', 'averageRating')
       .addSelect('ap.weighted_rating', 'weightedRating')
       .addSelect('ap.total_reviews', 'totalReviews')
       .addSelect('ap.is_verified', 'isVerified')
       .addSelect(
-        `(SELECT COUNT(*) FROM jobs j
-            WHERE j.accepted_artisan_id = user.id
-              AND j.status = '${Status.COMPLETED}'
-              AND j.deleted_at IS NULL)`,
+        `(SELECT COUNT(*) FROM jobs j WHERE j.accepted_artisan_id = "au"."id" AND j.status = :completedStatus AND j.deleted_at IS NULL)`,
         'completedJobs',
       )
-      .where('user.deletedAt IS NULL')
-      .andWhere('user.isBanned = false')
+      .setParameter('completedStatus', Status.COMPLETED)
+      .where('au.deletedAt IS NULL')
+      .andWhere('au.isBanned = false')
       .andWhere('ap.total_reviews >= :minReviews', {
         minReviews: TOP_ARTISAN_MIN_REVIEWS,
       })

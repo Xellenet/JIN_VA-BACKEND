@@ -43,30 +43,87 @@ export class PlatformAnalyticsCacheService implements OnModuleInit {
     await this.refresh();
   }
 
+  /**
+   * DC2.4/DC2.5: refreshes every admin range, and reports honestly.
+   *
+   * Two behaviours this deliberately gets right, both of which it previously
+   * got wrong:
+   *
+   *  - **A degraded rollup never displaces a complete one.** `build()` now
+   *    returns partial results (see its docblock), so a tick can succeed while
+   *    still having lost a section. Overwriting a complete cached rollup with
+   *    a partial one would make an admin's screen *lose* figures it had a
+   *    minute ago. The held entry keeps being served with its own honest
+   *    `generatedAt`, and the next tick retries. A degraded rollup is only
+   *    stored when there is nothing better for that range — a partial answer
+   *    beats a 500.
+   *
+   *  - **The summary line is not a success report.** It used to log
+   *    `"rollups refreshed (0/4 ranges cached)"` at `log` level, so a total
+   *    outage read as routine information. It now states cached / degraded /
+   *    failed counts and names the affected ranges, at `error` level when a
+   *    range failed outright and `warn` when one came back degraded.
+   */
   @Cron(CronExpression.EVERY_10_MINUTES)
   async refresh(): Promise<void> {
+    const degradedRanges: string[] = [];
+    const failedRanges: string[] = [];
+    const heldRanges: string[] = [];
+
     for (const range of ADMIN_RANGES) {
       try {
-        this.cache.set(range, await this.adminAnalytics.build(range));
+        const rollup = await this.adminAnalytics.build(range);
+
+        if (rollup.degraded.length > 0) {
+          degradedRanges.push(`${range}(${rollup.degraded.join(',')})`);
+
+          const held = this.cache.get(range);
+          if (held && held.degraded.length === 0) {
+            heldRanges.push(range);
+            continue;
+          }
+        }
+
+        this.cache.set(range, rollup);
       } catch (err) {
         // A failed refresh must never take the endpoint down — the previous
         // (older) entry stays served and the next tick tries again.
+        failedRanges.push(range);
         this.logger.error(
           `Platform analytics refresh failed for range ${range}: ${
             err instanceof Error ? err.message : String(err)
           }`,
+          err instanceof Error ? err.stack : undefined,
         );
       }
     }
-    this.logger.log(
-      `Platform analytics rollups refreshed (${this.cache.size}/${ADMIN_RANGES.length} ranges cached).`,
-    );
+
+    const cached = ADMIN_RANGES.filter((r) => this.cache.has(r)).length;
+    const summary =
+      `Platform analytics refresh: ranges=${ADMIN_RANGES.length} ` +
+      `cached=${cached} degraded=${degradedRanges.length} failed=${failedRanges.length}` +
+      (degradedRanges.length
+        ? ` degradedRanges=${degradedRanges.join(' ')}`
+        : '') +
+      (failedRanges.length ? ` failedRanges=${failedRanges.join(',')}` : '') +
+      (heldRanges.length
+        ? ` keptPreviousGoodRollupFor=${heldRanges.join(',')}`
+        : '');
+
+    if (failedRanges.length) this.logger.error(summary);
+    else if (degradedRanges.length) this.logger.warn(summary);
+    else this.logger.log(summary);
   }
 
   /**
    * Serves the cached rollup, computing on demand if this range hasn't been
    * built yet. `cached: false` marks an on-demand (live) computation so the
    * freshness line can say "Live" rather than a misleading "Updated just now".
+   *
+   * A cached rollup is preferred even when the on-demand build would be
+   * fresher, which is the point of the cache; but a *degraded* cached entry is
+   * still served rather than recomputed, because the section that failed is
+   * named in `degraded` and the caller can tell. The cron is what heals it.
    */
   async get(range: AnalyticsRange): Promise<Rollup & { cached: boolean }> {
     const hit = this.cache.get(range);

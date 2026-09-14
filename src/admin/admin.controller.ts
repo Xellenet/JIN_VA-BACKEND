@@ -18,6 +18,7 @@ import {
   ApiOperation,
   ApiParam,
   ApiTags,
+  ApiTooManyRequestsResponse,
 } from '@nestjs/swagger';
 import { AdminService } from './admin.service';
 import {
@@ -41,6 +42,7 @@ import {
 } from '../verification/dto/review-verification.dto';
 import { GetVerificationsQueryDto } from '../verification/dto/get-verifications-query.dto';
 import { DisputesService } from '../disputes/disputes.service';
+import { DisputeWriteThrottlerGuard } from '../disputes/guards/dispute-write-throttler.guard';
 import { GetDisputesQueryDto } from '../disputes/dto/get-disputes-query.dto';
 import {
   ResolveDisputeDto,
@@ -442,6 +444,11 @@ export class AdminController {
    * `moneySkippedReason` states why — no clawback is attempted.
    */
   @Patch('disputes/:id/resolve')
+  // B5: rate-limited per admin. Defence in depth behind the conditional claim
+  // on the dispute and the database-level claim on the payment — an admin
+  // double-clicking Confirm is what generated the concurrent pair that could
+  // move one payment twice.
+  @UseGuards(DisputeWriteThrottlerGuard)
   @ApiOperation({
     summary:
       'DR1/DR2: resolve a dispute with one of the three verdicts, carrying out the money action it implies',
@@ -451,6 +458,11 @@ export class AdminController {
     description:
       'Already resolved/closed (including losing a concurrent race), an invalid refund amount, ' +
       'or the money action failed — in which case the dispute is left unresolved and actionable',
+  })
+  @ApiTooManyRequestsResponse({
+    description:
+      'Too many dispute updates from this admin in the last minute. Body carries ' +
+      '`meta.error: "DISPUTE_RATE_LIMIT_EXCEEDED"` and `meta.retryAfterSeconds`.',
   })
   resolveDispute(
     @Req() req: AuthenticatedRequest,

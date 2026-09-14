@@ -16,10 +16,12 @@ import {
   ApiOperation,
   ApiParam,
   ApiTags,
+  ApiTooManyRequestsResponse,
 } from '@nestjs/swagger';
 import { DisputesService } from './disputes.service';
 import { CreateDisputeDto } from './dto/create-dispute.dto';
 import { RespondToDisputeDto } from './dto/respond-dispute.dto';
+import { DisputeWriteThrottlerGuard } from './guards/dispute-write-throttler.guard';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '@common/decorators/roles.decorator';
@@ -78,9 +80,16 @@ export class DisputesController {
    * a dispute existed. This is that endpoint.
    *
    * Only the participant who did *not* file the dispute may respond, only
-   * once, and only while the dispute is still OPEN or UNDER_REVIEW.
+   * once, and only while the dispute is still OPEN or UNDER_REVIEW. All three
+   * conditions are enforced at the write, not just checked beforehand
+   * (`DisputesService.respond`).
+   *
+   * B5: rate-limited per authenticated party. Defence in depth only — an
+   * unlimited burst of responses is what made B1's lost-update race
+   * practically huntable, and that race is fixed at the write.
    */
   @Post(':id/respond')
+  @UseGuards(DisputeWriteThrottlerGuard)
   @ApiOperation({
     summary: 'Submit my one written response to a dispute filed against me',
   })
@@ -88,6 +97,11 @@ export class DisputesController {
   @ApiBadRequestResponse({
     description:
       'The dispute is already RESOLVED/CLOSED, or a response has already been submitted',
+  })
+  @ApiTooManyRequestsResponse({
+    description:
+      'Too many dispute updates from this user in the last minute. Body carries ' +
+      '`meta.error: "DISPUTE_RATE_LIMIT_EXCEEDED"` and `meta.retryAfterSeconds`.',
   })
   @ApiForbiddenResponse({
     description:

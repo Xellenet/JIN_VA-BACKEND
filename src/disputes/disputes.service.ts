@@ -8,7 +8,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { plainToInstance } from 'class-transformer';
-import { Brackets, In, Not, Repository } from 'typeorm';
+import { Brackets, In, Not, QueryFailedError, Repository } from 'typeorm';
 import { Dispute } from './entities/dispute.entity';
 import { Booking } from '../bookings/entities/booking.entity';
 import { Job } from '@jobs/entities/job.entity';
@@ -20,6 +20,7 @@ import { GetDisputesQueryDto } from './dto/get-disputes-query.dto';
 import { ResolveDisputeDto, CloseDisputeDto } from './dto/resolve-dispute.dto';
 import { RespondToDisputeDto } from './dto/respond-dispute.dto';
 import {
+  DisputePaymentDto,
   DisputeResponseDto,
   PartyDisputeResponseDto,
 } from './dto/dispute-response.dto';
@@ -62,6 +63,15 @@ const ACTIVE_STATUSES: DisputeStatus[] = [
   DisputeStatus.OPEN,
   DisputeStatus.UNDER_REVIEW,
 ];
+
+/**
+ * The partial unique index that lets exactly one dispute hold the money action
+ * on a given payment (`AddDisputeOutcomeCategoryAndResponse1783140000000`):
+ * `UNIQUE (money_payment_id) WHERE money_payment_id IS NOT NULL AND
+ * money_action <> 'NONE'`. Named here because `claimForRuling` has to
+ * recognise a violation *of this index specifically*.
+ */
+const MONEY_CLAIM_INDEX = 'uq_disputes_money_payment';
 
 /** What the money side of a verdict is going to do, decided before any write. */
 interface MoneyPlan {
@@ -229,6 +239,23 @@ export class DisputesService {
    * only while the dispute is still open work. The raiser already has the
    * `reason` field; letting them "respond" too would give one side two
    * statements.
+   *
+   * The write is a **conditional `UPDATE` of three columns**, not
+   * `repo.save(dispute)` — deliberately, and it must stay that way
+   * (security-report.md, `admin-disputes-closeout`, B1/HIGH). `save()` on a
+   * loaded entity writes back *every defined column whose value differs from a
+   * fresh read of the row*, so an admin's `resolve()` committing between the
+   * load above and the save would have been silently reverted: the response
+   * write carried the stale `status` with it and put a `RESOLVED` dispute —
+   * whose money had already moved — back to `OPEN`. That re-opened the money
+   * path (`planMoneyAction`'s sibling guard excludes the dispute's own row, so
+   * a second ruling could not see that *this* dispute had already moved money)
+   * and un-revoked admin access to the two parties' private message thread,
+   * which AD2 revokes precisely on the dispute reaching a settled state.
+   *
+   * Writing only the three response columns under a `WHERE` that re-states
+   * both preconditions also makes "you may respond only once" atomic rather
+   * than a check-then-write.
    */
   async respond(userId: number, disputeId: number, dto: RespondToDisputeDto) {
     const dispute = await this.loadOrFail(disputeId, PARTICIPANT_RELATIONS);
@@ -243,6 +270,52 @@ export class DisputesService {
         'You raised this dispute — your account of events is the claim itself. Only the other party can add a response.',
       );
     }
+    // Fast path for the specific message. The authority on both of these is
+    // the `WHERE` clause below, not this read.
+    this.assertRespondable(dispute);
+
+    const respondedAt = new Date();
+    const write = await this.repo
+      .createQueryBuilder()
+      .update(Dispute)
+      .set({
+        response: dto.response,
+        respondedById: userId,
+        respondedAt,
+      })
+      .where('id = :id', { id: disputeId })
+      .andWhere('response IS NULL')
+      .andWhere('status IN (:...active)', { active: ACTIVE_STATUSES })
+      .execute();
+
+    if (!write.affected) {
+      // The row changed between the read and the write. Re-read it and return
+      // whichever of the two errors now applies, rather than the state this
+      // request started from.
+      const current = await this.loadOrFail(disputeId);
+      this.assertRespondable(current);
+      throw new BadRequestException(
+        'Your response could not be recorded because this dispute changed while you were writing it. Reload the dispute and try again.',
+      );
+    }
+
+    dispute.response = dto.response;
+    dispute.respondedBy = { id: userId } as User;
+    dispute.respondedById = userId;
+    dispute.respondedAt = respondedAt;
+
+    return {
+      message: 'Your response has been recorded. Our team can now see it.',
+      data: this.toPartyDto(dispute, userId),
+    };
+  }
+
+  /**
+   * The two preconditions on a response that describe the *dispute* rather
+   * than the caller. Shared by the pre-check and the post-write re-read so a
+   * party gets the identical message whichever one decided it.
+   */
+  private assertRespondable(dispute: Dispute): void {
     if (!ACTIVE_STATUSES.includes(dispute.status)) {
       throw new BadRequestException(
         `This dispute is ${dispute.status} and can no longer receive a response.`,
@@ -253,17 +326,6 @@ export class DisputesService {
         'You have already responded to this dispute. Contact support if you need to add something.',
       );
     }
-
-    dispute.response = dto.response;
-    dispute.respondedBy = { id: userId } as User;
-    dispute.respondedById = userId;
-    dispute.respondedAt = new Date();
-    await this.repo.save(dispute);
-
-    return {
-      message: 'Your response has been recorded. Our team can now see it.',
-      data: this.toPartyDto(dispute, userId),
-    };
   }
 
   // ─── Admin-facing ────────────────────────────────────────────────────────────
@@ -509,7 +571,14 @@ export class DisputesService {
         ...this.toDto(dispute),
         counterparty: this.counterpartySummary(dispute),
         jobId: job?.id ?? null,
-        payment,
+        /**
+         * B4: mapped, not the entity. Returning `payment` raw published
+         * `accessCode`/`authorizationUrl` (checkout handles) and
+         * `transferCode`/`transferReference` (payout handles) to the browser,
+         * none of which the dialog reads — and meant any column later added
+         * to `Payment` would be published automatically.
+         */
+        payment: payment ? this.toPaymentDto(payment) : null,
         /** DQ3: enough about the work to identify it without a second lookup. */
         work,
         siblingDisputes: siblings.map((s) => ({
@@ -529,6 +598,13 @@ export class DisputesService {
     };
   }
 
+  /**
+   * A single conditional `UPDATE` of `status`, for the same reason
+   * {@link respond} is (B1): `repo.save(dispute)` on the loaded entity wrote
+   * back every column that had changed in the database since the load, so an
+   * admin starting a review could revert a concurrent ruling — the lower-stakes
+   * instance of the same defect.
+   */
   async startReview(adminId: number, id: number) {
     const dispute = await this.loadOrFail(id);
     if (dispute.status !== DisputeStatus.OPEN) {
@@ -536,8 +612,21 @@ export class DisputesService {
         `Cannot start review — current status is ${dispute.status}.`,
       );
     }
-    dispute.status = DisputeStatus.UNDER_REVIEW;
-    await this.repo.save(dispute);
+
+    const claim = await this.repo
+      .createQueryBuilder()
+      .update(Dispute)
+      .set({ status: DisputeStatus.UNDER_REVIEW })
+      .where('id = :id', { id })
+      .andWhere('status = :open', { open: DisputeStatus.OPEN })
+      .execute();
+    if (!claim.affected) {
+      const current = await this.loadOrFail(id);
+      throw new BadRequestException(
+        `Cannot start review — current status is ${current.status}.`,
+      );
+    }
+
     return { message: 'Dispute is now UNDER_REVIEW.' };
   }
 
@@ -554,17 +643,21 @@ export class DisputesService {
    *     verdict is still recorded, and no clawback is attempted (Open Question
    *     3, resolved). An amount the backend *rejects* is a different thing and
    *     throws here, before anything is written.
-   *  2. The dispute is then claimed with a single conditional `UPDATE ...
-   *     WHERE status IN ('OPEN','UNDER_REVIEW')`. Exactly one of two
-   *     concurrent admins can win that; the loser gets the existing "already
-   *     resolved/closed" message rather than a generic failure, and — critically
-   *     — never reaches the money action.
+   *  2. The dispute **and the payment** are then claimed in a single
+   *     conditional `UPDATE ... WHERE status IN ('OPEN','UNDER_REVIEW')`.
+   *     Exactly one of two concurrent admins can win the dispute's own row;
+   *     the loser gets the existing "already resolved/closed" message rather
+   *     than a generic failure, and — critically — never reaches the money
+   *     action. Writing `moneyAction`/`moneyPaymentId` *here*, before the
+   *     provider call, is what makes the payment claimable too: see
+   *     {@link claimForRuling}.
    *  3. Only the winner performs the money movement. If it fails, the claim is
-   *     rolled back (status, verdict and note restored to what they were) and
-   *     the provider's specific error is surfaced, so the dispute is left
-   *     actionable and never displays an outcome that contradicts the payment.
-   *  4. The real money result is written last, so `moneyAction`/`moneyAmount`
-   *     can only ever describe money that actually moved.
+   *     rolled back (status, verdict, note and the money claim restored to
+   *     what they were) and the provider's specific error is surfaced, so the
+   *     dispute is left actionable and never displays an outcome that
+   *     contradicts the payment.
+   *  4. The real money result — the *amount* — is written last, so
+   *     `moneyAmount` can only ever describe money that actually moved.
    */
   async resolve(admin: User, id: number, dto: ResolveDisputeDto) {
     const dispute = await this.loadOrFail(id, PARTICIPANT_RELATIONS);
@@ -575,99 +668,57 @@ export class DisputesService {
       throw new BadRequestException(`Dispute is already ${dispute.status}.`);
     }
 
+    // Captured for the rollback in step 3. Normalised to `null` rather than
+    // left `undefined` because `null` is the only value that actually clears a
+    // column — see the rollback itself.
     const previousStatus = dispute.status;
     const previousOutcome = dispute.outcome ?? null;
     const previousResolution = dispute.resolution ?? null;
+    const previousAdminNotes = dispute.adminNotes ?? null;
 
     // 1 ── decide what the money side is going to do, before writing anything.
-    const plan = await this.planMoneyAction(dispute, dto);
+    let plan = await this.planMoneyAction(dispute, dto);
 
-    // 2 ── atomic claim. `affected === 0` means another admin (or another
-    // request from the same admin) got here first.
-    const claim = await this.repo
-      .createQueryBuilder()
-      .update(Dispute)
-      .set({
-        status: DisputeStatus.RESOLVED,
-        outcome: dto.outcome,
-        resolution: dto.resolution,
-        resolvedById: admin.id,
-        resolvedAt: new Date(),
-        ...(dto.adminNotes ? { adminNotes: dto.adminNotes } : {}),
-        // Left null on purpose: this column must only ever describe money that
-        // actually moved, so it is written in step 4, never optimistically.
-        moneyAction: undefined,
-      })
-      .where('id = :id', { id })
-      .andWhere('status IN (:...active)', { active: ACTIVE_STATUSES })
-      .execute();
+    // 2 ── atomic claim of the dispute and of the payment the money action
+    // will touch.
+    let claim = await this.claimForRuling(id, admin, dto, plan);
 
-    if (!claim.affected) {
+    if (claim === 'PAYMENT_CLAIMED_BY_SIBLING') {
+      // A sibling dispute on the same payment claimed the money action
+      // between our plan and our claim — the concurrent form of the case
+      // `planMoneyAction`'s sibling guard already handles serially. Answer it
+      // the same way: record the verdict, move nothing, say why.
+      this.logger.warn(
+        `Dispute ${id}: payment ${plan.paymentId} was claimed by a sibling dispute ` +
+          `between the plan and the claim; recording the verdict with no money action.`,
+      );
+      plan = {
+        action: DisputeMoneyAction.NONE,
+        skippedReason:
+          'Another dispute on this booking claimed the money action on this payment first, ' +
+          'so no second money action was taken. The verdict has been recorded.',
+      };
+      claim = await this.claimForRuling(id, admin, dto, plan);
+    }
+
+    if (claim !== 'CLAIMED') {
       const current = await this.repo.findOne({ where: { id } });
       throw new BadRequestException(
         `Dispute is already ${current?.status ?? 'resolved'}. Another admin resolved it first — reload to see their ruling.`,
       );
     }
 
-    // 3 ── money movement, for the winner only.
-    let moved: {
-      action: DisputeMoneyAction;
-      amount: number;
-      paymentId: number;
-    } | null = null;
-    if (plan.action !== DisputeMoneyAction.NONE && plan.paymentId) {
-      try {
-        if (plan.action === DisputeMoneyAction.REFUND) {
-          await this.paymentsService.adminRefund(
-            plan.paymentId,
-            plan.amount,
-            admin,
-          );
-        } else {
-          await this.paymentsService.releaseWithheldPayment(plan.paymentId);
-        }
-        moved = {
-          action: plan.action,
-          amount: plan.amount ?? 0,
-          paymentId: plan.paymentId,
-        };
-      } catch (err) {
-        const detail = err instanceof Error ? err.message : String(err);
-        this.logger.error(
-          `Dispute ${id}: ${plan.action} on payment ${plan.paymentId} failed — rolling the ruling back. ${detail}`,
-        );
-        await this.repo
-          .createQueryBuilder()
-          .update(Dispute)
-          .set({
-            status: previousStatus,
-            outcome: previousOutcome ?? undefined,
-            resolution: previousResolution ?? undefined,
-            resolvedById: undefined,
-            resolvedAt: undefined,
-            moneyAction: undefined,
-          })
-          .where('id = :id', { id })
-          .execute();
-
-        throw new BadRequestException(
-          `The ${plan.action === DisputeMoneyAction.REFUND ? 'refund' : 'release'} could not be completed, ` +
-            `so this dispute has NOT been resolved and is still actionable. Reason: ${detail}`,
-        );
-      }
-    }
+    // 3 ── money movement, for the winner only. Rolls the claim back and
+    // throws if the provider declines.
+    const moved = await this.moveClaimedMoney(id, admin, plan, {
+      status: previousStatus,
+      outcome: previousOutcome,
+      resolution: previousResolution,
+      adminNotes: previousAdminNotes,
+    });
 
     // 4 ── record what actually happened to the money.
-    await this.repo
-      .createQueryBuilder()
-      .update(Dispute)
-      .set({
-        moneyAction: moved ? moved.action : DisputeMoneyAction.NONE,
-        moneyAmount: moved ? moved.amount : undefined,
-        moneyPaymentId: moved ? moved.paymentId : undefined,
-      })
-      .where('id = :id', { id })
-      .execute();
+    await this.recordMoneyResult(id, moved);
 
     // Reflect the committed state on the in-memory entity for the notification
     // and audit payloads below.
@@ -699,6 +750,240 @@ export class DisputesService {
         moneySkippedReason: moved ? null : (plan.skippedReason ?? null),
       },
     };
+  }
+
+  /**
+   * Step 2 of {@link resolve}: claims the dispute for this ruling and, when the
+   * ruling moves money, claims the **payment** in the same statement.
+   *
+   * Why the payment claim is here rather than after the provider call
+   * (security-report.md B3, CWE-362/367): `planMoneyAction`'s sibling guard
+   * looks for another dispute on the booking with a non-`NONE` `moneyAction`,
+   * but that column used to be written *last*, after the money had already
+   * moved. Two admins ruling on two disputes of one booking inside the same
+   * window therefore both passed the guard, both won their own row's
+   * conditional claim (different rows), and both called the provider — and the
+   * partial unique index `uq_disputes_money_payment` only caught it at the
+   * too-late write, outside any try/catch, so the observable failure was
+   * "money moved twice, then a 500".
+   *
+   * Writing `moneyAction` + `moneyPaymentId` before the provider call turns
+   * that index into an up-front mutex on the payment: Postgres serialises the
+   * two statements and the second one gets a `23505` *before* it can move any
+   * money. A unique violation here is therefore an expected, handled outcome,
+   * not an error — it is reported back as `PAYMENT_CLAIMED_BY_SIBLING` and the
+   * caller degrades the plan to `NONE` with a stated reason, which is exactly
+   * what the serial path already does.
+   *
+   * Two consequences worth knowing, both deliberate:
+   *
+   *  - For the duration of the provider call, `moneyAction` describes what the
+   *    ruling has *claimed*, not yet what completed. `moneyAmount` still only
+   *    ever describes a completed movement, and a failed movement clears all
+   *    three columns in the rollback.
+   *  - If the process dies mid-movement, the row is left claiming the payment.
+   *    That is the safe direction: the next ruling declines to move money on a
+   *    payment that may already have moved, rather than moving it again.
+   *
+   * A locking alternative (wrap plan → claim → provider call → record in one
+   * transaction holding `pessimistic_write` on the payment row) was rejected:
+   * `PaymentsService.adminRefund` opens its own transaction and takes that
+   * same lock, so an outer transaction holding it would deadlock against its
+   * own inner call unless `adminRefund` were refactored to accept an
+   * `EntityManager` — a larger change to the money path than this round wants.
+   */
+  private async claimForRuling(
+    id: number,
+    admin: User,
+    dto: ResolveDisputeDto,
+    plan: MoneyPlan,
+  ): Promise<
+    'CLAIMED' | 'LOST_TO_ANOTHER_RULING' | 'PAYMENT_CLAIMED_BY_SIBLING'
+  > {
+    const movesMoney =
+      plan.action !== DisputeMoneyAction.NONE && plan.paymentId != null;
+
+    try {
+      const claim = await this.repo
+        .createQueryBuilder()
+        .update(Dispute)
+        .set({
+          status: DisputeStatus.RESOLVED,
+          outcome: dto.outcome,
+          resolution: dto.resolution,
+          resolvedById: admin.id,
+          resolvedAt: new Date(),
+          ...(dto.adminNotes ? { adminNotes: dto.adminNotes } : {}),
+          // The claim on the payment, or an explicit release of any stale one.
+          moneyAction: movesMoney ? plan.action : null,
+          moneyPaymentId: movesMoney ? (plan.paymentId ?? null) : null,
+          // Only ever written from a completed movement (step 4).
+          moneyAmount: null,
+        })
+        .where('id = :id', { id })
+        .andWhere('status IN (:...active)', { active: ACTIVE_STATUSES })
+        .execute();
+
+      return claim.affected ? 'CLAIMED' : 'LOST_TO_ANOTHER_RULING';
+    } catch (err) {
+      if (movesMoney && this.isMoneyClaimConflict(err)) {
+        return 'PAYMENT_CLAIMED_BY_SIBLING';
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Step 3 of {@link resolve}: carries out the claimed money action, or rolls
+   * the whole ruling back and surfaces the provider's own reason.
+   */
+  private async moveClaimedMoney(
+    id: number,
+    admin: User,
+    plan: MoneyPlan,
+    previous: {
+      status: DisputeStatus;
+      outcome: DisputeOutcome | null;
+      resolution: string | null;
+      adminNotes: string | null;
+    },
+  ): Promise<{
+    action: DisputeMoneyAction;
+    amount: number;
+    paymentId: number;
+  } | null> {
+    if (plan.action === DisputeMoneyAction.NONE || !plan.paymentId) return null;
+
+    try {
+      if (plan.action === DisputeMoneyAction.REFUND) {
+        await this.paymentsService.adminRefund(
+          plan.paymentId,
+          plan.amount,
+          admin,
+        );
+      } else {
+        await this.paymentsService.releaseWithheldPayment(plan.paymentId);
+      }
+      return {
+        action: plan.action,
+        amount: plan.amount ?? 0,
+        paymentId: plan.paymentId,
+      };
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      this.logger.error(
+        `Dispute ${id}: ${plan.action} on payment ${plan.paymentId} failed — rolling the ruling back. ${detail}`,
+      );
+      /**
+       * Every value here is an explicit `null`, never `undefined`.
+       * `UpdateQueryBuilder.createUpdateExpression` drops `undefined` values
+       * from the statement entirely ("it doesn't make sense to update
+       * undefined properties, so just skip them"), so the previous
+       * `previousOutcome ?? undefined` form cleared **nothing** on a first
+       * ruling — the normal case, where the `previous*` values are null. Only
+       * `status` was ever restored, and a ruling that never took effect kept
+       * its verdict, note, resolver and timestamp: an `Open` row wearing a
+       * verdict badge in the admin queue, a phantom `outcome` handed to both
+       * parties by the party read, and a dispute counted as *both* resolved
+       * and open by `getResolutionMetrics` (which keys on `resolved_at IS NOT
+       * NULL`), corrupting the platform SLA figures. qa-report.md QA-DC1-01 /
+       * security-report.md B2; the same defect `1d5ce20` fixed in
+       * `AdminService`.
+       *
+       * The three money columns are part of this: they are the claim on the
+       * payment (see {@link claimForRuling}), and a movement that never
+       * happened must not leave the payment claimed.
+       */
+      await this.repo
+        .createQueryBuilder()
+        .update(Dispute)
+        .set({
+          status: previous.status,
+          outcome: previous.outcome,
+          resolution: previous.resolution,
+          adminNotes: previous.adminNotes,
+          resolvedById: null,
+          resolvedAt: null,
+          moneyAction: null,
+          moneyAmount: null,
+          moneyPaymentId: null,
+        })
+        .where('id = :id', { id })
+        .execute();
+
+      throw new BadRequestException(
+        `The ${plan.action === DisputeMoneyAction.REFUND ? 'refund' : 'release'} could not be completed, ` +
+          `so this dispute has NOT been resolved and is still actionable. Reason: ${detail}`,
+      );
+    }
+  }
+
+  /**
+   * Step 4 of {@link resolve}: records the money result — the amount, and a
+   * `NONE` where nothing moved.
+   *
+   * Wrapped, because by the time this runs the money has already moved. A
+   * failure here (including a unique violation, which is now unreachable:
+   * `claimForRuling` already holds this payment's claim on this very row) must
+   * not become a 500 that reads to the admin as "the refund didn't happen".
+   * The claim written in step 2 means the double-movement guard still holds
+   * even if this write is lost; only the recorded amount would be missing, and
+   * the log line below is how that is noticed.
+   */
+  private async recordMoneyResult(
+    id: number,
+    moved: {
+      action: DisputeMoneyAction;
+      amount: number;
+      paymentId: number;
+    } | null,
+  ): Promise<void> {
+    try {
+      await this.repo
+        .createQueryBuilder()
+        .update(Dispute)
+        .set({
+          moneyAction: moved ? moved.action : DisputeMoneyAction.NONE,
+          // `null`, not `undefined`: an `undefined` is skipped rather than
+          // written, so a `NONE` result would inherit whatever these columns
+          // happened to hold.
+          moneyAmount: moved ? moved.amount : null,
+          moneyPaymentId: moved ? moved.paymentId : null,
+        })
+        .where('id = :id', { id })
+        .execute();
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      const what = moved
+        ? `${moved.action} of ${formatGhs(moved.amount)} on payment ${moved.paymentId}`
+        : 'NONE';
+      this.logger.error(
+        `Dispute ${id}: the money action (${what}) completed but recording it failed. ` +
+          `The ruling stands and the payment claim is intact; the recorded amount may be missing. ${detail}`,
+      );
+    }
+  }
+
+  /**
+   * Narrows a caught error to the partial unique index that makes a payment
+   * claimable by exactly one dispute — `uq_disputes_money_payment`, created by
+   * `AddDisputeOutcomeCategoryAndResponse1783140000000`.
+   *
+   * Matched on the index name as well as the SQLSTATE on purpose: any *other*
+   * unique violation on this table is a real bug and has to keep propagating,
+   * rather than being silently read as "a sibling dispute got there first".
+   */
+  private isMoneyClaimConflict(err: unknown): boolean {
+    if (!(err instanceof QueryFailedError)) return false;
+    const pg = err as QueryFailedError & {
+      code?: string;
+      constraint?: string;
+    };
+    return (
+      pg.code === '23505' &&
+      (pg.constraint === MONEY_CLAIM_INDEX ||
+        err.message.includes(MONEY_CLAIM_INDEX))
+    );
   }
 
   async close(admin: User, id: number, dto: CloseDisputeDto) {
@@ -1213,8 +1498,12 @@ export class DisputesService {
           counterpartyUserId,
           outcome,
           resolution,
-          verdict: dispute.outcome,
-          moneyAction: dispute.moneyAction,
+          // `?? undefined`: these columns are nullable, and the payload's
+          // contract is "absent", not "null" — every consumer tests for
+          // presence (`notifications.service.ts`), so a null would read the
+          // same but type as a lie.
+          verdict: dispute.outcome ?? undefined,
+          moneyAction: dispute.moneyAction ?? undefined,
           moneyAmount:
             dispute.moneyAmount != null
               ? Number(dispute.moneyAmount)
@@ -1256,6 +1545,16 @@ export class DisputesService {
           : {}),
         ...(dispute.category ? { category: dispute.category } : {}),
       },
+    });
+  }
+
+  /**
+   * B4: the payment block on the admin dispute read, narrowed to the fields
+   * that surface actually uses. See {@link DisputePaymentDto}.
+   */
+  private toPaymentDto(payment: Payment): DisputePaymentDto {
+    return plainToInstance(DisputePaymentDto, payment, {
+      excludeExtraneousValues: true,
     });
   }
 

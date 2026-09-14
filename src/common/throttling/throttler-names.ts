@@ -28,4 +28,13 @@ export const THROTTLER_NAMES = {
    * needs to trigger several of these a minute.
    */
   AUTH_EMAIL: 'auth-email',
+  /**
+   * The two authenticated dispute writes that change a dispute's state:
+   * `POST /disputes/:id/respond` (a party's one-shot response) and
+   * `PATCH /admin/disputes/:id/resolve` (an admin's ruling, which can move
+   * money). Defence in depth behind the atomic write guards those two
+   * endpoints now have — unlimited attempts are what made their races
+   * practically huntable.
+   */
+  DISPUTE_WRITE: 'dispute-write',
 } as const;

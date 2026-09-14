@@ -49,9 +49,18 @@ export class AdminAnalyticsController {
       'refreshed every 10 minutes (the `PlatformRatingCacheService` precedent) — check ' +
       '`generatedAt` and `cached` to render an honest freshness line. `previous` carries ' +
       'the immediately preceding equivalent period so a trend is a real comparison or ' +
-      'absent, never invented.',
+      'absent, never invented. **Partial results (DC2.4):** each section is computed ' +
+      'independently, so one failing sub-query no longer fails the whole response. A ' +
+      'section that could not be computed is `null` and is named in `degraded` (e.g. ' +
+      '`["topArtisans","series.revenue"]`). A `null` section means *unavailable* — it ' +
+      'must be rendered as unavailable and never as `0`, `[]` or a flat line, or an ' +
+      'admin will read a missing revenue figure as GH₵ 0.00. `degraded` is `[]` on a ' +
+      'healthy rollup.',
   })
-  @ApiOkResponse({ description: 'Platform analytics for the selected range' })
+  @ApiOkResponse({
+    description:
+      'Platform analytics for the selected range. Sections named in `degraded` are `null` and unavailable, not zero.',
+  })
   @ApiForbiddenResponse({ description: 'Caller is not an admin' })
   async getAdminAnalytics(@Query() query: AdminAnalyticsQueryDto) {
     const data = await this.cache.get(

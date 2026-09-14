@@ -935,7 +935,15 @@ describe('Messaging & Notifications — full lifecycle (e2e)', () => {
     const resolve = await request(server())
       .patch(`/api/v1/admin/disputes/${dispute.id}/resolve`)
       .set('Authorization', `Bearer ${adminToken}`)
-      .send({ resolution: 'QA resolution: refunded in full.' });
+      // `outcome` became mandatory in the analytics-admin-disputes round
+      // (DR1), after this spec was written — a `{ resolution }`-only body is
+      // now a 400, which silently stopped this test from ever reaching the
+      // boundary it exists to check. MUTUAL is the verdict that moves no
+      // money, so the AD2 assertion below stays about access, not payments.
+      .send({
+        outcome: 'MUTUAL',
+        resolution: 'QA resolution: both parties settled between themselves.',
+      });
     expect(resolve.status).toBe(200);
 
     const afterResolve = await request(server())
@@ -958,7 +966,11 @@ describe('Messaging & Notifications — full lifecycle (e2e)', () => {
     const res = await request(server())
       .patch(`/api/v1/admin/disputes/${dispute.id}/resolve`)
       .set('Authorization', `Bearer ${adminToken}`)
-      .send({ resolution: 'QA outcome: artisan to redo the work.' });
+      // `outcome` is mandatory since DR1 — see the AD2 test above.
+      .send({
+        outcome: 'MUTUAL',
+        resolution: 'QA outcome: artisan to redo the work.',
+      });
     expect(res.status).toBe(200);
 
     let afterCust = beforeCust;
@@ -1033,6 +1045,9 @@ describe('Messaging & Notifications — full lifecycle (e2e)', () => {
       .set('Authorization', `Bearer ${customer1Token}`)
       .send({
         bookingId: booking.id,
+        // `category` became mandatory on new disputes in the
+        // analytics-admin-disputes round (DR5), after this spec was written.
+        category: 'WORK_QUALITY',
         reason: `QA raised dispute ${uniq} to check the admin queue notification`,
       });
     expect(res.status).toBe(201);

@@ -85,12 +85,18 @@ export class User {
   @Column({ name: 'is_banned', type: 'boolean', default: false })
   isBanned!: boolean;
 
+  /**
+   * Typed `| null` deliberately: TypeORM's `save()` **skips** a property whose
+   * value is `undefined` (it reads as "not provided"), so only an explicit
+   * `null` clears a nullable column. Lifting a ban or a suspension has to be
+   * able to say "this column is now empty", which `undefined` cannot express.
+   */
   @Column({ name: 'banned_at', type: 'timestamp', nullable: true })
-  bannedAt?: Date;
+  bannedAt?: Date | null;
 
   /** AT2: the admin who applied the ban. Nothing recorded an actor before. */
   @Column({ name: 'banned_by_id', type: 'int', nullable: true })
-  bannedById?: number;
+  bannedById?: number | null;
 
   /**
    * AT3: reversible suspension, distinct from the permanent ban (Open
@@ -105,15 +111,16 @@ export class User {
   @Column({ name: 'is_suspended', type: 'boolean', default: false })
   isSuspended!: boolean;
 
+  /** `| null` for the same reason as `bannedAt` — see the note above it. */
   @Column({ name: 'suspended_at', type: 'timestamp', nullable: true })
-  suspendedAt?: Date;
+  suspendedAt?: Date | null;
 
   @Column({ name: 'suspended_by_id', type: 'int', nullable: true })
-  suspendedById?: number;
+  suspendedById?: number | null;
 
   /** AT3: the reason an admin gave; shown to the admin, not to the user. */
   @Column({ name: 'suspension_reason', type: 'text', nullable: true })
-  suspensionReason?: string;
+  suspensionReason?: string | null;
 
   @OneToMany(() => Address, (address) => address.user, { cascade: true })
   addresses: Address[];
