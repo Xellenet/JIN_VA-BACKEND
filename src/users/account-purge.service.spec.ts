@@ -423,8 +423,7 @@ describe('AccountPurgeService (C1.7/C1.8)', () => {
           0,
         );
         const bioOnly = setPayloads.find(
-          (payload) =>
-            Object.keys(payload).length === 1 && 'bio' in payload,
+          (payload) => Object.keys(payload).length === 1 && 'bio' in payload,
         );
         expect(bioOnly).toEqual({ bio: null });
 

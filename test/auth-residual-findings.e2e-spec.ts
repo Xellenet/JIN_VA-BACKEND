@@ -46,11 +46,7 @@ import { AccountPurgeService } from '@users/account-purge.service';
 import { SocialAuthStrategyFactory } from '../src/auth/social-auth.factory';
 import { OAuthStateService } from '../src/auth/oauth-state.service';
 import { VARIABLES } from '@common/constants/variables.constants';
-import {
-  BookingStatus,
-  DevicePlatform,
-  Role,
-} from '@common/types/enums';
+import { BookingStatus, DevicePlatform, Role } from '@common/types/enums';
 
 jest.setTimeout(300000);
 
@@ -112,8 +108,7 @@ describe('auth-residual-findings (backend items 1, 2, 3, 6, 9)', () => {
   let parkedAdmins: User[] = [];
 
   const server = () => app.getHttpServer();
-  const email = (label: string) =>
-    `residual-${label}-${uniq}@test.jinva.local`;
+  const email = (label: string) => `residual-${label}-${uniq}@test.jinva.local`;
   /** `PHONENUMBER_REGEX` is `\d{3}-\d{3}-\d{4}`, max 12 chars. */
   const phone = (n: number) =>
     `02${n}-${String(uniq).slice(-6, -3)}-${String(uniq).slice(-4)}`;
@@ -173,11 +168,14 @@ describe('auth-residual-findings (backend items 1, 2, 3, 6, 9)', () => {
 
   /** Every `Set-Cookie` header on a response, keyed by cookie name. */
   const setCookies = (res: request.Response): Record<string, string> => {
-    const raw = res.headers['set-cookie'];
-    const list = Array.isArray(raw) ? raw : raw ? [String(raw)] : [];
-    return Object.fromEntries(
-      list.map((cookie) => [String(cookie).split('=')[0], String(cookie)]),
-    );
+    const raw: unknown = res.headers['set-cookie'];
+    const list = Array.isArray(raw) ? raw : raw ? [raw] : [];
+    const byName: Record<string, string> = {};
+    for (const cookie of list) {
+      const header = String(cookie);
+      byName[header.split('=')[0]] = header;
+    }
+    return byName;
   };
 
   /**
@@ -314,9 +312,7 @@ describe('auth-residual-findings (backend items 1, 2, 3, 6, 9)', () => {
         .catch(() => undefined);
     }
     if (createdProfileIds.length)
-      await artisanProfileRepo
-        .delete(createdProfileIds)
-        .catch(() => undefined);
+      await artisanProfileRepo.delete(createdProfileIds).catch(() => undefined);
     if (createdUserIds.length)
       await userRepo.delete(createdUserIds).catch(() => undefined);
     if (service) await serviceRepo.delete(service.id).catch(() => undefined);
@@ -484,7 +480,9 @@ describe('auth-residual-findings (backend items 1, 2, 3, 6, 9)', () => {
       const cust = await makeUser('refusedcookies', Role.CUSTOMER);
       const art = await makeUser('refusedart', Role.ARTISAN);
       const profile = await artisanProfileRepo.save(
-        artisanProfileRepo.create({ user: art.user } as Partial<ArtisanProfile>),
+        artisanProfileRepo.create({
+          user: art.user,
+        } as Partial<ArtisanProfile>),
       );
       createdProfileIds.push(profile.id);
       const booking = await bookingRepo.save(
@@ -600,10 +598,7 @@ describe('auth-residual-findings (backend items 1, 2, 3, 6, 9)', () => {
         const bio = await readBio(u.user.id);
         const devices = await countDevices(u.user.id);
 
-        console.log(
-          'item 3 destructive =',
-          JSON.stringify({ bio, devices }),
-        );
+        console.log('item 3 destructive =', JSON.stringify({ bio, devices }));
         expect(bio).toBeNull();
         expect(devices).toBe(0);
         // The customer profile row itself is kept (counterparty joins), only
@@ -840,48 +835,54 @@ describe('auth-residual-findings (backend items 1, 2, 3, 6, 9)', () => {
     });
 
     it.each([
-      ['soft-deleted', async (repo: Repository<User>, id: number) => {
-        await repo.softDelete({ id });
-      }],
-      ['banned', async (repo: Repository<User>, id: number) => {
-        await repo.update({ id }, { isBanned: true, bannedAt: new Date() });
-      }],
-      ['suspended', async (repo: Repository<User>, id: number) => {
-        await repo.update(
-          { id },
-          { isSuspended: true, suspendedAt: new Date() },
-        );
-      }],
-    ])(
-      'does not count a %s admin as cover',
-      async (label, disable) => {
-        const caller = await makeUser(`cover-${label}`, Role.ADMIN);
-        const other = await makeUser(`other-${label}`, Role.ADMIN);
-        await disable(userRepo, other.user.id);
-        await parkOtherAdmins([caller.user.id, other.user.id]);
-        try {
-          const res = await deleteMe(caller.token);
+      [
+        'soft-deleted',
+        async (repo: Repository<User>, id: number) => {
+          await repo.softDelete({ id });
+        },
+      ],
+      [
+        'banned',
+        async (repo: Repository<User>, id: number) => {
+          await repo.update({ id }, { isBanned: true, bannedAt: new Date() });
+        },
+      ],
+      [
+        'suspended',
+        async (repo: Repository<User>, id: number) => {
+          await repo.update(
+            { id },
+            { isSuspended: true, suspendedAt: new Date() },
+          );
+        },
+      ],
+    ])('does not count a %s admin as cover', async (label, disable) => {
+      const caller = await makeUser(`cover-${label}`, Role.ADMIN);
+      const other = await makeUser(`other-${label}`, Role.ADMIN);
+      await disable(userRepo, other.user.id);
+      await parkOtherAdmins([caller.user.id, other.user.id]);
+      try {
+        const res = await deleteMe(caller.token);
 
-          console.log(
-            `item 9 ${label} second admin =`,
-            res.status,
-            JSON.stringify((res.body as Body).meta?.error),
-          );
-          expect(res.status).toBe(409);
-          expect((res.body as Body).meta?.error).toBe(
-            'LAST_ADMIN_CANNOT_DELETE',
-          );
-        } finally {
-          await restoreParkedAdmins();
-        }
-      },
-    );
+        console.log(
+          `item 9 ${label} second admin =`,
+          res.status,
+          JSON.stringify((res.body as Body).meta?.error),
+        );
+        expect(res.status).toBe(409);
+        expect((res.body as Body).meta?.error).toBe('LAST_ADMIN_CANNOT_DELETE');
+      } finally {
+        await restoreParkedAdmins();
+      }
+    });
 
     it('reports one coherent 409 when live commitments also apply', async () => {
       const admin = await makeUser('adminbusy', Role.ADMIN);
       const art = await makeUser('adminbusyart', Role.ARTISAN);
       const profile = await artisanProfileRepo.save(
-        artisanProfileRepo.create({ user: art.user } as Partial<ArtisanProfile>),
+        artisanProfileRepo.create({
+          user: art.user,
+        } as Partial<ArtisanProfile>),
       );
       createdProfileIds.push(profile.id);
       const booking = await bookingRepo.save(
@@ -971,16 +972,13 @@ describe('auth-residual-findings (backend items 1, 2, 3, 6, 9)', () => {
       // comparison. The pre-fix signal was ~6ms vs ~560ms, so a generous
       // floor and ratio catch a reintroduced short-circuit without being
       // flaky on a loaded machine.
-      const timings = [
-        wrongOnLive.ms,
-        wrongOnDeleted.ms,
-        neverRegistered.ms,
-      ];
+      const timings = [wrongOnLive.ms, wrongOnDeleted.ms, neverRegistered.ms];
       for (const ms of timings) {
         expect(ms).toBeGreaterThan(50);
       }
-      expect(Math.max(...timings) / Math.max(1, Math.min(...timings))).
-        toBeLessThan(4);
+      expect(
+        Math.max(...timings) / Math.max(1, Math.min(...timings)),
+      ).toBeLessThan(4);
 
       // The same for restore-account.
       const rWrong = await timeCall(() =>
@@ -1004,8 +1002,7 @@ describe('auth-residual-findings (backend items 1, 2, 3, 6, 9)', () => {
         expect(ms).toBeGreaterThan(50);
       }
       expect(
-        Math.max(...restoreTimings) /
-          Math.max(1, Math.min(...restoreTimings)),
+        Math.max(...restoreTimings) / Math.max(1, Math.min(...restoreTimings)),
       ).toBeLessThan(4);
     });
   });

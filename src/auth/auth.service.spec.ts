@@ -1021,7 +1021,9 @@ describe('AuthService', () => {
       } as OAuthCallbackDto);
 
       expect(refreshToken).toBe('refresh-token');
-      expect(mockUsersService.findSoftDeletedUserByEmail).not.toHaveBeenCalled();
+      expect(
+        mockUsersService.findSoftDeletedUserByEmail,
+      ).not.toHaveBeenCalled();
       expect(mockUsersService.restoreAccountById).not.toHaveBeenCalled();
       expect(mockUsersService.createUser).not.toHaveBeenCalled();
     });
@@ -1285,14 +1287,12 @@ describe('AuthService', () => {
 
       const lines = readLogs();
       // The id where the address used to be …
-      expect(
-        lines.some((line) => line.includes(`user ${USER_ID}`)),
-      ).toBe(true);
+      expect(lines.some((line) => line.includes(`user ${USER_ID}`))).toBe(true);
       // … and the hash on the one line that runs before any row is resolved,
       // so the attempt can still be correlated end to end.
-      expect(
-        lines.some((line) => line.includes(hashEmailForLog(EMAIL))),
-      ).toBe(true);
+      expect(lines.some((line) => line.includes(hashEmailForLog(EMAIL)))).toBe(
+        true,
+      );
     });
 
     /**
