@@ -873,6 +873,7 @@ describe('AuthService', () => {
         id: 8,
         email: 'social-gone@example.com',
         password: null,
+        isSocialLogin: true,
         deletedAt: subDays(new Date(), 5),
       });
       mockUsersService.restoreAccountById.mockResolvedValueOnce({
@@ -880,6 +881,7 @@ describe('AuthService', () => {
         id: 8,
         email: 'social-gone@example.com',
         password: null,
+        isSocialLogin: true,
       });
 
       const { refreshToken } = await service.handleOAuthCallback('google', {
@@ -895,6 +897,133 @@ describe('AuthService', () => {
         MailEvent.ACCOUNT_RESTORED,
         expect.objectContaining({ email: 'social-gone@example.com' }),
       );
+    });
+
+    /**
+     * Item 6 (security `L1`): completing the Google flow proves control of the
+     * *mailbox*. That is the right ownership proof for an account whose only
+     * credential ever was the Google identity, and the wrong one for an
+     * account that had a password — so a password-only soft-deleted account
+     * must not come back this way. The scenario it matters for is someone who
+     * deleted their account *because* their Google session was compromised.
+     */
+    it('refuses to restore a password-only soft-deleted account (L1)', async () => {
+      mockOAuthStateService.consumeState.mockReturnValueOnce({
+        role: Role.CUSTOMER,
+      });
+      mockStrategy.getAccessToken.mockResolvedValueOnce('provider-token');
+      mockStrategy.getUserProfile.mockResolvedValueOnce({
+        email: 'password-only-gone@example.com',
+        firstname: 'Kofi',
+        lastname: 'Mensah',
+        provider: 'google',
+        providerId: 'google-id-5',
+      });
+      mockUsersService.findUserByEmail.mockResolvedValueOnce(null);
+      mockUsersService.findSoftDeletedUserByEmail.mockResolvedValueOnce({
+        ...mockUser,
+        id: 11,
+        email: 'password-only-gone@example.com',
+        password: 'hashed',
+        isSocialLogin: false,
+        deletedAt: subDays(new Date(), 5),
+      });
+
+      await expect(
+        service.handleOAuthCallback('google', {
+          code: 'auth-code',
+          state: 'state-123',
+        } as OAuthCallbackDto),
+      ).rejects.toThrow(UnauthorizedException);
+
+      // Nothing restored, no session issued, and — the bit that would be worse
+      // than a missing feature — no second row inserted for an address a
+      // soft-deleted row still holds under a unique constraint.
+      expect(mockUsersService.restoreAccountById).not.toHaveBeenCalled();
+      expect(mockUsersService.createUser).not.toHaveBeenCalled();
+      expect(mockUserTokenService.createJWTTokens).not.toHaveBeenCalled();
+      expect(mockEmitter.emit).not.toHaveBeenCalledWith(
+        MailEvent.ACCOUNT_RESTORED,
+        expect.anything(),
+      );
+    });
+
+    /**
+     * The permission boundary in the other direction: this must not become a
+     * way to block a genuine social user's restore. A Google account that has
+     * since added a password is still a social-login account.
+     */
+    it('still restores a social-login account that has since set a password', async () => {
+      mockOAuthStateService.consumeState.mockReturnValueOnce({
+        role: Role.CUSTOMER,
+      });
+      mockStrategy.getAccessToken.mockResolvedValueOnce('provider-token');
+      mockStrategy.getUserProfile.mockResolvedValueOnce({
+        email: 'social-with-password@example.com',
+        firstname: 'Adwoa',
+        lastname: 'Boateng',
+        provider: 'google',
+        providerId: 'google-id-6',
+      });
+      mockUsersService.findUserByEmail.mockResolvedValueOnce(null);
+      mockUsersService.findSoftDeletedUserByEmail.mockResolvedValueOnce({
+        ...mockUser,
+        id: 12,
+        email: 'social-with-password@example.com',
+        password: 'hashed',
+        isSocialLogin: true,
+        deletedAt: subDays(new Date(), 5),
+      });
+      mockUsersService.restoreAccountById.mockResolvedValueOnce({
+        ...mockUser,
+        id: 12,
+        email: 'social-with-password@example.com',
+        isSocialLogin: true,
+      });
+
+      const { refreshToken } = await service.handleOAuthCallback('google', {
+        code: 'auth-code',
+        state: 'state-123',
+      } as OAuthCallbackDto);
+
+      expect(mockUsersService.restoreAccountById).toHaveBeenCalledWith(12);
+      expect(refreshToken).toBe('refresh-token');
+    });
+
+    /**
+     * The fix touches the **restore** path only: a live password-only account
+     * signing in with Google still resolves to that account (G6) and signs in.
+     */
+    it('leaves a live password-only account signing in with Google unchanged', async () => {
+      mockOAuthStateService.consumeState.mockReturnValueOnce({
+        role: Role.CUSTOMER,
+      });
+      mockStrategy.getAccessToken.mockResolvedValueOnce('provider-token');
+      mockStrategy.getUserProfile.mockResolvedValueOnce({
+        email: 'live-password@example.com',
+        firstname: 'Yaw',
+        lastname: 'Asare',
+        provider: 'google',
+        providerId: 'google-id-7',
+      });
+      mockUsersService.findUserByEmail.mockResolvedValueOnce({
+        ...mockUser,
+        id: 13,
+        email: 'live-password@example.com',
+        password: 'hashed',
+        isSocialLogin: false,
+        profilePicture: null,
+      });
+
+      const { refreshToken } = await service.handleOAuthCallback('google', {
+        code: 'auth-code',
+        state: 'state-123',
+      } as OAuthCallbackDto);
+
+      expect(refreshToken).toBe('refresh-token');
+      expect(mockUsersService.findSoftDeletedUserByEmail).not.toHaveBeenCalled();
+      expect(mockUsersService.restoreAccountById).not.toHaveBeenCalled();
+      expect(mockUsersService.createUser).not.toHaveBeenCalled();
     });
   });
 

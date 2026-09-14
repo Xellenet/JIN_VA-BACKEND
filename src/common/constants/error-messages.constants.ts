@@ -53,6 +53,21 @@ export const ERROR_MESSAGES = {
      */
     ACCOUNT_PENDING_DELETION:
       'This account is scheduled for deletion. You can still restore it before the recovery window closes.',
+    /**
+     * L1: a soft-deleted account that was never a social-login account cannot
+     * be restored by completing Google sign-in — that proves control of the
+     * mailbox, which is not ownership proof for an account whose credential
+     * was a password. Its owner restores it with `POST /auth/restore-account`
+     * (or by signing in and using the pending-deletion banner) as normal.
+     *
+     * Never rendered to a user as it stands: `GET /auth/google/callback`
+     * catches every failure and redirects to the frontend's existing generic
+     * OAuth error page. It exists so the refusal is an explicit, logged
+     * decision rather than a unique-constraint violation from a duplicate
+     * insert, which is what the callback would otherwise fail on.
+     */
+    SOCIAL_RESTORE_NOT_AVAILABLE:
+      'This account cannot be restored through Google sign-in. Sign in with your password to restore it.',
     PASSWORDS_DO_NOT_MATCH: 'newPassword and confirmNewPassword do not match',
     // G10: distinct from INVALID_CREDENTIALS so the frontend can render a
     // specific message (and a "Continue with Google" shortcut) instead of
