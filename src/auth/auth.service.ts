@@ -46,6 +46,7 @@ import {
   ArtisanRegisteredPayload,
   SecurityAlertPayload,
 } from '@common/events/app.events';
+import { hashEmailForLog } from '@common/utils/log-identifier.util';
 
 const SELF_REGISTERABLE_ROLES = [Role.CUSTOMER, Role.ARTISAN];
 
@@ -175,7 +176,13 @@ export class AuthService {
     if (!email || !password) {
       throw new BadRequestException('Provide user email and password!');
     }
-    this.logger.log(`Logging in User with email ${email}`);
+    // M5: every line this method emits identifies the account by id, never by
+    // the submitted address — see `hashEmailForLog` for why this one line is
+    // the exception (no id exists until the lookup below returns) and why the
+    // hash is computed unconditionally, before any branch.
+    this.logger.log(
+      `Processing login request for email hash ${hashEmailForLog(email)}`,
+    );
 
     const user = await this.userService.findUserByEmail(email);
 
@@ -206,7 +213,7 @@ export class AuthService {
 
     if (!hasPassword) {
       this.logger.warn(
-        `Login blocked for social-only account (no usable password): ${email}`,
+        `Login blocked for social-only account (no usable password): user ${user.id}`,
       );
       throw new SocialOnlyAccountException(
         ERROR_MESSAGES.AUTH.SOCIAL_ONLY_ACCOUNT,
@@ -214,7 +221,7 @@ export class AuthService {
     }
 
     if (!isValid) {
-      this.logger.warn(`Invalid credentials provided for email ${email}`);
+      this.logger.warn(`Invalid credentials provided for user ${user.id}`);
       throw new InvalidCredentialsException(
         ERROR_MESSAGES.AUTH.INVALID_CREDENTIALS,
       );
@@ -225,16 +232,16 @@ export class AuthService {
     // so the frontend can render a specific "please verify your email" message
     // with a resend-verification path, per the acceptance criteria.
     if (!user.accountVerified) {
-      this.logger.warn(`Login blocked for unverified account: ${email}`);
+      this.logger.warn(`Login blocked for unverified account: user ${user.id}`);
       throw new ForbiddenException(ERROR_MESSAGES.AUTH.EMAIL_NOT_VERIFIED);
     }
 
-    this.logger.log(`Generating tokens for user with email ${email}`);
+    this.logger.log(`Generating tokens for user ${user.id}`);
     const { access_token, refresh_token, expires_at } =
       await this.userTokenService.createJWTTokens(user);
-    this.logger.log(`Tokens generated for user with email ${email}`);
+    this.logger.log(`Tokens generated for user ${user.id}`);
 
-    this.logger.log(`User logged in with email ${email}`);
+    this.logger.log(`User ${user.id} logged in`);
     const result = plainToInstance(LoginResponseDto, {
       access_token,
       expires_at,

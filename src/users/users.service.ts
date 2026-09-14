@@ -42,6 +42,7 @@ import {
   purgeDateFor,
 } from '@common/utils/account-recovery.util';
 import { randomUUID } from 'node:crypto';
+import { hashEmailForLog } from '@common/utils/log-identifier.util';
 
 /**
  * A real bcrypt hash, at the application's configured cost factor, of a random
@@ -346,7 +347,21 @@ export class UsersService {
     if (!email) {
       throw new NotFoundException('Email required');
     }
-    this.logger.log(`Finding user with email ${email}`);
+    // M5: this was the single highest-volume source of email addresses in the
+    // log store — `JwtStrategy.validate()` resolves the caller through here on
+    // *every* authenticated request — and a line in the log store outlives the
+    // C1.7 purge that scrubs the address from the database, so "no recoverable
+    // PII after purge" was true of the database only. There is no id to log
+    // yet (the id is what this lookup is for), so the address is replaced with
+    // a deterministic hash of it: support can still follow one account across
+    // a request, and an operator who already knows an address can recompute
+    // the key.
+    //
+    // Emitted before the lookup, and identically whether or not a row is
+    // found. A found/not-found split on a line every request writes would hand
+    // log readers an enumeration oracle that the response bodies deliberately
+    // are not.
+    this.logger.log(`Finding user by email hash ${hashEmailForLog(email)}`);
     return this.usersRepository.findOne({ where: { email } });
   }
 

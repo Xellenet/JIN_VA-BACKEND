@@ -24,6 +24,7 @@ import { ERROR_MESSAGES } from '@common/constants/error-messages.constants';
 import { MailEvent } from 'mail/events/mail.events';
 import { addDays, subDays } from 'date-fns';
 import { plainToInstance } from 'class-transformer';
+import { hashEmailForLog } from '@common/utils/log-identifier.util';
 
 describe('AuthService', () => {
   let service: AuthService;
@@ -306,7 +307,7 @@ describe('AuthService', () => {
       const { result, refreshToken } = await service.loginUser(dto);
 
       expect(loggerSpy).toHaveBeenCalledWith(
-        `Logging in User with email ${dto.email}`,
+        `Processing login request for email hash ${hashEmailForLog(dto.email)}`,
       );
       expect(result).toHaveProperty('access_token', 'access-token');
       expect(result).not.toHaveProperty('refresh_token');
@@ -991,6 +992,213 @@ describe('AuthService', () => {
         MailEvent.ACCOUNT_RESTORED,
         expect.anything(),
       );
+    });
+  });
+
+  /**
+   * Item 5 (security `M5`, login half): no line `loginUser` emits may contain
+   * the submitted address, for **any** outcome — and each one must still
+   * identify the account well enough to debug a failed login.
+   *
+   * Every login outcome is enumerated rather than a couple of representative
+   * ones, because the leak this replaces was a single line on a single branch.
+   * Register and the social-login paths are deliberately excluded: they are
+   * out of scope for this round (`M5` stays partially open by decision), and
+   * asserting on them here would fail for a reason nobody intended to fix yet.
+   */
+  describe('no email addresses in login-path logs (M5)', () => {
+    const EMAIL = 'leak-check@example.com';
+    const USER_ID = 4242;
+
+    const liveUser = (overrides: Record<string, unknown> = {}) => ({
+      ...mockUser,
+      id: USER_ID,
+      email: EMAIL,
+      ...overrides,
+    });
+
+    /** Captures every level, since the leak was on a `warn`. */
+    const captureLogs = () => {
+      const spies = (['log', 'warn', 'error'] as const).map((level) =>
+        jest.spyOn(service['logger'], level).mockImplementation(() => {}),
+      );
+      return () =>
+        spies.flatMap((spy) =>
+          (spy.mock.calls as unknown[][]).map((call) => String(call[0])),
+        );
+    };
+
+    const outcomes: { label: string; arrange: () => void }[] = [
+      {
+        label: 'success',
+        arrange: () => {
+          mockUsersService.findUserByEmail.mockResolvedValueOnce(liveUser());
+          mockUserTokenService.createJWTTokens.mockResolvedValueOnce({
+            access_token: 'a',
+            refresh_token: 'r',
+            expires_at: new Date(),
+          });
+        },
+      },
+      {
+        label: 'wrong password on a live account',
+        arrange: () => {
+          mockUsersService.findUserByEmail.mockResolvedValueOnce(liveUser());
+          mockUsersService.getPasswordCheckResult.mockResolvedValueOnce({
+            hasPassword: true,
+            isValid: false,
+          });
+        },
+      },
+      {
+        label: 'social-only account',
+        arrange: () => {
+          mockUsersService.findUserByEmail.mockResolvedValueOnce(liveUser());
+          mockUsersService.getPasswordCheckResult.mockResolvedValueOnce({
+            hasPassword: false,
+            isValid: false,
+          });
+        },
+      },
+      {
+        label: 'unverified account',
+        arrange: () => {
+          mockUsersService.findUserByEmail.mockResolvedValueOnce(
+            liveUser({ accountVerified: false }),
+          );
+        },
+      },
+      {
+        label: 'never-registered address',
+        arrange: () => {
+          mockUsersService.findUserByEmail.mockResolvedValueOnce(null);
+          mockUsersService.findSoftDeletedUserByEmail.mockResolvedValueOnce(
+            null,
+          );
+        },
+      },
+      {
+        label: 'wrong password on a soft-deleted account',
+        arrange: () => {
+          mockUsersService.findUserByEmail.mockResolvedValueOnce(null);
+          mockUsersService.findSoftDeletedUserByEmail.mockResolvedValueOnce({
+            id: USER_ID,
+            email: EMAIL,
+            deletedAt: new Date(),
+          });
+          mockUsersService.getSoftDeletedPasswordCheckResult.mockResolvedValueOnce(
+            { hasPassword: true, isValid: false },
+          );
+        },
+      },
+      {
+        label: 'restorable soft-deleted account with the right password',
+        arrange: () => {
+          mockUsersService.findUserByEmail.mockResolvedValueOnce(null);
+          mockUsersService.findSoftDeletedUserByEmail.mockResolvedValueOnce({
+            id: USER_ID,
+            email: EMAIL,
+            deletedAt: new Date(),
+          });
+          mockUsersService.getSoftDeletedPasswordCheckResult.mockResolvedValueOnce(
+            { hasPassword: true, isValid: true },
+          );
+        },
+      },
+      {
+        label: 'soft-deleted account past its window',
+        arrange: () => {
+          mockUsersService.findUserByEmail.mockResolvedValueOnce(null);
+          mockUsersService.findSoftDeletedUserByEmail.mockResolvedValueOnce({
+            id: USER_ID,
+            email: EMAIL,
+            deletedAt: subDays(new Date(), 31),
+          });
+          mockUsersService.getSoftDeletedPasswordCheckResult.mockResolvedValueOnce(
+            { hasPassword: true, isValid: true },
+          );
+        },
+      },
+    ];
+
+    it.each(outcomes)(
+      'writes no email address for the $label outcome',
+      async ({ arrange }) => {
+        arrange();
+        const readLogs = captureLogs();
+
+        await service
+          .loginUser({ email: EMAIL, password: 'CorrectHorse1!' })
+          .catch(() => undefined);
+
+        const lines = readLogs();
+        expect(lines.length).toBeGreaterThan(0);
+        for (const line of lines) {
+          expect(line).not.toContain(EMAIL);
+          // Not just the full address: no local part, no domain either.
+          expect(line).not.toContain('leak-check');
+          expect(line).not.toContain('example.com');
+        }
+      },
+    );
+
+    it('still identifies the account, so a failed login is debuggable', async () => {
+      mockUsersService.findUserByEmail.mockResolvedValueOnce(liveUser());
+      mockUsersService.getPasswordCheckResult.mockResolvedValueOnce({
+        hasPassword: true,
+        isValid: false,
+      });
+      const readLogs = captureLogs();
+
+      await service
+        .loginUser({ email: EMAIL, password: 'WrongHorse1!' })
+        .catch(() => undefined);
+
+      const lines = readLogs();
+      // The id where the address used to be …
+      expect(
+        lines.some((line) => line.includes(`user ${USER_ID}`)),
+      ).toBe(true);
+      // … and the hash on the one line that runs before any row is resolved,
+      // so the attempt can still be correlated end to end.
+      expect(
+        lines.some((line) => line.includes(hashEmailForLog(EMAIL))),
+      ).toBe(true);
+    });
+
+    /**
+     * The hash is computed from the submitted string before any lookup, so it
+     * cannot carry account state. If it ever did, log read access would become
+     * the enumeration oracle the response bodies deliberately are not.
+     */
+    it('logs the same correlation key for a registered and an unregistered address', async () => {
+      mockUsersService.findUserByEmail.mockResolvedValueOnce(liveUser());
+      mockUserTokenService.createJWTTokens.mockResolvedValueOnce({
+        access_token: 'a',
+        refresh_token: 'r',
+        expires_at: new Date(),
+      });
+      const readRegistered = captureLogs();
+      await service
+        .loginUser({ email: EMAIL, password: 'CorrectHorse1!' })
+        .catch(() => undefined);
+      const registeredEntry = readRegistered().find((line) =>
+        line.startsWith('Processing login request'),
+      );
+      jest.restoreAllMocks();
+
+      mockUsersService.findUserByEmail.mockResolvedValueOnce(null);
+      mockUsersService.findSoftDeletedUserByEmail.mockResolvedValueOnce(null);
+      const readUnknown = captureLogs();
+      await service
+        .loginUser({ email: EMAIL, password: 'CorrectHorse1!' })
+        .catch(() => undefined);
+      const unknownEntry = readUnknown().find((line) =>
+        line.startsWith('Processing login request'),
+      );
+
+      expect(registeredEntry).toBeDefined();
+      expect(unknownEntry).toBe(registeredEntry);
     });
   });
 

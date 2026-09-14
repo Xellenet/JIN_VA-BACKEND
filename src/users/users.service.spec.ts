@@ -24,6 +24,7 @@ import { AccountNotRestorableException } from '@common/exceptions/account-not-re
 import { addDays, subDays } from 'date-fns';
 import type { FindOperator } from 'typeorm';
 import * as bcrypt from 'bcrypt';
+import { hashEmailForLog } from '@common/utils/log-identifier.util';
 
 describe('UsersService', () => {
   let service: UsersService;
@@ -197,6 +198,46 @@ describe('UsersService', () => {
       mockUsersRepository.findOne.mockResolvedValueOnce(null);
       const result = await service.findUserByEmail('notfound@example.com');
       expect(result).toBeNull();
+    });
+
+    /**
+     * Item 5 (security `M5`): `JwtStrategy.validate()` resolves the caller
+     * through this method on every authenticated request, which made this one
+     * line the highest-volume source of email addresses in the log store — and
+     * a log line outlives the purge that scrubs the address from the database.
+     *
+     * The second assertion is the one that matters most: the line must be
+     * *identical* whether or not a row was found, or log read access becomes
+     * an account-enumeration oracle on the busiest line in the application.
+     */
+    it('logs a correlation hash instead of the address, identically found or not', async () => {
+      const email = 'log-hygiene@example.com';
+      const loggerSpy = jest
+        .spyOn(service['logger'], 'log')
+        .mockImplementation(() => {});
+      const readLines = () =>
+        (loggerSpy.mock.calls as unknown[][]).map((call) => String(call[0]));
+
+      mockUsersRepository.findOne.mockResolvedValueOnce(mockUser);
+      await service.findUserByEmail(email);
+      const whenFound = readLines();
+
+      loggerSpy.mockClear();
+      mockUsersRepository.findOne.mockResolvedValueOnce(null);
+      await service.findUserByEmail(email);
+      const whenMissing = readLines();
+
+      for (const line of [...whenFound, ...whenMissing]) {
+        expect(line).not.toContain(email);
+        expect(line).not.toContain('log-hygiene');
+        expect(line).not.toContain('example.com');
+      }
+      expect(whenFound).toContain(
+        `Finding user by email hash ${hashEmailForLog(email)}`,
+      );
+      expect(whenMissing).toEqual(whenFound);
+
+      loggerSpy.mockRestore();
     });
   });
 
