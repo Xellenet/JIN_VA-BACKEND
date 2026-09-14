@@ -7,6 +7,8 @@ import { User } from './entities/user.entity';
 import { UserToken } from './entities/user-token.entity';
 import { Address } from './entities/address.entity';
 import { ArtisanProfile } from './entities/artisan-profile.entity';
+import { CustomerProfile } from './entities/customer-profile.entity';
+import { DeviceToken } from '../push-notifications/entities/device-token.entity';
 import { ArtisanVerification } from '../verification/entities/artisan-verification.entity';
 import { KycMediaService } from '../uploads/kyc-media.service';
 import { VARIABLES } from '@common/constants/variables.constants';
@@ -178,6 +180,7 @@ export class AccountPurgeService {
 
         await this.scrubUserRow(manager, user, now);
         await this.scrubArtisanProfile(manager, user.id);
+        await this.scrubCustomerProfile(manager, user.id);
         await this.scrubArtisanVerifications(manager, user.id);
         await this.deleteResidualPersonalData(manager, user.id);
 
@@ -270,6 +273,43 @@ export class AccountPurgeService {
       .createQueryBuilder()
       .update(ArtisanProfile)
       .set(scrubbed)
+      .where('user_id = :userId', { userId })
+      .execute();
+  }
+
+  /**
+   * M3: clears a customer's free-text bio.
+   *
+   * `customer_profiles.bio` is up to 1000 characters the user wrote about
+   * themselves, frequently self-identifying, and it was the one piece of
+   * free-text profile content the purge never reached: `scrubArtisanProfile`
+   * is deliberately role-agnostic, but the customer profile is a different
+   * table with no equivalent step, so every purged CUSTOMER kept their bio
+   * verbatim after "permanent deletion".
+   *
+   * Scoped to `bio` alone. `preferredServices`, `budgetMin` and `budgetMax`
+   * are preference data, not identifying free text, and C1.7 asks for the
+   * latter — widening this would be a scope change, not a hygiene fix.
+   *
+   * Targeted by the raw `user_id` join column for the same reason the two
+   * sibling steps are, and it matters more here than it looks: a nested
+   * relation criterion (`{ where: { user: { id } } }`) makes TypeORM append
+   * `AND users.deleted_at IS NULL` to the join it builds, and **every** purge
+   * candidate is soft-deleted — so the step would match zero rows on every
+   * single purge and silently do nothing. That is exactly how the round-2 KYC
+   * fix shipped broken (see `scrubArtisanVerifications`).
+   *
+   * A no-op for an artisan account (no matching row), and for a customer who
+   * never wrote a bio — zero rows affected is a valid outcome, not an error.
+   */
+  private async scrubCustomerProfile(
+    manager: EntityManager,
+    userId: number,
+  ): Promise<void> {
+    await manager
+      .createQueryBuilder()
+      .update(CustomerProfile)
+      .set({ bio: null } as unknown as QueryDeepPartialEntity<CustomerProfile>)
       .where('user_id = :userId', { userId })
       .execute();
   }
@@ -388,14 +428,27 @@ export class AccountPurgeService {
   }
 
   /**
-   * Removes what is left of the account's authentication surface and its
-   * stored postal addresses.
+   * Removes what is left of the account's authentication surface, its
+   * registered push devices, and its stored postal addresses.
    *
    * Refresh tokens were already revoked at deletion time; this sweeps up every
    * other token type (email-verification, password-reset) so no token can
    * outlive the purge. Addresses are personal data with no counterparty or
    * audit value, so — unlike payments and disputes — they are deleted rather
    * than anonymized.
+   *
+   * M3: `device_tokens` belongs in the same sweep and was missing. The
+   * entity's `onDelete: 'CASCADE'` never fires, because the purge
+   * deliberately keeps the `users` row — so a purged account retained a live
+   * FCM token bound to a real handset: both a persistent device identifier and
+   * a channel any future "notify this user" path could still push to after
+   * "permanent deletion". Deleted rather than anonymized for the same reason
+   * addresses are: the token has no audit or counterparty value, and a
+   * scrubbed-but-present row would still identify the device.
+   *
+   * Every statement here locates rows by the raw `user_id` column, and none
+   * has a soft-delete filter to inherit. Zero rows for any of the three (no
+   * tokens, no registered devices, no saved addresses) is a valid outcome.
    */
   private async deleteResidualPersonalData(
     manager: EntityManager,
@@ -405,6 +458,13 @@ export class AccountPurgeService {
       .createQueryBuilder()
       .delete()
       .from(UserToken)
+      .where('user_id = :userId', { userId })
+      .execute();
+
+    await manager
+      .createQueryBuilder()
+      .delete()
+      .from(DeviceToken)
       .where('user_id = :userId', { userId })
       .execute();
 

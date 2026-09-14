@@ -17,6 +17,7 @@ import { Dispute } from '../disputes/entities/dispute.entity';
 import { AccountCommitmentsService } from './account-commitments.service';
 import { AccountPurgeService } from './account-purge.service';
 import { ArtisanVerification } from '../verification/entities/artisan-verification.entity';
+import { DeviceToken } from '../push-notifications/entities/device-token.entity';
 
 @Module({
   imports: [
@@ -39,6 +40,11 @@ import { ArtisanVerification } from '../verification/entities/artisan-verificati
       // profile. Registered here so `autoLoadEntities` sees it from this
       // module rather than only from `AdminModule`.
       ArtisanVerification,
+      // M3: the purge also deletes the account's registered push devices.
+      // Registered here for the same reason as `ArtisanVerification` — this
+      // module's own use of the entity should not depend on
+      // `PushNotificationsModule` happening to register it.
+      DeviceToken,
     ]),
     UploadsModule,
   ],
