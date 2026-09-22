@@ -5,6 +5,7 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  Logger,
   MaxFileSizeValidator,
   Param,
   ParseFilePipe,
@@ -12,10 +13,12 @@ import {
   Patch,
   Post,
   Req,
+  Res,
   UploadedFile,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import {
   ApiBearerAuth,
   ApiBody,
@@ -48,6 +51,8 @@ import { UpdateAddressDto } from './dto/update-address.dto';
 import { AddressResponseDto } from './dto/address-response.dto';
 import { DeleteAccountResponseDto } from './dto/delete-account-response.dto';
 import type { AuthenticatedRequest } from '@common/types/authenticated-request.type';
+import { clearRefreshTokenCookie } from '../auth/utils/refresh-cookie.util';
+import { clearAuthSessionCookie } from '../auth/utils/session-cookie.util';
 
 /**
  * Handles user management and self-service profile operations.
@@ -59,6 +64,8 @@ import type { AuthenticatedRequest } from '@common/types/authenticated-request.t
 @ApiTags('Users')
 @Controller('users')
 export class UsersController {
+  private readonly logger = new Logger(UsersController.name);
+
   constructor(
     private readonly usersService: UsersService,
     private readonly uploadsService: UploadsService,
@@ -136,7 +143,24 @@ export class UsersController {
    * C1.2/C1.5: the response carries the server-computed purge date, and a
    * confirmation email stating that date is sent unconditionally.
    *
+   * L2: on success this also clears both auth cookies, which is what actually
+   * ends the session on the calling device. Deletion revokes every refresh
+   * token in the database, but the `jinva_session` cookie Next.js middleware
+   * reads is signed and self-contained — nothing invalidated it — and the
+   * now-soft-deleted principal can no longer reach `POST /auth/logout`
+   * (`JwtStrategy` 401s them), so the browser kept presenting a valid-looking
+   * session for the cookie's full 7-day life and the dashboard shell mounted
+   * before the API 401'd.
+   *
+   * **No ownership proof beyond a valid access token is required** — see
+   * `docs/team/auth-residual-findings/api-contract.md` for the accepted-risk
+   * rationale (security `M1`): deletion is reversible for 30 days, the
+   * confirmation email carries the restore notice, a confirm dialog stands in
+   * front of the request, and the one irreversible case (the last admin) is
+   * refused outright by `AccountCommitmentsService`.
+   *
    * @param req - Express request; `req.user.id` is injected by `JwtAuthGuard`.
+   * @param res - Express response; used only to clear the httpOnly cookies.
    * @returns Confirmation message plus `deletedAt` / `purgeAt`.
    */
   @Delete('me')
@@ -153,21 +177,67 @@ export class UsersController {
       'Refused with 409 (`meta.error: ACCOUNT_HAS_LIVE_COMMITMENTS`) while the ' +
       'account still has a pending/confirmed booking, an open or in-progress ' +
       'job, a payment in flight, or an unresolved dispute — the message names ' +
-      'what is outstanding.',
+      'what is outstanding. Also refused with 409 ' +
+      '(`meta.error: LAST_ADMIN_CANNOT_DELETE`) when the caller is an ADMIN and ' +
+      'no other usable admin account remains. ' +
+      'On success only, both auth cookies (`refresh_token` and `jinva_session`) ' +
+      'are cleared via `Set-Cookie` with `Max-Age=0`, exactly as ' +
+      '`POST /auth/logout` does — a refusal clears nothing and leaves the ' +
+      'caller fully authenticated. ' +
+      'Requires no ownership proof beyond a valid access token (accepted risk: ' +
+      'the deletion is reversible for 30 days and the confirmation email carries ' +
+      'the restore notice).',
   })
   @ApiOkResponse({
     description:
-      'Account soft-deleted; response carries the recovery-window deadline',
+      'Account soft-deleted; response carries the recovery-window deadline, ' +
+      'and both auth cookies are cleared',
     type: DeleteAccountResponseDto,
   })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
   @ApiConflictResponse({
     description:
       'Deletion refused — the account still has live bookings, jobs, ' +
-      'payments or disputes',
+      'payments or disputes (`ACCOUNT_HAS_LIVE_COMMITMENTS`), or the caller is ' +
+      'the only usable administrator (`LAST_ADMIN_CANNOT_DELETE`). No cookie is ' +
+      'cleared and the caller stays authenticated.',
   })
-  deleteMe(@Req() req: AuthenticatedRequest) {
-    return this.usersService.deleteMe(req.user.id);
+  async deleteMe(
+    @Req() req: AuthenticatedRequest,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const result = await this.usersService.deleteMe(req.user.id);
+
+    // Ordering is the requirement, not a detail: `deleteMe` throws on every
+    // refusal, so nothing below runs unless the account really was deleted.
+    // Cookies clear on success only.
+    this.clearAuthCookies(res);
+
+    return result;
+  }
+
+  /**
+   * Clears the two httpOnly auth cookies, using the same helpers
+   * `POST /auth/logout` calls so the attributes match and browsers reliably
+   * drop them.
+   *
+   * Deliberately swallowing: the deletion has already committed by the time
+   * this runs, and a failure to write a `Set-Cookie` header must not turn a
+   * successful, irreversible-in-30-days action into an error the user sees and
+   * retries. The account is gone either way; the worst case is the stale
+   * cookie this fix exists to remove, which the API still refuses to honour.
+   */
+  private clearAuthCookies(res: Response): void {
+    try {
+      clearRefreshTokenCookie(res);
+      clearAuthSessionCookie(res);
+    } catch (err) {
+      this.logger.warn(
+        `Account deleted, but clearing the auth cookies failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
   }
 
   /**

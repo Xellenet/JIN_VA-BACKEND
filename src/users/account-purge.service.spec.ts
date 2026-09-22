@@ -391,9 +391,64 @@ describe('AccountPurgeService (C1.7/C1.8)', () => {
       expect(profilePayload!.isProfileComplete).toBe(false);
     });
 
-    it('deletes the residual tokens and saved addresses', async () => {
+    it('deletes the residual tokens, push devices and saved addresses', async () => {
       await runPurge();
-      expect(mockQueryBuilder.delete).toHaveBeenCalledTimes(2);
+      expect(mockQueryBuilder.delete).toHaveBeenCalledTimes(3);
+    });
+
+    /**
+     * M3: the two things C1.7's "any free-text profile content … cleared" and
+     * "permanent deletion" did not actually reach.
+     *
+     * Both are asserted on the *shape of the statement*, not just on a mock
+     * having been called: locating rows by a nested relation criterion instead
+     * of the raw `user_id` column is what made the round-2 KYC fix a silent
+     * no-op (TypeORM appends `AND users.deleted_at IS NULL` to the join, and
+     * every purge candidate is soft-deleted by definition), and these two
+     * steps are one copy-paste away from the same mistake. The live-database
+     * proof is in `test/auth-residual-findings.e2e-spec.ts`.
+     */
+    describe('customer bio and push devices (M3)', () => {
+      it("nulls the customer profile's bio by the raw user_id column", async () => {
+        await runPurge();
+
+        const updatedEntities = allArgs<{ name: string } | undefined>(
+          mockQueryBuilder.update,
+          0,
+        ).map((entity) => entity?.name);
+        expect(updatedEntities).toContain('CustomerProfile');
+
+        const setPayloads = allArgs<Record<string, unknown>>(
+          mockQueryBuilder.set,
+          0,
+        );
+        const bioOnly = setPayloads.find(
+          (payload) => Object.keys(payload).length === 1 && 'bio' in payload,
+        );
+        expect(bioOnly).toEqual({ bio: null });
+
+        // Raw predicate strings with a `userId` parameter — never relation
+        // criteria, which would inherit the soft-delete filter and match
+        // nothing.
+        const whereClauses = allArgs<string>(mockQueryBuilder.where, 0);
+        expect(whereClauses.length).toBeGreaterThan(0);
+        for (const clause of whereClauses) {
+          expect(clause).toBe('user_id = :userId');
+        }
+        expect(
+          allArgs<Record<string, unknown>>(mockQueryBuilder.where, 1),
+        ).toContainEqual({ userId: deletedUser.id });
+      });
+
+      it('deletes every device_tokens row for the account', async () => {
+        await runPurge();
+
+        const deletedFrom = allArgs<{ name: string } | undefined>(
+          mockQueryBuilder.from,
+          0,
+        ).map((entity) => entity?.name);
+        expect(deletedFrom).toContain('DeviceToken');
+      });
     });
 
     /**
@@ -550,6 +605,8 @@ describe('AccountPurgeService (C1.7/C1.8)', () => {
       expect(touchedEntities.sort()).toEqual([
         'Address',
         'ArtisanProfile',
+        'CustomerProfile',
+        'DeviceToken',
         'UserToken',
       ]);
     });

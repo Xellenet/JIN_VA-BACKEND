@@ -24,6 +24,7 @@ import { AccountNotRestorableException } from '@common/exceptions/account-not-re
 import { addDays, subDays } from 'date-fns';
 import type { FindOperator } from 'typeorm';
 import * as bcrypt from 'bcrypt';
+import { hashEmailForLog } from '@common/utils/log-identifier.util';
 
 describe('UsersService', () => {
   let service: UsersService;
@@ -197,6 +198,46 @@ describe('UsersService', () => {
       mockUsersRepository.findOne.mockResolvedValueOnce(null);
       const result = await service.findUserByEmail('notfound@example.com');
       expect(result).toBeNull();
+    });
+
+    /**
+     * Item 5 (security `M5`): `JwtStrategy.validate()` resolves the caller
+     * through this method on every authenticated request, which made this one
+     * line the highest-volume source of email addresses in the log store — and
+     * a log line outlives the purge that scrubs the address from the database.
+     *
+     * The second assertion is the one that matters most: the line must be
+     * *identical* whether or not a row was found, or log read access becomes
+     * an account-enumeration oracle on the busiest line in the application.
+     */
+    it('logs a correlation hash instead of the address, identically found or not', async () => {
+      const email = 'log-hygiene@example.com';
+      const loggerSpy = jest
+        .spyOn(service['logger'], 'log')
+        .mockImplementation(() => {});
+      const readLines = () =>
+        (loggerSpy.mock.calls as unknown[][]).map((call) => String(call[0]));
+
+      mockUsersRepository.findOne.mockResolvedValueOnce(mockUser);
+      await service.findUserByEmail(email);
+      const whenFound = readLines();
+
+      loggerSpy.mockClear();
+      mockUsersRepository.findOne.mockResolvedValueOnce(null);
+      await service.findUserByEmail(email);
+      const whenMissing = readLines();
+
+      for (const line of [...whenFound, ...whenMissing]) {
+        expect(line).not.toContain(email);
+        expect(line).not.toContain('log-hygiene');
+        expect(line).not.toContain('example.com');
+      }
+      expect(whenFound).toContain(
+        `Finding user by email hash ${hashEmailForLog(email)}`,
+      );
+      expect(whenMissing).toEqual(whenFound);
+
+      loggerSpy.mockRestore();
     });
   });
 
@@ -450,6 +491,91 @@ describe('UsersService', () => {
       expect(options.where.deletedAt.child?.type).toBe('isNull');
       // `purged_at IS NULL` — a purged account is never resolvable by email.
       expect(options.where.purgedAt.type).toBe('isNull');
+    });
+  });
+
+  /**
+   * L1: the Google restore gate turns on this one boolean, so the two ways it
+   * could silently fail open are asserted on the emitted query rather than on
+   * the returned value — both of them return "no password" for an account that
+   * has one, which is the direction that reopens the finding.
+   */
+  describe('getSoftDeletedPasswordState (L1)', () => {
+    const optionsOfLastCall = () => {
+      // `jest.Mock.mock.calls` is `any[][]`, which the repo's type-safety lint
+      // rules refuse — narrow it once, explicitly.
+      const calls = mockUsersRepository.findOne.mock.calls as unknown[][];
+      return calls[calls.length - 1][0] as {
+        where: {
+          id: number;
+          deletedAt: FindOperator<unknown>;
+          purgedAt: FindOperator<unknown>;
+        };
+        withDeleted: boolean;
+        select: string[];
+      };
+    };
+
+    it('asks for the password column explicitly, past the soft-delete filter', async () => {
+      mockUsersRepository.findOne.mockResolvedValueOnce({ password: 'hashed' });
+
+      await service.getSoftDeletedPasswordState(7);
+
+      const options = optionsOfLastCall();
+      // Without `select`, `password` is `select: false` and never loaded, so
+      // every row would read as having no password.
+      expect(options.select).toContain('password');
+      // Without `withDeleted`, a soft-deleted row resolves to nothing at all,
+      // so again every deleted account would read as having no password.
+      expect(options.withDeleted).toBe(true);
+      // `id` is not decorative. TypeORM builds an entity only when a selected
+      // column came back non-null, so with `password` alone a row whose
+      // password is NULL resolves to `null` — identical to no row — and
+      // `found` could never be true for the accounts this is asked about. The
+      // never-null primary key keeps the two answers apart. (A mocked
+      // repository cannot reproduce that; this assertion is what records it.)
+      expect(options.select).toContain('id');
+      expect(options.where.id).toBe(7);
+      expect(options.where.deletedAt.type).toBe('not');
+      expect(options.where.deletedAt.child?.type).toBe('isNull');
+      expect(options.where.purgedAt.type).toBe('isNull');
+    });
+
+    it('reports a usable password for a row that has one', async () => {
+      mockUsersRepository.findOne.mockResolvedValueOnce({ password: 'hashed' });
+
+      await expect(service.getSoftDeletedPasswordState(7)).resolves.toEqual({
+        found: true,
+        hasPassword: true,
+      });
+    });
+
+    it('reports no password for a social-only row, distinctly from no row', async () => {
+      mockUsersRepository.findOne.mockResolvedValueOnce({ password: null });
+      await expect(service.getSoftDeletedPasswordState(7)).resolves.toEqual({
+        found: true,
+        hasPassword: false,
+      });
+
+      // The caller has to be able to tell these two apart: a row that vanished
+      // from the restorable set (purged, or restored concurrently) must be
+      // refused, not treated as an account with no password.
+      mockUsersRepository.findOne.mockResolvedValueOnce(null);
+      await expect(service.getSoftDeletedPasswordState(7)).resolves.toEqual({
+        found: false,
+        hasPassword: false,
+      });
+    });
+
+    it('never returns the hash itself', async () => {
+      mockUsersRepository.findOne.mockResolvedValueOnce({
+        password: await bcrypt.hash('correct', VARIABLES.SALT_OR_ROUNDS),
+      });
+
+      const state = await service.getSoftDeletedPasswordState(7);
+
+      expect(Object.keys(state).sort()).toEqual(['found', 'hasPassword']);
+      expect(JSON.stringify(state)).not.toContain('$2b$');
     });
   });
 

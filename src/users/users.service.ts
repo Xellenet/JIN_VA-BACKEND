@@ -42,6 +42,7 @@ import {
   purgeDateFor,
 } from '@common/utils/account-recovery.util';
 import { randomUUID } from 'node:crypto';
+import { hashEmailForLog } from '@common/utils/log-identifier.util';
 
 /**
  * A real bcrypt hash, at the application's configured cost factor, of a random
@@ -238,10 +239,16 @@ export class UsersService {
    * it was, so restoring is a single column going back to `NULL`.
    *
    * @param userId - The ID of the authenticated user (from `req.user.id`).
+   * L4: also refused with a distinct 409 when the caller is an ADMIN and no
+   * other usable admin account remains — the one deletion here that resolving
+   * something cannot clear, and the one that is genuinely unrecoverable
+   * (ADMIN is seed-only and there is no admin-side restore tooling).
+   *
    * @returns `{ message, data }` carrying `deletedAt` and the server-computed
    *   purge date, so the client never computes the deadline itself.
    * @throws {NotFoundException} When no active user with the given ID exists.
-   * @throws {ConflictException} When the account has live commitments (C1.1).
+   * @throws {ConflictException} When the account has live commitments (C1.1),
+   *   or is the platform's last usable administrator (L4).
    */
   async deleteMe(
     userId: number,
@@ -251,9 +258,12 @@ export class UsersService {
       throw new NotFoundException(`User with ID ${userId} not found`);
     }
 
-    // C1.1: checked before anything is mutated, so a refusal leaves the
-    // account completely untouched (tokens included).
-    await this.accountCommitments.assertDeletable(userId);
+    // C1.1 + L4: checked before anything is mutated, so a refusal leaves the
+    // account completely untouched (tokens included) and — per item 2 — the
+    // controller clears no cookie. The role comes from the row just loaded,
+    // never from the caller's token: the token is the thing an attacker would
+    // hold, and this decides whether the last-administrator guard applies.
+    await this.accountCommitments.assertDeletable(userId, user.role);
 
     await this.userTokenService.revokeRefreshTokenForUser(userId);
     await this.usersRepository.softDelete({ id: userId });
@@ -346,7 +356,21 @@ export class UsersService {
     if (!email) {
       throw new NotFoundException('Email required');
     }
-    this.logger.log(`Finding user with email ${email}`);
+    // M5: this was the single highest-volume source of email addresses in the
+    // log store — `JwtStrategy.validate()` resolves the caller through here on
+    // *every* authenticated request — and a line in the log store outlives the
+    // C1.7 purge that scrubs the address from the database, so "no recoverable
+    // PII after purge" was true of the database only. There is no id to log
+    // yet (the id is what this lookup is for), so the address is replaced with
+    // a deterministic hash of it: support can still follow one account across
+    // a request, and an operator who already knows an address can recompute
+    // the key.
+    //
+    // Emitted before the lookup, and identically whether or not a row is
+    // found. A found/not-found split on a line every request writes would hand
+    // log readers an enumeration oracle that the response bodies deliberately
+    // are not.
+    this.logger.log(`Finding user by email hash ${hashEmailForLog(email)}`);
     return this.usersRepository.findOne({ where: { email } });
   }
 
@@ -433,6 +457,59 @@ export class UsersService {
       select: ['password'],
     });
     return this.comparePasswordHash(password, user?.password ?? null);
+  }
+
+  /**
+   * L1: whether a **soft-deleted, not-yet-purged** account has a usable
+   * password hash. This is the fact the Google restore gate turns on —
+   * completing the OAuth flow proves control of the *mailbox*, which is
+   * ownership proof only for an account that has no other credential to prove
+   * ownership with.
+   *
+   * A separate method rather than {@link hasUsablePassword}, which cannot
+   * answer this question: that one queries `where: { id }` with TypeORM's
+   * soft-delete filter in force, so for a soft-deleted row it resolves nothing
+   * and returns `false` — "no usable password" for *every* deleted account. A
+   * gate built on it would pass for all of them, which is fail-open and worse
+   * than the flag it replaced.
+   *
+   * It equally cannot be answered from the entity
+   * {@link findSoftDeletedUserByEmail} returns: `User.password` is
+   * `select: false`, so that entity's `password` is `undefined` whatever the
+   * column actually holds — again indistinguishable from `NULL`. The column has
+   * to be asked for explicitly, which is what this does, and the hash is
+   * reduced to a boolean here rather than handed back to the caller.
+   *
+   * `id` is selected alongside `password` and is load-bearing, not decorative.
+   * TypeORM only builds an entity from a row when at least one *selected*
+   * column came back non-null (`RawSqlResultsToEntityTransformer`'s
+   * `transformColumns` sets `hasData` only for a non-null value, and
+   * `transformRawResultsGroup` returns `undefined` without it). With
+   * `select: ['password']` alone, a row whose password is `NULL` therefore
+   * resolves to `null` — exactly as if no row existed — which would collapse
+   * `found: false` and `hasPassword: false` into the same answer and make
+   * `found` unable to ever be true for the accounts this is asked about.
+   * Selecting the never-null primary key keeps the two distinguishable.
+   * ({@link getSoftDeletedPasswordCheckResult} shares the narrow select and is
+   * unaffected, because it maps both cases onto a null hash, which is the
+   * correct outcome there either way.)
+   *
+   * @returns `found` — whether a soft-deleted, not-yet-purged row with this id
+   *   exists at all; `false` when it was purged or restored between the
+   *   caller's lookup and this one. `hasPassword` — whether that row has a
+   *   non-null hash. A caller gating on "no usable password" must treat
+   *   `found: false` as a refusal rather than as an absent password, so a
+   *   concurrent lifecycle change cannot widen what it allows.
+   */
+  async getSoftDeletedPasswordState(
+    userId: number,
+  ): Promise<{ found: boolean; hasPassword: boolean }> {
+    const user = await this.usersRepository.findOne({
+      where: { id: userId, deletedAt: Not(IsNull()), purgedAt: IsNull() },
+      withDeleted: true,
+      select: ['id', 'password'],
+    });
+    return { found: !!user, hasPassword: !!user?.password };
   }
 
   /**

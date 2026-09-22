@@ -27,6 +27,23 @@ export const ERROR_MESSAGES = {
     DELETION_BLOCKED: (blockers: string[]) =>
       `Your account can't be deleted yet — ${joinClauses(blockers)}. ` +
       `Resolve these first, then try again.`,
+    /**
+     * L4: the deletion that cannot be undone by resolving anything. An ADMIN
+     * account is seed-only (S3 blocks the role on public registration) and
+     * there is no admin tooling to view, restore or force-purge a deleted
+     * account, so an admin who self-deletes leaves the platform with no
+     * administrative capability for 30 days and then permanently.
+     *
+     * Phrased as the consequence, not as a count: it deliberately does not
+     * say how many admin accounts exist. Amount-free and digit-free like the
+     * live-commitments refusal, and it follows the same "Your account can't
+     * be deleted …, then try again." shape so any surface rendering a backend
+     * refusal verbatim shows something sensible.
+     */
+    DELETION_BLOCKED_LAST_ADMIN:
+      `Your account can't be deleted — deleting it would leave JinVa without ` +
+      `an administrator. Another administrator account has to be in place ` +
+      `first, then try again.`,
   },
   AUTH: {
     INVALID_CREDENTIALS: 'Invalid email or password',
@@ -53,6 +70,27 @@ export const ERROR_MESSAGES = {
      */
     ACCOUNT_PENDING_DELETION:
       'This account is scheduled for deletion. You can still restore it before the recovery window closes.',
+    /**
+     * L1: a soft-deleted account that has a usable password cannot be restored
+     * by completing Google sign-in — that proves control of the mailbox, which
+     * is not ownership proof for an account that has a password to prove it
+     * with. Its owner restores it with `POST /auth/restore-account` (or by
+     * signing in and using the pending-deletion banner) as normal, which is
+     * what this message tells them, so nothing is stranded by the refusal.
+     *
+     * Deliberately keyed on the password column rather than `isSocialLogin`:
+     * that flag is set on any live row a Google profile resolves to by email,
+     * so a single unwanted Google sign-in would pre-flag a password-only
+     * account and let this refusal be bypassed later.
+     *
+     * Never rendered to a user as it stands: `GET /auth/google/callback`
+     * catches every failure and redirects to the frontend's existing generic
+     * OAuth error page. It exists so the refusal is an explicit, logged
+     * decision rather than a unique-constraint violation from a duplicate
+     * insert, which is what the callback would otherwise fail on.
+     */
+    SOCIAL_RESTORE_NOT_AVAILABLE:
+      'This account cannot be restored through Google sign-in. Sign in with your password to restore it.',
     PASSWORDS_DO_NOT_MATCH: 'newPassword and confirmNewPassword do not match',
     // G10: distinct from INVALID_CREDENTIALS so the frontend can render a
     // specific message (and a "Continue with Google" shortcut) instead of

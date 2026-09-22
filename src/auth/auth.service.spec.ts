@@ -23,6 +23,8 @@ import { VARIABLES } from '@common/constants/variables.constants';
 import { ERROR_MESSAGES } from '@common/constants/error-messages.constants';
 import { MailEvent } from 'mail/events/mail.events';
 import { addDays, subDays } from 'date-fns';
+import { plainToInstance } from 'class-transformer';
+import { hashEmailForLog } from '@common/utils/log-identifier.util';
 
 describe('AuthService', () => {
   let service: AuthService;
@@ -38,6 +40,7 @@ describe('AuthService', () => {
   };
   const mockUsersService = {
     findUserByEmail: jest.fn(),
+    findUserById: jest.fn(),
     isEmailRegistered: jest.fn(),
     createUser: jest.fn(),
     validatePassword: jest.fn(),
@@ -46,6 +49,7 @@ describe('AuthService', () => {
     updateUserData: jest.fn(),
     findSoftDeletedUserByEmail: jest.fn(),
     getSoftDeletedPasswordCheckResult: jest.fn(),
+    getSoftDeletedPasswordState: jest.fn(),
     spendPasswordCheckCost: jest.fn(),
     restoreAccountById: jest.fn(),
   };
@@ -101,6 +105,14 @@ describe('AuthService', () => {
     mockUsersService.getSoftDeletedPasswordCheckResult.mockResolvedValue({
       hasPassword: false,
       isValid: false,
+    });
+    // L1: default to the only row shape that can reach a Google restore — a
+    // soft-deleted row with no usable password. Re-set on every test because
+    // `clearAllMocks()` clears calls but keeps implementations, so a
+    // `mockImplementation` from one test must not leak into the next.
+    mockUsersService.getSoftDeletedPasswordState.mockResolvedValue({
+      found: true,
+      hasPassword: false,
     });
     // C1.6: registration's existence check spans soft-deleted rows; default to
     // "address is free".
@@ -304,7 +316,7 @@ describe('AuthService', () => {
       const { result, refreshToken } = await service.loginUser(dto);
 
       expect(loggerSpy).toHaveBeenCalledWith(
-        `Logging in User with email ${dto.email}`,
+        `Processing login request for email hash ${hashEmailForLog(dto.email)}`,
       );
       expect(result).toHaveProperty('access_token', 'access-token');
       expect(result).not.toHaveProperty('refresh_token');
@@ -870,6 +882,7 @@ describe('AuthService', () => {
         id: 8,
         email: 'social-gone@example.com',
         password: null,
+        isSocialLogin: true,
         deletedAt: subDays(new Date(), 5),
       });
       mockUsersService.restoreAccountById.mockResolvedValueOnce({
@@ -877,6 +890,7 @@ describe('AuthService', () => {
         id: 8,
         email: 'social-gone@example.com',
         password: null,
+        isSocialLogin: true,
       });
 
       const { refreshToken } = await service.handleOAuthCallback('google', {
@@ -892,6 +906,263 @@ describe('AuthService', () => {
         MailEvent.ACCOUNT_RESTORED,
         expect.objectContaining({ email: 'social-gone@example.com' }),
       );
+    });
+
+    /**
+     * Item 6 (security `L1`): completing the Google flow proves control of the
+     * *mailbox*. That is the right ownership proof for an account that has no
+     * password, and the wrong one for an account that has one — so a
+     * soft-deleted account with a usable password must not come back this way.
+     * The scenario it matters for is someone who deleted their account
+     * *because* their Google session was compromised.
+     *
+     * These cases wire both lookups off one in-memory row, each modelling its
+     * real query, rather than telling the gate what to conclude:
+     *
+     * - `findSoftDeletedUserByEmail` returns the entity **without** a
+     *   `password`, because `User.password` is `select: false`. A gate that
+     *   read `deletedUser.password` would see `undefined` for every account
+     *   and pass for all of them, so that mistake fails here rather than
+     *   passing by accident.
+     * - `getSoftDeletedPasswordState` is the only thing that sees the real
+     *   column value.
+     *
+     * The first attempt at this fix gated on `isSocialLogin`, which is not
+     * "was ever a social account": `updateSocialLoginInfo` sets it on *any*
+     * live row a Google profile resolves to by email, so one Google sign-in
+     * against a live password-only account flips it permanently and the gate
+     * then passed once that account was deleted. The flag is therefore varied
+     * independently of the password below, in both directions, and must not
+     * change any verdict.
+     */
+    describe('L1 — only an account with no usable password restores via Google', () => {
+      /**
+       * @param row `password` is the real column value. It is visible only
+       *   through `getSoftDeletedPasswordState`, exactly as in production.
+       */
+      const givenSoftDeletedRow = (row: {
+        id: number;
+        email: string;
+        password: string | null;
+        isSocialLogin: boolean;
+      }): void => {
+        mockOAuthStateService.consumeState.mockReturnValueOnce({
+          role: Role.CUSTOMER,
+        });
+        mockStrategy.getAccessToken.mockResolvedValueOnce('provider-token');
+        mockStrategy.getUserProfile.mockResolvedValueOnce({
+          email: row.email,
+          firstname: 'Kofi',
+          lastname: 'Mensah',
+          provider: 'google',
+          providerId: `google-id-${row.id}`,
+        });
+        mockUsersService.findUserByEmail.mockResolvedValueOnce(null);
+
+        const { password, ...selectable } = row;
+        mockUsersService.findSoftDeletedUserByEmail.mockResolvedValueOnce({
+          ...mockUser,
+          ...selectable,
+          // `select: false` — this lookup never loads the hash.
+          password: undefined,
+          deletedAt: subDays(new Date(), 5),
+        });
+        mockUsersService.getSoftDeletedPasswordState.mockImplementation(
+          (userId: number) =>
+            Promise.resolve(
+              userId === row.id
+                ? { found: true, hasPassword: password !== null }
+                : { found: false, hasPassword: false },
+            ),
+        );
+        // `mockReset`, not `mockResolvedValueOnce`: the refusal cases below
+        // never consume a queued `Once` value, and `clearAllMocks()` does not
+        // drain that queue — so a leftover value would be handed to the next
+        // test that *does* restore, and it would assert against the wrong row.
+        mockUsersService.restoreAccountById.mockReset();
+        mockUsersService.restoreAccountById.mockImplementation(
+          (userId: number) =>
+            userId === row.id
+              ? Promise.resolve({ ...mockUser, ...selectable })
+              : Promise.reject(
+                  new Error(`restoreAccountById called with ${userId}`),
+                ),
+        );
+      };
+
+      const completeFlow = () =>
+        service.handleOAuthCallback('google', {
+          code: 'auth-code',
+          state: 'state-123',
+        } as OAuthCallbackDto);
+
+      const expectRefused = async (): Promise<void> => {
+        await expect(completeFlow()).rejects.toThrow(UnauthorizedException);
+
+        // Nothing restored, no session issued, and — the bit that would be
+        // worse than a missing feature — no second row inserted for an address
+        // a soft-deleted row still holds under a unique constraint.
+        expect(mockUsersService.restoreAccountById).not.toHaveBeenCalled();
+        expect(mockUsersService.createUser).not.toHaveBeenCalled();
+        expect(mockUserTokenService.createJWTTokens).not.toHaveBeenCalled();
+        expect(mockEmitter.emit).not.toHaveBeenCalledWith(
+          MailEvent.ACCOUNT_RESTORED,
+          expect.anything(),
+        );
+      };
+
+      it('refuses a password-only soft-deleted account (the original L1)', async () => {
+        givenSoftDeletedRow({
+          id: 11,
+          email: 'password-only-gone@example.com',
+          password: 'hashed',
+          isSocialLogin: false,
+        });
+
+        await expectRefused();
+      });
+
+      /**
+       * The bypass the flag gate left open, as its own case: `isSocialLogin`
+       * is already `true` on this password-only row because the attacker
+       * completed one Google sign-in while the account was still live and
+       * `updateSocialLoginInfo` set it. That sign-in is the *same action* that
+       * makes the owner delete the account, so it is not an extra hurdle.
+       * Under the flag gate this restored; it must not.
+       */
+      it('refuses a password-only account whose isSocialLogin an earlier Google sign-in flipped', async () => {
+        givenSoftDeletedRow({
+          id: 21,
+          email: 'pre-flagged@example.com',
+          password: 'hashed',
+          isSocialLogin: true,
+        });
+
+        await expectRefused();
+      });
+
+      /**
+       * Also refused now, deliberately — and nothing is stranded by it: an
+       * account with a usable password recovers through the unchanged
+       * `POST /auth/restore-account`, which is what the refusal message tells
+       * its owner to do. Keeping this case open is what made the flag gate
+       * bypassable, because "has a password" and "was flagged social" are not
+       * mutually exclusive.
+       */
+      it('refuses a social account that has since added a password', async () => {
+        givenSoftDeletedRow({
+          id: 12,
+          email: 'social-with-password@example.com',
+          password: 'hashed',
+          isSocialLogin: true,
+        });
+
+        await expectRefused();
+      });
+
+      it('still restores a genuine social-only signup with no password', async () => {
+        givenSoftDeletedRow({
+          id: 8,
+          email: 'social-gone@example.com',
+          password: null,
+          isSocialLogin: true,
+        });
+
+        const { refreshToken } = await completeFlow();
+
+        expect(mockUsersService.restoreAccountById).toHaveBeenCalledWith(8);
+        // No duplicate account, and the user lands logged in.
+        expect(mockUsersService.createUser).not.toHaveBeenCalled();
+        expect(refreshToken).toBe('refresh-token');
+        expect(mockEmitter.emit).toHaveBeenCalledWith(
+          MailEvent.ACCOUNT_RESTORED,
+          expect.objectContaining({ email: 'social-gone@example.com' }),
+        );
+      });
+
+      /**
+       * The other half of "the password decides, not the flag": an account
+       * with no usable password restores even with `isSocialLogin` false. It
+       * has no other way back — `POST /auth/restore-account` needs a password
+       * it does not have — which is the whole reason this path exists.
+       */
+      it('restores an account with no usable password even when isSocialLogin is false', async () => {
+        givenSoftDeletedRow({
+          id: 22,
+          email: 'no-password-no-flag@example.com',
+          password: null,
+          isSocialLogin: false,
+        });
+
+        const { refreshToken } = await completeFlow();
+
+        expect(mockUsersService.restoreAccountById).toHaveBeenCalledWith(22);
+        expect(refreshToken).toBe('refresh-token');
+      });
+
+      /**
+       * Fail-closed on a lifecycle race: if the row stopped being a restorable
+       * soft-deleted row between the email lookup and the password read (a
+       * concurrent purge, or a restore through the password path), the missing
+       * row must be refused rather than read as "no password".
+       */
+      it('refuses when the row is no longer a restorable soft-deleted row', async () => {
+        givenSoftDeletedRow({
+          id: 23,
+          email: 'raced@example.com',
+          password: null,
+          isSocialLogin: true,
+        });
+        mockUsersService.getSoftDeletedPasswordState.mockResolvedValue({
+          found: false,
+          hasPassword: false,
+        });
+
+        await expectRefused();
+      });
+    });
+
+    /**
+     * The fix touches the **restore** path only: a live password-only account
+     * signing in with Google still resolves to that account (G6) and signs in.
+     */
+    it('leaves a live password-only account signing in with Google unchanged', async () => {
+      mockOAuthStateService.consumeState.mockReturnValueOnce({
+        role: Role.CUSTOMER,
+      });
+      mockStrategy.getAccessToken.mockResolvedValueOnce('provider-token');
+      mockStrategy.getUserProfile.mockResolvedValueOnce({
+        email: 'live-password@example.com',
+        firstname: 'Yaw',
+        lastname: 'Asare',
+        provider: 'google',
+        providerId: 'google-id-7',
+      });
+      mockUsersService.findUserByEmail.mockResolvedValueOnce({
+        ...mockUser,
+        id: 13,
+        email: 'live-password@example.com',
+        password: 'hashed',
+        isSocialLogin: false,
+        profilePicture: null,
+      });
+
+      const { refreshToken } = await service.handleOAuthCallback('google', {
+        code: 'auth-code',
+        state: 'state-123',
+      } as OAuthCallbackDto);
+
+      expect(refreshToken).toBe('refresh-token');
+      expect(
+        mockUsersService.findSoftDeletedUserByEmail,
+      ).not.toHaveBeenCalled();
+      // The restore branch is not entered at all, so neither the lookup nor
+      // the password gate can affect a live account's Google sign-in.
+      expect(
+        mockUsersService.getSoftDeletedPasswordState,
+      ).not.toHaveBeenCalled();
+      expect(mockUsersService.restoreAccountById).not.toHaveBeenCalled();
+      expect(mockUsersService.createUser).not.toHaveBeenCalled();
     });
   });
 
@@ -989,6 +1260,368 @@ describe('AuthService', () => {
         MailEvent.ACCOUNT_RESTORED,
         expect.anything(),
       );
+    });
+  });
+
+  /**
+   * Item 5 (security `M5`, login half): no line `loginUser` emits may contain
+   * the submitted address, for **any** outcome — and each one must still
+   * identify the account well enough to debug a failed login.
+   *
+   * Every login outcome is enumerated rather than a couple of representative
+   * ones, because the leak this replaces was a single line on a single branch.
+   * Register and the social-login paths are deliberately excluded: they are
+   * out of scope for this round (`M5` stays partially open by decision), and
+   * asserting on them here would fail for a reason nobody intended to fix yet.
+   */
+  describe('no email addresses in login-path logs (M5)', () => {
+    const EMAIL = 'leak-check@example.com';
+    const USER_ID = 4242;
+
+    const liveUser = (overrides: Record<string, unknown> = {}) => ({
+      ...mockUser,
+      id: USER_ID,
+      email: EMAIL,
+      ...overrides,
+    });
+
+    /** Captures every level, since the leak was on a `warn`. */
+    const captureLogs = () => {
+      const spies = (['log', 'warn', 'error'] as const).map((level) =>
+        jest.spyOn(service['logger'], level).mockImplementation(() => {}),
+      );
+      return () =>
+        spies.flatMap((spy) =>
+          (spy.mock.calls as unknown[][]).map((call) => String(call[0])),
+        );
+    };
+
+    const outcomes: { label: string; arrange: () => void }[] = [
+      {
+        label: 'success',
+        arrange: () => {
+          mockUsersService.findUserByEmail.mockResolvedValueOnce(liveUser());
+          mockUserTokenService.createJWTTokens.mockResolvedValueOnce({
+            access_token: 'a',
+            refresh_token: 'r',
+            expires_at: new Date(),
+          });
+        },
+      },
+      {
+        label: 'wrong password on a live account',
+        arrange: () => {
+          mockUsersService.findUserByEmail.mockResolvedValueOnce(liveUser());
+          mockUsersService.getPasswordCheckResult.mockResolvedValueOnce({
+            hasPassword: true,
+            isValid: false,
+          });
+        },
+      },
+      {
+        label: 'social-only account',
+        arrange: () => {
+          mockUsersService.findUserByEmail.mockResolvedValueOnce(liveUser());
+          mockUsersService.getPasswordCheckResult.mockResolvedValueOnce({
+            hasPassword: false,
+            isValid: false,
+          });
+        },
+      },
+      {
+        label: 'unverified account',
+        arrange: () => {
+          mockUsersService.findUserByEmail.mockResolvedValueOnce(
+            liveUser({ accountVerified: false }),
+          );
+        },
+      },
+      {
+        label: 'never-registered address',
+        arrange: () => {
+          mockUsersService.findUserByEmail.mockResolvedValueOnce(null);
+          mockUsersService.findSoftDeletedUserByEmail.mockResolvedValueOnce(
+            null,
+          );
+        },
+      },
+      {
+        label: 'wrong password on a soft-deleted account',
+        arrange: () => {
+          mockUsersService.findUserByEmail.mockResolvedValueOnce(null);
+          mockUsersService.findSoftDeletedUserByEmail.mockResolvedValueOnce({
+            id: USER_ID,
+            email: EMAIL,
+            deletedAt: new Date(),
+          });
+          mockUsersService.getSoftDeletedPasswordCheckResult.mockResolvedValueOnce(
+            { hasPassword: true, isValid: false },
+          );
+        },
+      },
+      {
+        label: 'restorable soft-deleted account with the right password',
+        arrange: () => {
+          mockUsersService.findUserByEmail.mockResolvedValueOnce(null);
+          mockUsersService.findSoftDeletedUserByEmail.mockResolvedValueOnce({
+            id: USER_ID,
+            email: EMAIL,
+            deletedAt: new Date(),
+          });
+          mockUsersService.getSoftDeletedPasswordCheckResult.mockResolvedValueOnce(
+            { hasPassword: true, isValid: true },
+          );
+        },
+      },
+      {
+        label: 'soft-deleted account past its window',
+        arrange: () => {
+          mockUsersService.findUserByEmail.mockResolvedValueOnce(null);
+          mockUsersService.findSoftDeletedUserByEmail.mockResolvedValueOnce({
+            id: USER_ID,
+            email: EMAIL,
+            deletedAt: subDays(new Date(), 31),
+          });
+          mockUsersService.getSoftDeletedPasswordCheckResult.mockResolvedValueOnce(
+            { hasPassword: true, isValid: true },
+          );
+        },
+      },
+    ];
+
+    it.each(outcomes)(
+      'writes no email address for the $label outcome',
+      async ({ arrange }) => {
+        arrange();
+        const readLogs = captureLogs();
+
+        await service
+          .loginUser({ email: EMAIL, password: 'CorrectHorse1!' })
+          .catch(() => undefined);
+
+        const lines = readLogs();
+        expect(lines.length).toBeGreaterThan(0);
+        for (const line of lines) {
+          expect(line).not.toContain(EMAIL);
+          // Not just the full address: no local part, no domain either.
+          expect(line).not.toContain('leak-check');
+          expect(line).not.toContain('example.com');
+        }
+      },
+    );
+
+    it('still identifies the account, so a failed login is debuggable', async () => {
+      mockUsersService.findUserByEmail.mockResolvedValueOnce(liveUser());
+      mockUsersService.getPasswordCheckResult.mockResolvedValueOnce({
+        hasPassword: true,
+        isValid: false,
+      });
+      const readLogs = captureLogs();
+
+      await service
+        .loginUser({ email: EMAIL, password: 'WrongHorse1!' })
+        .catch(() => undefined);
+
+      const lines = readLogs();
+      // The id where the address used to be …
+      expect(lines.some((line) => line.includes(`user ${USER_ID}`))).toBe(true);
+      // … and the hash on the one line that runs before any row is resolved,
+      // so the attempt can still be correlated end to end.
+      expect(lines.some((line) => line.includes(hashEmailForLog(EMAIL)))).toBe(
+        true,
+      );
+    });
+
+    /**
+     * The hash is computed from the submitted string before any lookup, so it
+     * cannot carry account state. If it ever did, log read access would become
+     * the enumeration oracle the response bodies deliberately are not.
+     */
+    it('logs the same correlation key for a registered and an unregistered address', async () => {
+      mockUsersService.findUserByEmail.mockResolvedValueOnce(liveUser());
+      mockUserTokenService.createJWTTokens.mockResolvedValueOnce({
+        access_token: 'a',
+        refresh_token: 'r',
+        expires_at: new Date(),
+      });
+      const readRegistered = captureLogs();
+      await service
+        .loginUser({ email: EMAIL, password: 'CorrectHorse1!' })
+        .catch(() => undefined);
+      const registeredEntry = readRegistered().find((line) =>
+        line.startsWith('Processing login request'),
+      );
+      jest.restoreAllMocks();
+
+      mockUsersService.findUserByEmail.mockResolvedValueOnce(null);
+      mockUsersService.findSoftDeletedUserByEmail.mockResolvedValueOnce(null);
+      const readUnknown = captureLogs();
+      await service
+        .loginUser({ email: EMAIL, password: 'CorrectHorse1!' })
+        .catch(() => undefined);
+      const unknownEntry = readUnknown().find((line) =>
+        line.startsWith('Processing login request'),
+      );
+
+      expect(registeredEntry).toBeDefined();
+      expect(unknownEntry).toBe(registeredEntry);
+    });
+  });
+
+  /**
+   * Item 1 (security `L3` / qa `B5`): no auth response may carry credential
+   * material or admin-only moderation state.
+   *
+   * Register and change-password are asserted specifically because they are
+   * the two sites where the hash is genuinely non-empty: both serialise an
+   * in-memory `User` that carries a freshly-computed hash regardless of the
+   * column's `select: false`, and change-password — the one QA never tested —
+   * returns the hash of the password the caller typed a moment earlier.
+   *
+   * Assertions run against the JSON the client would actually receive
+   * (`JSON.parse(JSON.stringify(…))`), not against the instance, so a key that
+   * exists with an `undefined` value cannot pass by accident and a key that
+   * really would be serialised cannot hide.
+   */
+  describe('no credential material or admin-only fields in auth responses (L3/B5)', () => {
+    /** Everything a real `users` row carries into these two call sites. */
+    const rowWithSecrets = () => ({
+      id: 42,
+      email: 'hygiene@example.com',
+      username: 'hygiene',
+      firstname: 'Hy',
+      lastname: 'Giene',
+      phoneNumber: '024-000-0000',
+      role: Role.ARTISAN,
+      accountVerified: true,
+      // Credential material. Present in memory despite `select: false`.
+      password: '$2b$12$AbCdEfGhIjKlMnOpQrStUvWxYz0123456789abcdefg',
+      // Admin-only moderation state — `suspensionReason` is documented on the
+      // entity as "shown to the admin, not to the user".
+      isBanned: true,
+      bannedAt: new Date('2026-01-01T00:00:00.000Z'),
+      bannedById: 3,
+      isSuspended: true,
+      suspendedAt: new Date('2026-01-02T00:00:00.000Z'),
+      suspendedById: 3,
+      suspensionReason: 'internal moderation note',
+      deletedAt: new Date('2026-01-03T00:00:00.000Z'),
+      purgedAt: null,
+      createdAt: new Date('2025-12-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-01-04T00:00:00.000Z'),
+    });
+
+    const FORBIDDEN_KEYS = [
+      'password',
+      'isBanned',
+      'bannedAt',
+      'bannedById',
+      'isSuspended',
+      'suspendedAt',
+      'suspendedById',
+      'suspensionReason',
+      'deletedAt',
+      'purgedAt',
+    ];
+
+    /** What the frontend drives redirects and the dashboard shell from. */
+    const REQUIRED_KEYS = ['id', 'email', 'role'];
+
+    const asWireFormat = (payload: unknown): Record<string, unknown> =>
+      JSON.parse(JSON.stringify(payload)) as Record<string, unknown>;
+
+    const assertClean = (userPayload: unknown, whole: unknown) => {
+      // No `$2b$`-prefixed string anywhere in the response, at any depth.
+      expect(JSON.stringify(whole)).not.toContain('$2b$');
+      const keys = Object.keys(asWireFormat(userPayload));
+      for (const key of FORBIDDEN_KEYS) {
+        expect(keys).not.toContain(key);
+      }
+      for (const key of REQUIRED_KEYS) {
+        expect(keys).toContain(key);
+      }
+    };
+
+    it('POST /auth/register returns no password key and no hash anywhere in the body', async () => {
+      mockUsersService.isEmailRegistered.mockResolvedValueOnce(false);
+      mockUsersService.createUser.mockResolvedValueOnce({
+        data: rowWithSecrets(),
+      });
+      mockUserTokenService.createToken.mockResolvedValueOnce({
+        token: 'verification-token',
+      });
+
+      const result = await service.registerUser({
+        email: 'hygiene@example.com',
+        password: 'CorrectHorse1!',
+        role: Role.ARTISAN,
+      } as CreateUserDto);
+
+      assertClean(result, result);
+    });
+
+    it('POST /auth/change-password returns no password key, including the hash it just computed', async () => {
+      const row = rowWithSecrets();
+      mockUsersService.findUserById.mockResolvedValueOnce(row);
+      mockUsersService.validatePassword.mockResolvedValueOnce(true);
+      mockUsersService.updateUserData.mockResolvedValueOnce(undefined);
+      mockUserTokenService.revokeRefreshTokenForUser.mockResolvedValueOnce(
+        undefined,
+      );
+      mockUserTokenService.createJWTTokens.mockResolvedValueOnce({
+        access_token: 'access-token',
+        refresh_token: 'refresh-token',
+        expires_at: new Date(),
+      });
+
+      const { result } = await service.changePassword(
+        {
+          currentPassword: 'CorrectHorse1!',
+          newPassword: 'NewHorse1!',
+          confirmNewPassword: 'NewHorse1!',
+        } as never,
+        row.id,
+      );
+
+      // The hash really was rewritten onto the object being serialised —
+      // without that, this test would pass for the wrong reason.
+      expect(row.password.startsWith('$2b$')).toBe(true);
+      expect(row.password).not.toBe(rowWithSecrets().password);
+      assertClean(result.data, result);
+    });
+
+    it('POST /auth/login carries only declared profile fields', async () => {
+      mockUsersService.findUserByEmail.mockResolvedValueOnce(rowWithSecrets());
+      mockUserTokenService.createJWTTokens.mockResolvedValueOnce({
+        access_token: 'access-token',
+        refresh_token: 'refresh-token',
+        expires_at: new Date(),
+      });
+
+      const { result } = await service.loginUser({
+        email: 'hygiene@example.com',
+        password: 'CorrectHorse1!',
+      });
+
+      assertClean(result.data, result);
+    });
+
+    /**
+     * The structural half of the fix, and the one that outlives this round: a
+     * future call site that forgets `excludeExtraneousValues` must still be
+     * unable to leak. Deleting the `password` property was not enough on its
+     * own — with the option off, class-transformer copies every own property
+     * of the source — so `UserResponseDto` carries a class-level `@Exclude()`.
+     */
+    it('cannot leak the hash even from a call site that forgets the exclusion option', () => {
+      const dto = plainToInstance(UserResponseDto, rowWithSecrets());
+
+      const keys = Object.keys(asWireFormat(dto));
+      expect(JSON.stringify(dto)).not.toContain('$2b$');
+      for (const key of FORBIDDEN_KEYS) {
+        expect(keys).not.toContain(key);
+      }
+      expect(keys).toEqual(expect.arrayContaining(REQUIRED_KEYS));
     });
   });
 });

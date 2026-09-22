@@ -1555,12 +1555,21 @@ describe('auth-settings-closeout C1/C2 (QA e2e)', () => {
         .innerJoin('ap.user', 'u')
         .where('u.deleted_at IS NULL')
         .andWhere('ap.is_profile_complete = false')
+        // Round 3: exclude the two test domains, exactly as the stale-TRUE
+        // sibling below already did. This case asks "did the backfill leave a
+        // *real* profile stale-false", and a QA fixture inserted straight
+        // through the repository never runs the service's recompute, so it
+        // reads stale-false by construction (OBS-1's "unknown" state) and
+        // fails this sweep without anything being wrong with the migration.
+        .andWhere("u.email NOT LIKE '%@test.jinva.local'")
+        .andWhere("u.email NOT LIKE '%@jinva.test'")
         .andWhere("COALESCE(TRIM(ap.bio), '') <> ''")
         .andWhere('ap.hourly_rate IS NOT NULL')
         .andWhere("COALESCE(TRIM(ap.location), '') <> ''")
         .groupBy('ap.id')
+        .addGroupBy('u.email')
         .having('COUNT(s.id) > 0')
-        .select(['ap.id'])
+        .select(['ap.id', 'u.email'])
         .getRawMany();
 
       console.log(

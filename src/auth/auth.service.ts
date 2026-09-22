@@ -46,6 +46,7 @@ import {
   ArtisanRegisteredPayload,
   SecurityAlertPayload,
 } from '@common/events/app.events';
+import { hashEmailForLog } from '@common/utils/log-identifier.util';
 
 const SELF_REGISTERABLE_ROLES = [Role.CUSTOMER, Role.ARTISAN];
 
@@ -131,7 +132,15 @@ export class AuthService {
 
     this.emitIfArtisan(user);
 
-    return plainToInstance(UserResponseDto, user);
+    // L3: `user` is the entity `createUser` just saved, which still carries the
+    // bcrypt hash in memory regardless of the column's `select: false` — so
+    // this response used to hand the caller back their own freshly-computed
+    // hash. `excludeExtraneousValues` keeps the body to the fields
+    // `UserResponseDto` actually declares (the DTO no longer declares
+    // `password` at all); see the DTO's own note for why both halves exist.
+    return plainToInstance(UserResponseDto, user, {
+      excludeExtraneousValues: true,
+    });
   }
 
   /**
@@ -167,7 +176,13 @@ export class AuthService {
     if (!email || !password) {
       throw new BadRequestException('Provide user email and password!');
     }
-    this.logger.log(`Logging in User with email ${email}`);
+    // M5: every line this method emits identifies the account by id, never by
+    // the submitted address — see `hashEmailForLog` for why this one line is
+    // the exception (no id exists until the lookup below returns) and why the
+    // hash is computed unconditionally, before any branch.
+    this.logger.log(
+      `Processing login request for email hash ${hashEmailForLog(email)}`,
+    );
 
     const user = await this.userService.findUserByEmail(email);
 
@@ -198,7 +213,7 @@ export class AuthService {
 
     if (!hasPassword) {
       this.logger.warn(
-        `Login blocked for social-only account (no usable password): ${email}`,
+        `Login blocked for social-only account (no usable password): user ${user.id}`,
       );
       throw new SocialOnlyAccountException(
         ERROR_MESSAGES.AUTH.SOCIAL_ONLY_ACCOUNT,
@@ -206,7 +221,7 @@ export class AuthService {
     }
 
     if (!isValid) {
-      this.logger.warn(`Invalid credentials provided for email ${email}`);
+      this.logger.warn(`Invalid credentials provided for user ${user.id}`);
       throw new InvalidCredentialsException(
         ERROR_MESSAGES.AUTH.INVALID_CREDENTIALS,
       );
@@ -217,21 +232,23 @@ export class AuthService {
     // so the frontend can render a specific "please verify your email" message
     // with a resend-verification path, per the acceptance criteria.
     if (!user.accountVerified) {
-      this.logger.warn(`Login blocked for unverified account: ${email}`);
+      this.logger.warn(`Login blocked for unverified account: user ${user.id}`);
       throw new ForbiddenException(ERROR_MESSAGES.AUTH.EMAIL_NOT_VERIFIED);
     }
 
-    this.logger.log(`Generating tokens for user with email ${email}`);
+    this.logger.log(`Generating tokens for user ${user.id}`);
     const { access_token, refresh_token, expires_at } =
       await this.userTokenService.createJWTTokens(user);
-    this.logger.log(`Tokens generated for user with email ${email}`);
+    this.logger.log(`Tokens generated for user ${user.id}`);
 
-    this.logger.log(`User logged in with email ${email}`);
+    this.logger.log(`User ${user.id} logged in`);
     const result = plainToInstance(LoginResponseDto, {
       access_token,
       expires_at,
       message: SUCCESS_MESSAGES.AUTH.USER_LOGGED_IN,
-      data: plainToInstance(UserResponseDto, user),
+      data: plainToInstance(UserResponseDto, user, {
+        excludeExtraneousValues: true,
+      }),
     });
     return { result, refreshToken: refresh_token };
   }
@@ -406,7 +423,9 @@ export class AuthService {
           message: SUCCESS_MESSAGES.AUTH.ACCOUNT_RESTORED_VERIFY_EMAIL,
           restored: true,
           requiresEmailVerification: true,
-          data: plainToInstance(UserResponseDto, user),
+          data: plainToInstance(UserResponseDto, user, {
+            excludeExtraneousValues: true,
+          }),
         }),
       };
     }
@@ -423,7 +442,9 @@ export class AuthService {
         requiresEmailVerification: false,
         access_token,
         expires_at,
-        data: plainToInstance(UserResponseDto, user),
+        data: plainToInstance(UserResponseDto, user, {
+          excludeExtraneousValues: true,
+        }),
       }),
       refreshToken: refresh_token,
     };
@@ -657,7 +678,9 @@ export class AuthService {
       access_token,
       expires_at,
       message: SUCCESS_MESSAGES.AUTH.TOKENS_REFRESHED,
-      data: plainToInstance(UserResponseDto, user),
+      data: plainToInstance(UserResponseDto, user, {
+        excludeExtraneousValues: true,
+      }),
     });
     return { result, refreshToken: refresh_token };
   }
@@ -720,7 +743,13 @@ export class AuthService {
       access_token,
       expires_at,
       message: SUCCESS_MESSAGES.AUTH.PASSWORD_CHANGED,
-      data: plainToInstance(UserResponseDto, user),
+      // L3: `user.password` was reassigned above with the hash of the password
+      // the caller just typed, and this is the object being serialised — the
+      // exclusion (plus the DTO no longer declaring `password`) is what keeps
+      // it out of the body.
+      data: plainToInstance(UserResponseDto, user, {
+        excludeExtraneousValues: true,
+      }),
     });
     return { result, refreshToken: refresh_token };
   }
@@ -845,7 +874,9 @@ export class AuthService {
       access_token,
       expires_at,
       message: SUCCESS_MESSAGES.AUTH.USER_LOGGED_IN,
-      data: plainToInstance(UserResponseDto, user),
+      data: plainToInstance(UserResponseDto, user, {
+        excludeExtraneousValues: true,
+      }),
     });
     return { result, refreshToken: refresh_token };
   }
@@ -860,8 +891,52 @@ export class AuthService {
    * password path, so the window check, the purged-row refusal and the
    * purge-race resolution are all identical.
    *
+   * **Only an account with no usable password restores this way** (L1). The
+   * completed OAuth flow proves control of the *mailbox*, which is the right
+   * proof for an account whose only credential ever was that Google identity —
+   * and the wrong proof for an account that has a password. Without this check,
+   * whoever controlled the Google account for an address (a compromised
+   * session, or a Workspace administrator) could un-delete a JinVa account
+   * that only ever had a password and land fully signed in, which is exactly
+   * the scenario someone who deleted their account *because* their Google
+   * session was compromised is protecting themselves from. It also made the
+   * documented property "possession of the mailbox alone can never un-delete
+   * an account" untrue as written.
+   *
+   * Gated on the password column, **not** on `isSocialLogin`. That flag does
+   * not mean "was ever a social-login account": `handleOAuthCallback` resolves
+   * a Google profile against `findUserByEmail` and calls
+   * `updateSocialLoginInfo` for *any* live row it matches, which sets
+   * `isSocialLogin: true` on a password-only account that has never had
+   * anything to do with Google. So one Google sign-in against a live
+   * password-only account permanently pre-flags it, and the flag gate then
+   * passes after the owner deletes the account — which is the same sequence
+   * the finding describes, since the unwanted sign-in is *why* the owner
+   * deletes. The password column has no such pre-flagging equivalent: no
+   * social path ever writes a hash.
+   *
+   * Nothing is stranded by the tightening. An account that has a usable
+   * password — including a Google account that has since added one — recovers
+   * through the unchanged `POST /auth/restore-account` (email + password), or
+   * by signing in and using the pending-deletion banner, which is exactly what
+   * the refusal message tells its owner to do. An account with no password has
+   * no such route, which is why this path exists at all.
+   *
+   * The password presence is read with a dedicated query rather than off
+   * `deletedUser`: `User.password` is `select: false`, so the entity's
+   * `password` is `undefined` regardless of the column, and testing it here
+   * would pass for every account. A row that is no longer a restorable
+   * soft-deleted row (purged or restored concurrently) is refused too, so a
+   * lifecycle race cannot widen what this allows.
+   *
+   * A refused account is not touched: nothing is restored, no session is
+   * issued, and `registerSocialUser` is never reached, so no duplicate row is
+   * created for an address a soft-deleted row still holds.
+   *
    * @returns The restored user, or `null` when there is no soft-deleted
    *   account for this address (in which case the caller registers a new one).
+   * @throws {UnauthorizedException} When the soft-deleted account has a usable
+   *   password, or is no longer restorable at all (L1).
    * @throws {AccountNotRestorableException} When the window has closed or the
    *   row was already purged. The controller turns any callback failure into a
    *   redirect back to the frontend, so this surfaces as a failed sign-in
@@ -874,6 +949,22 @@ export class AuthService {
     const deletedUser =
       await this.userService.findSoftDeletedUserByEmail(email);
     if (!deletedUser) return null;
+
+    const { found, hasPassword } =
+      await this.userService.getSoftDeletedPasswordState(deletedUser.id);
+
+    if (!found || hasPassword) {
+      this.logger.warn(
+        `Refused a Google restore of account ${deletedUser.id}: ` +
+          (hasPassword
+            ? `the account has a usable password, so completing the Google ` +
+              `flow is not proof of ownership for it`
+            : `the account is no longer a restorable soft-deleted row`),
+      );
+      throw new UnauthorizedException(
+        ERROR_MESSAGES.AUTH.SOCIAL_RESTORE_NOT_AVAILABLE,
+      );
+    }
 
     this.logger.log(
       `Restoring soft-deleted account ${deletedUser.id} via completed Google sign-in`,
