@@ -1141,8 +1141,9 @@ export class DisputesService {
    *
    * Returns `NONE` with a `skippedReason` for every case where the action is
    * *impossible* — no linked payment (the common case today), a payment
-   * already refunded or released, a sibling dispute that already moved money
-   * on it. Throws only for an amount the backend genuinely rejects.
+   * already refunded or released, a sibling dispute holding the money claim on
+   * it (whether or not that claim's movement completed — B7).
+   * Throws only for an amount the backend genuinely rejects.
    */
   private async planMoneyAction(
     dispute: Dispute,
@@ -1194,11 +1195,24 @@ export class DisputesService {
       },
     });
     if (siblingWithMoney) {
+      if (siblingWithMoney.moneyAmount == null) {
+        // B7: the block stands either way, but an abandoned claim is worth a
+        // trace of its own — this is the moment an operator actually trips
+        // over one, and until now the only record was the failing ruling's
+        // own `logger.error` line.
+        this.logger.warn(
+          `Dispute ${dispute.id}: payment ${payment.id} is still claimed by dispute ` +
+            `${siblingWithMoney.id}, whose ${siblingWithMoney.moneyAction} never recorded an ` +
+            `amount (abandoned mid-flight). Recording the verdict with no money action; ` +
+            `the payment needs reconciliation.`,
+        );
+      }
       return {
         action: DisputeMoneyAction.NONE,
-        skippedReason:
-          `Dispute #${siblingWithMoney.id} already moved money on this payment ` +
-          `(${siblingWithMoney.moneyAction}). No second money action was taken; the verdict has been recorded.`,
+        skippedReason: this.describeSiblingMoneyClaim(
+          siblingWithMoney,
+          ' No second money action was taken; the verdict has been recorded.',
+        ),
       };
     }
 
@@ -1206,6 +1220,43 @@ export class DisputesService {
       return this.planRefund(payment, dto.refundAmountGhs);
     }
     return this.planRelease(payment);
+  }
+
+  /**
+   * B7: why a sibling dispute's claim blocks this payment — in the words that
+   * are actually true of it.
+   *
+   * The block itself is deliberately status- and amount-agnostic (see the
+   * guard in {@link planMoneyAction}): once another dispute holds
+   * `moneyAction` + `moneyPaymentId` on a payment, no second ruling may touch
+   * that money, because "did the provider act before it errored?" is exactly
+   * the ambiguity the claim exists to protect against. What *was* wrong is the
+   * reason given for it. The guard matched on `moneyAction` alone and told
+   * every later admin *"already moved money on this payment"* — but
+   * `moneyAction` is written *before* the provider call, as the claim, while
+   * `moneyAmount` is the only column ever written from a **completed**
+   * movement (step 4 of {@link resolve}). Since B6 the rollback of a ruling
+   * that lost its row to a concurrent close deliberately leaves the claim
+   * behind with `moneyAmount` still null, so that false statement became
+   * permanent for every sibling of that booking.
+   *
+   * So: `moneyAmount IS NOT NULL` → money moved, today's wording.
+   * `IS NULL` → a claim whose movement never recorded an amount, which needs
+   * reconciliation rather than a claim that money moved.
+   */
+  private describeSiblingMoneyClaim(sibling: Dispute, tail = ''): string {
+    if (sibling.moneyAmount != null) {
+      return (
+        `Dispute #${sibling.id} already moved money on this payment ` +
+        `(${sibling.moneyAction}).${tail}`
+      );
+    }
+    return (
+      `A ruling on dispute #${sibling.id} holds the money claim on this payment and its ` +
+      `${sibling.moneyAction} was abandoned mid-flight, so no money is recorded as having ` +
+      `moved but the movement may or may not have completed. This payment needs ` +
+      `reconciliation before another money action can be taken.${tail}`
+    );
   }
 
   private planRefund(payment: Payment, requested?: number): MoneyPlan {
@@ -1305,7 +1356,8 @@ export class DisputesService {
       return {
         canRefund: false,
         canRelease: false,
-        reason: `Dispute #${siblingWithMoney.id} already moved money on this payment (${siblingWithMoney.moneyAction}).`,
+        /** B7: same block, accurate reason — see {@link describeSiblingMoneyClaim}. */
+        reason: this.describeSiblingMoneyClaim(siblingWithMoney),
         refundableAmount: 0,
         releasableAmount: 0,
       };

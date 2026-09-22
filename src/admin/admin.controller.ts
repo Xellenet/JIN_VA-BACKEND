@@ -439,8 +439,9 @@ export class AdminController {
    * If the money action fails, the dispute is **not** resolved — the ruling is
    * rolled back, the provider's specific error is surfaced, and the dispute
    * stays actionable. If the action is impossible (no linked payment, already
-   * refunded/released, a sibling dispute already moved money on the same
-   * payment) the verdict is still recorded, `moneyAction` is `NONE`, and
+   * refunded/released, a sibling dispute holding the money claim on the same
+   * payment — whether it moved the money or abandoned the attempt mid-flight,
+   * B7) the verdict is still recorded, `moneyAction` is `NONE`, and
    * `moneySkippedReason` states why — no clawback is attempted.
    */
   @Patch('disputes/:id/resolve')

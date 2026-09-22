@@ -455,21 +455,30 @@ describe('DisputesService', () => {
       expect(result.data.moneySkippedReason).toMatch(/already released/i);
     });
 
-    it('hard-guards against a second money action when a sibling dispute already moved money', async () => {
+    /** A sibling dispute on the same booking, holding the money claim. */
+    const withSiblingClaim = (sibling: Partial<Dispute>) => {
       disputeRepo.findOne
         .mockResolvedValueOnce(
           disputeRaisedByCustomer(DisputeStatus.UNDER_REVIEW),
         )
         .mockResolvedValueOnce({
           id: 6,
-          moneyAction: DisputeMoneyAction.REFUND,
           moneyPaymentId: 300,
+          ...sibling,
         } as Dispute);
       jobRepo.findOne.mockResolvedValue({
         id: 200,
         service: null,
       } as unknown as Job);
       paymentRepo.findOne.mockResolvedValue(heldPayment());
+    };
+
+    it('hard-guards against a second money action when a sibling dispute already moved money', async () => {
+      // A *completed* movement: `moneyAmount` is written only from one.
+      withSiblingClaim({
+        moneyAction: DisputeMoneyAction.REFUND,
+        moneyAmount: 1850,
+      });
 
       const result = await service.resolve(admin, 5, {
         outcome: DisputeOutcome.REFUND_CLIENT,
@@ -479,6 +488,102 @@ describe('DisputesService', () => {
       expect(paymentsService.adminRefund).not.toHaveBeenCalled();
       expect(result.data.moneyAction).toBe(DisputeMoneyAction.NONE);
       expect(result.data.moneySkippedReason).toMatch(/#6/);
+      expect(result.data.moneySkippedReason).toMatch(/already moved money/i);
+    });
+
+    /**
+     * B7. B6's rollback deliberately leaves an abandoned claim on the settled
+     * row — `moneyAction` + `moneyPaymentId` set, `moneyAmount` still null,
+     * exactly the row asserted at the end of the first B6 case below. The
+     * sibling guard matched on `moneyAction` alone, so every later ruling on
+     * that booking was told money had *moved* on the payment when none had.
+     *
+     * The block is the money-safety property and is unchanged: a claim whose
+     * movement may or may not have reached the provider must still stop a
+     * second ruling touching that payment. Only the sentence changes.
+     */
+    it('B7: an abandoned sibling claim is still blocked, but is not described as money that moved', async () => {
+      withSiblingClaim({
+        moneyAction: DisputeMoneyAction.REFUND,
+        moneyAmount: null,
+      });
+
+      const result = await service.resolve(admin, 5, {
+        outcome: DisputeOutcome.REFUND_CLIENT,
+        resolution: 'Second dispute on the same booking, ruling for client.',
+      });
+
+      // ── The block is unchanged: no money movement was permitted.
+      expect(paymentsService.adminRefund).not.toHaveBeenCalled();
+      expect(paymentsService.releaseWithheldPayment).not.toHaveBeenCalled();
+      expect(result.data.moneyAction).toBe(DisputeMoneyAction.NONE);
+      expect(result.data.moneyAmount).toBeNull();
+      expect(result.data.moneyPaymentId).toBeNull();
+      // …and this ruling took no claim of its own on the payment, so the
+      // sibling's claim is the only one standing.
+      const setCalls = updateQb.set.mock.calls as [Record<string, unknown>][];
+      expect(setCalls[0][0]).toEqual(
+        expect.objectContaining({
+          status: DisputeStatus.RESOLVED,
+          outcome: DisputeOutcome.REFUND_CLIENT,
+          moneyAction: null,
+          moneyPaymentId: null,
+          moneyAmount: null,
+        }),
+      );
+
+      // ── The reason is accurate: a pending/abandoned claim, not a movement.
+      const reason = String(result.data.moneySkippedReason);
+      expect(reason).not.toMatch(/already moved money/i);
+      expect(reason).toMatch(/#6/);
+      expect(reason).toMatch(/holds the money claim/i);
+      expect(reason).toMatch(/abandoned mid-flight/i);
+      expect(reason).toMatch(/may or may not have completed/i);
+      expect(reason).toMatch(/needs reconciliation/i);
+      // The verdict still landed, and the admin is told so.
+      expect(reason).toMatch(/the verdict has been recorded/i);
+    });
+
+    it('B7: the abandoned claim a sibling ruling trips over is logged for reconciliation', async () => {
+      const warnLog = jest
+        .spyOn(service['logger'], 'warn')
+        .mockImplementation();
+      withSiblingClaim({
+        moneyAction: DisputeMoneyAction.RELEASE,
+        moneyAmount: null,
+      });
+
+      await service.resolve(admin, 5, {
+        outcome: DisputeOutcome.RELEASE_ARTISAN,
+        resolution: 'Second dispute on the same booking, ruling for artisan.',
+      });
+
+      const logged = warnLog.mock.calls.map((call) => String(call[0]));
+      const line = logged.find((l) => /needs reconciliation/i.test(l));
+      expect(line).toBeDefined();
+      expect(line).toContain('Dispute 5');
+      expect(line).toContain('payment 300');
+      expect(line).toContain('dispute 6');
+      expect(line).toContain(DisputeMoneyAction.RELEASE);
+    });
+
+    it('B7: a sibling whose movement completed logs no reconciliation warning', async () => {
+      const warnLog = jest
+        .spyOn(service['logger'], 'warn')
+        .mockImplementation();
+      withSiblingClaim({
+        moneyAction: DisputeMoneyAction.REFUND,
+        moneyAmount: 1850,
+      });
+
+      await service.resolve(admin, 5, {
+        outcome: DisputeOutcome.REFUND_CLIENT,
+        resolution: 'Second dispute on the same booking, ruling for client.',
+      });
+
+      expect(
+        warnLog.mock.calls.map((call) => String(call[0])).join('\n'),
+      ).not.toMatch(/needs reconciliation/i);
     });
 
     it('does NOT mark the dispute resolved when the money action fails, and surfaces the specific failure', async () => {
@@ -1063,6 +1168,98 @@ describe('DisputesService', () => {
           artisanUserId: artisanUser.id,
         }),
       );
+    });
+  });
+
+  // ─── DR2 read path ──────────────────────────────────────────────────────────
+
+  /**
+   * The admin detail read describes the same block the resolve path enforces,
+   * so B7's two cases have to read the same way on both surfaces — the dialog
+   * disables a money verdict with the server's sentence and never composes its
+   * own (api-contract.md §1.2).
+   */
+  describe('findOne — moneyOptions and a sibling money claim (DR2/B7)', () => {
+    type MoneyOptionsRead = {
+      canRefund: boolean;
+      canRelease: boolean;
+      reason?: string | null;
+      refundReason?: string | null;
+      releaseReason?: string | null;
+      refundableAmount: number;
+      releasableAmount: number;
+    };
+
+    const readWithSibling = async (sibling: Partial<Dispute>) => {
+      disputeRepo.findOne.mockResolvedValueOnce(
+        disputeRaisedByCustomer(DisputeStatus.UNDER_REVIEW),
+      );
+      disputeRepo.find.mockResolvedValueOnce([
+        { id: 6, moneyPaymentId: 300, ...sibling } as Dispute,
+      ]);
+      jobRepo.findOne.mockResolvedValue({
+        id: 200,
+        service: null,
+      } as unknown as Job);
+      paymentRepo.findOne.mockResolvedValue(heldPayment());
+
+      const result = await service.findOne(5);
+      return result.data.moneyOptions as MoneyOptionsRead;
+    };
+
+    it('a completed sibling movement keeps the documented "already moved money" wording', async () => {
+      // A `decimal` column arrives from the driver as a string, so the check
+      // has to be "is there an amount at all", not a numeric comparison.
+      const options = await readWithSibling({
+        moneyAction: DisputeMoneyAction.REFUND,
+        moneyAmount: '1850.00' as unknown as number,
+      });
+
+      expect(options.canRefund).toBe(false);
+      expect(options.canRelease).toBe(false);
+      expect(String(options.reason)).toContain(
+        'Dispute #6 already moved money on this payment (REFUND).',
+      );
+    });
+
+    it('B7: an abandoned sibling claim still disables both verdicts, with an accurate reason', async () => {
+      const options = await readWithSibling({
+        moneyAction: DisputeMoneyAction.REFUND,
+        moneyAmount: null,
+      });
+
+      // The block is unchanged — both money verdicts stay off the table.
+      expect(options.canRefund).toBe(false);
+      expect(options.canRelease).toBe(false);
+      expect(options.refundableAmount).toBe(0);
+      expect(options.releasableAmount).toBe(0);
+
+      // Shape is unchanged too: the single top-level `reason`, no per-option
+      // reasons, which is shape (a) the dialog already reads.
+      expect(options.refundReason).toBeUndefined();
+      expect(options.releaseReason).toBeUndefined();
+
+      const reason = String(options.reason);
+      expect(reason).not.toMatch(/already moved money/i);
+      expect(reason).toMatch(/#6/);
+      expect(reason).toMatch(/holds the money claim/i);
+      expect(reason).toMatch(/abandoned mid-flight/i);
+      expect(reason).toMatch(/needs reconciliation/i);
+      // The read path says nothing about a verdict being recorded — that tail
+      // belongs to the resolve response only.
+      expect(reason).not.toMatch(/verdict has been recorded/i);
+    });
+
+    it('a sibling that moved no money at all leaves both verdicts assessable', async () => {
+      const options = await readWithSibling({
+        moneyAction: DisputeMoneyAction.NONE,
+        moneyAmount: null,
+      });
+
+      // NONE is not a claim, so the payment is assessed on its own status.
+      expect(options.canRefund).toBe(true);
+      expect(options.reason).toBeUndefined();
+      expect(options.refundableAmount).toBe(1850);
     });
   });
 
