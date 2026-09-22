@@ -71,11 +71,17 @@ export const ERROR_MESSAGES = {
     ACCOUNT_PENDING_DELETION:
       'This account is scheduled for deletion. You can still restore it before the recovery window closes.',
     /**
-     * L1: a soft-deleted account that was never a social-login account cannot
-     * be restored by completing Google sign-in — that proves control of the
-     * mailbox, which is not ownership proof for an account whose credential
-     * was a password. Its owner restores it with `POST /auth/restore-account`
-     * (or by signing in and using the pending-deletion banner) as normal.
+     * L1: a soft-deleted account that has a usable password cannot be restored
+     * by completing Google sign-in — that proves control of the mailbox, which
+     * is not ownership proof for an account that has a password to prove it
+     * with. Its owner restores it with `POST /auth/restore-account` (or by
+     * signing in and using the pending-deletion banner) as normal, which is
+     * what this message tells them, so nothing is stranded by the refusal.
+     *
+     * Deliberately keyed on the password column rather than `isSocialLogin`:
+     * that flag is set on any live row a Google profile resolves to by email,
+     * so a single unwanted Google sign-in would pre-flag a password-only
+     * account and let this refusal be bypassed later.
      *
      * Never rendered to a user as it stands: `GET /auth/google/callback`
      * catches every failure and redirects to the frontend's existing generic

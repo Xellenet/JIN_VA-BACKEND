@@ -891,10 +891,10 @@ export class AuthService {
    * password path, so the window check, the purged-row refusal and the
    * purge-race resolution are all identical.
    *
-   * **Only a social-login account restores this way** (L1). The completed
-   * OAuth flow proves control of the *mailbox*, which is the right proof for
-   * an account whose only credential ever was that Google identity — and the
-   * wrong proof for an account that had a password. Without this check,
+   * **Only an account with no usable password restores this way** (L1). The
+   * completed OAuth flow proves control of the *mailbox*, which is the right
+   * proof for an account whose only credential ever was that Google identity —
+   * and the wrong proof for an account that has a password. Without this check,
    * whoever controlled the Google account for an address (a compromised
    * session, or a Workspace administrator) could un-delete a JinVa account
    * that only ever had a password and land fully signed in, which is exactly
@@ -903,25 +903,40 @@ export class AuthService {
    * documented property "possession of the mailbox alone can never un-delete
    * an account" untrue as written.
    *
-   * Gated on the `isSocialLogin` flag rather than on `password IS NULL`: it is
-   * the column the entity already uses for exactly this question, it is set by
-   * both social paths (`registerSocialUser` on signup and
-   * `updateSocialLoginInfo` on every later Google sign-in), and unlike the
-   * password hash it is not `select: false`. A Google account that has since
-   * *added* a password still restores here — it is genuinely a social-login
-   * account, and refusing it would strand accounts that can legitimately
-   * recover both ways.
+   * Gated on the password column, **not** on `isSocialLogin`. That flag does
+   * not mean "was ever a social-login account": `handleOAuthCallback` resolves
+   * a Google profile against `findUserByEmail` and calls
+   * `updateSocialLoginInfo` for *any* live row it matches, which sets
+   * `isSocialLogin: true` on a password-only account that has never had
+   * anything to do with Google. So one Google sign-in against a live
+   * password-only account permanently pre-flags it, and the flag gate then
+   * passes after the owner deletes the account — which is the same sequence
+   * the finding describes, since the unwanted sign-in is *why* the owner
+   * deletes. The password column has no such pre-flagging equivalent: no
+   * social path ever writes a hash.
+   *
+   * Nothing is stranded by the tightening. An account that has a usable
+   * password — including a Google account that has since added one — recovers
+   * through the unchanged `POST /auth/restore-account` (email + password), or
+   * by signing in and using the pending-deletion banner, which is exactly what
+   * the refusal message tells its owner to do. An account with no password has
+   * no such route, which is why this path exists at all.
+   *
+   * The password presence is read with a dedicated query rather than off
+   * `deletedUser`: `User.password` is `select: false`, so the entity's
+   * `password` is `undefined` regardless of the column, and testing it here
+   * would pass for every account. A row that is no longer a restorable
+   * soft-deleted row (purged or restored concurrently) is refused too, so a
+   * lifecycle race cannot widen what this allows.
    *
    * A refused account is not touched: nothing is restored, no session is
    * issued, and `registerSocialUser` is never reached, so no duplicate row is
-   * created for an address a soft-deleted row still holds. Its owner recovers
-   * exactly as before — sign in with the password, get the pending-deletion
-   * banner, restore.
+   * created for an address a soft-deleted row still holds.
    *
    * @returns The restored user, or `null` when there is no soft-deleted
    *   account for this address (in which case the caller registers a new one).
-   * @throws {UnauthorizedException} When the soft-deleted account was never a
-   *   social-login account (L1).
+   * @throws {UnauthorizedException} When the soft-deleted account has a usable
+   *   password, or is no longer restorable at all (L1).
    * @throws {AccountNotRestorableException} When the window has closed or the
    *   row was already purged. The controller turns any callback failure into a
    *   redirect back to the frontend, so this surfaces as a failed sign-in
@@ -935,11 +950,16 @@ export class AuthService {
       await this.userService.findSoftDeletedUserByEmail(email);
     if (!deletedUser) return null;
 
-    if (!deletedUser.isSocialLogin) {
+    const { found, hasPassword } =
+      await this.userService.getSoftDeletedPasswordState(deletedUser.id);
+
+    if (!found || hasPassword) {
       this.logger.warn(
-        `Refused a Google restore of account ${deletedUser.id}: the account ` +
-          `was never a social-login account, so completing the Google flow is ` +
-          `not proof of ownership for it`,
+        `Refused a Google restore of account ${deletedUser.id}: ` +
+          (hasPassword
+            ? `the account has a usable password, so completing the Google ` +
+              `flow is not proof of ownership for it`
+            : `the account is no longer a restorable soft-deleted row`),
       );
       throw new UnauthorizedException(
         ERROR_MESSAGES.AUTH.SOCIAL_RESTORE_NOT_AVAILABLE,

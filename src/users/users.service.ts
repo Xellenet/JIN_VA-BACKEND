@@ -460,6 +460,59 @@ export class UsersService {
   }
 
   /**
+   * L1: whether a **soft-deleted, not-yet-purged** account has a usable
+   * password hash. This is the fact the Google restore gate turns on —
+   * completing the OAuth flow proves control of the *mailbox*, which is
+   * ownership proof only for an account that has no other credential to prove
+   * ownership with.
+   *
+   * A separate method rather than {@link hasUsablePassword}, which cannot
+   * answer this question: that one queries `where: { id }` with TypeORM's
+   * soft-delete filter in force, so for a soft-deleted row it resolves nothing
+   * and returns `false` — "no usable password" for *every* deleted account. A
+   * gate built on it would pass for all of them, which is fail-open and worse
+   * than the flag it replaced.
+   *
+   * It equally cannot be answered from the entity
+   * {@link findSoftDeletedUserByEmail} returns: `User.password` is
+   * `select: false`, so that entity's `password` is `undefined` whatever the
+   * column actually holds — again indistinguishable from `NULL`. The column has
+   * to be asked for explicitly, which is what this does, and the hash is
+   * reduced to a boolean here rather than handed back to the caller.
+   *
+   * `id` is selected alongside `password` and is load-bearing, not decorative.
+   * TypeORM only builds an entity from a row when at least one *selected*
+   * column came back non-null (`RawSqlResultsToEntityTransformer`'s
+   * `transformColumns` sets `hasData` only for a non-null value, and
+   * `transformRawResultsGroup` returns `undefined` without it). With
+   * `select: ['password']` alone, a row whose password is `NULL` therefore
+   * resolves to `null` — exactly as if no row existed — which would collapse
+   * `found: false` and `hasPassword: false` into the same answer and make
+   * `found` unable to ever be true for the accounts this is asked about.
+   * Selecting the never-null primary key keeps the two distinguishable.
+   * ({@link getSoftDeletedPasswordCheckResult} shares the narrow select and is
+   * unaffected, because it maps both cases onto a null hash, which is the
+   * correct outcome there either way.)
+   *
+   * @returns `found` — whether a soft-deleted, not-yet-purged row with this id
+   *   exists at all; `false` when it was purged or restored between the
+   *   caller's lookup and this one. `hasPassword` — whether that row has a
+   *   non-null hash. A caller gating on "no usable password" must treat
+   *   `found: false` as a refusal rather than as an absent password, so a
+   *   concurrent lifecycle change cannot widen what it allows.
+   */
+  async getSoftDeletedPasswordState(
+    userId: number,
+  ): Promise<{ found: boolean; hasPassword: boolean }> {
+    const user = await this.usersRepository.findOne({
+      where: { id: userId, deletedAt: Not(IsNull()), purgedAt: IsNull() },
+      withDeleted: true,
+      select: ['id', 'password'],
+    });
+    return { found: !!user, hasPassword: !!user?.password };
+  }
+
+  /**
    * C1.4/C1.7: clears `deletedAt` on a soft-deleted account, under a row lock
    * so that this and a concurrent purge of the same account cannot both
    * proceed — exactly one wins, cleanly.

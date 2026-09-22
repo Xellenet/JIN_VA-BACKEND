@@ -129,7 +129,7 @@ describe('auth-residual-findings (backend items 1, 2, 3, 6, 9)', () => {
   async function makeUser(
     label: string,
     role: Role,
-    opts: { social?: boolean; verified?: boolean } = {},
+    opts: { social?: boolean; verified?: boolean; withPassword?: boolean } = {},
   ): Promise<{ user: User; token: string; email: string }> {
     const e = email(label);
     const user = await userRepo.save(
@@ -140,9 +140,13 @@ describe('auth-residual-findings (backend items 1, 2, 3, 6, 9)', () => {
         // against the dummy-cost comparison the unknown-address branch pays,
         // and a cost-10 fixture would read as a ~4x "signal" that is purely
         // an artefact of the fixture.
-        password: opts.social
-          ? null
-          : await bcrypt.hash(PASSWORD, VARIABLES.SALT_OR_ROUNDS),
+        //
+        // `withPassword` is the L1 case that separates the two facts the gate
+        // could turn on: a social-flagged account that also has a hash.
+        password:
+          opts.social && !opts.withPassword
+            ? null
+            : await bcrypt.hash(PASSWORD, VARIABLES.SALT_OR_ROUNDS),
         firstname: 'Residual',
         lastname: label.slice(0, 14),
         role,
@@ -671,6 +675,9 @@ describe('auth-residual-findings (backend items 1, 2, 3, 6, 9)', () => {
         withDeleted: true,
       });
       expect(row?.deletedAt).toBeInstanceOf(Date);
+      // The gate reads the password column, not this flag. Asserted only to
+      // show the refusal did not depend on the flag being false — the
+      // pre-flagged case below sets it true and is refused just the same.
       expect(row?.isSocialLogin).toBe(false);
       // No second row for an address the soft-deleted row still holds.
       expect(
@@ -694,11 +701,137 @@ describe('auth-residual-findings (backend items 1, 2, 3, 6, 9)', () => {
       ).toBeNull();
     });
 
+    /**
+     * The bypass the first round's `isSocialLogin` gate left open, run as the
+     * whole sequence rather than against a hand-set column — so the
+     * pre-flagging step is the application's own code doing it, against a live
+     * database, and the evidence is the attack rather than a fixture.
+     */
+    it('refuses even after an earlier Google sign-in flipped isSocialLogin on the live account', async () => {
+      const u = await makeUser('preflag', Role.CUSTOMER);
+      googleProfile.email = u.email;
+      googleProfile.providerId = `residual-google-${u.user.id}`;
+
+      // Step 1: Google sign-in while the password-only account is still
+      // **live**. It succeeds (G6) and, as a side effect, resolves the profile
+      // by email and calls `updateSocialLoginInfo`, which sets
+      // `is_social_login = true` on a row that has never had anything to do
+      // with Google. That flip is pre-existing behaviour this fix does not
+      // change — it is what made a flag-based gate bypassable.
+      const preflag = await completeGoogleFlow();
+      expect(preflag.result.data.id).toBe(u.user.id);
+      const flagged = await userRepo.findOne({ where: { id: u.user.id } });
+      console.log(
+        'item 6 isSocialLogin after a live password-only Google sign-in =',
+        flagged?.isSocialLogin,
+      );
+      expect(flagged?.isSocialLogin).toBe(true);
+
+      // Step 2: the owner deletes the account. Deletion does not reset the
+      // flag — `deleteMe` revokes tokens, soft-deletes and stamps `purgeAt`.
+      await deleteMe(u.token).expect(200);
+
+      // Step 3: the next Google sign-in. Under the flag gate this restored the
+      // account and issued a refresh token.
+      let err: unknown;
+      try {
+        await completeGoogleFlow();
+      } catch (e) {
+        err = e;
+      }
+      console.log(
+        'item 6 pre-flagged Google restore threw =',
+        (err as Error)?.constructor?.name,
+        JSON.stringify((err as Error)?.message),
+      );
+      expect(err).toBeDefined();
+
+      const row = await userRepo.findOne({
+        where: { id: u.user.id },
+        withDeleted: true,
+      });
+      console.log(
+        'item 6 pre-flagged row after refusal =',
+        JSON.stringify({
+          deleted: Boolean(row?.deletedAt),
+          isSocialLogin: row?.isSocialLogin,
+        }),
+      );
+      // Still deleted, and still flagged — nothing had to be reset to make the
+      // refusal work, which is the point: the flag is no longer consulted.
+      expect(row?.deletedAt).toBeInstanceOf(Date);
+      expect(row?.isSocialLogin).toBe(true);
+      expect(
+        await userRepo.count({ where: { email: u.email }, withDeleted: true }),
+      ).toBe(1);
+
+      // The owner's own recovery route is untouched by the refusal.
+      const restored = await restore(u.email, PASSWORD);
+      console.log('item 6 pre-flagged restore by password =', restored.status);
+      expect(restored.status).toBe(200);
+    });
+
+    /**
+     * Deliberate behaviour change from the first attempt, and the reason the
+     * tightening strands nobody: a social account that has since added a
+     * password is refused here and recovers with that password instead.
+     * Leaving this case open is what kept "has a password" and "flagged
+     * social" overlapping, which is where the bypass lived.
+     */
+    it('refuses a social account that has since added a password; it restores by password instead', async () => {
+      const g = await makeUser('socialpw', Role.CUSTOMER, {
+        social: true,
+        withPassword: true,
+      });
+      await deleteMe(g.token).expect(200);
+      googleProfile.email = g.email;
+      googleProfile.providerId = `residual-google-${g.user.id}`;
+
+      let err: unknown;
+      try {
+        await completeGoogleFlow();
+      } catch (e) {
+        err = e;
+      }
+
+      console.log(
+        'item 6 social-with-password Google restore threw =',
+        (err as Error)?.constructor?.name,
+      );
+      expect(err).toBeDefined();
+      const row = await userRepo.findOne({
+        where: { id: g.user.id },
+        withDeleted: true,
+      });
+      expect(row?.deletedAt).toBeInstanceOf(Date);
+      expect(row?.isSocialLogin).toBe(true);
+
+      const restored = await restore(g.email, PASSWORD);
+      console.log(
+        'item 6 social-with-password restore by password =',
+        restored.status,
+      );
+      expect(restored.status).toBe(200);
+    });
+
     it('still restores a genuine social-login account inline (no regression)', async () => {
       const g = await makeUser('social', Role.CUSTOMER, { social: true });
       await deleteMe(g.token).expect(200);
       googleProfile.email = g.email;
       googleProfile.providerId = `residual-google-${g.user.id}`;
+
+      // The precondition this case turns on, asserted rather than assumed:
+      // there is genuinely no hash, so `POST /auth/restore-account` cannot
+      // work for this account and the Google flow is its only way back.
+      // Annotated rather than cast: `manager.query` is generic, so the
+      // annotation binds `T` and keeps the result off `any` (a cast would be
+      // an assertion on `any`, which `lint --fix` strips as unnecessary).
+      const stored: { password: string | null }[] =
+        await userRepo.manager.query(
+          'select password from users where id = $1',
+          [g.user.id],
+        );
+      expect(stored[0].password).toBeNull();
 
       const result = await completeGoogleFlow();
 
@@ -726,6 +859,73 @@ describe('auth-residual-findings (backend items 1, 2, 3, 6, 9)', () => {
       expect(
         await userRepo.count({ where: { email: u.email }, withDeleted: true }),
       ).toBe(1);
+    });
+
+    /**
+     * The same two verdicts at the level the user actually sees them — over
+     * HTTP through `GET /auth/google/callback`, with the controller's own
+     * catch-all and cookie handling in play. The cases above call the service
+     * directly, which cannot show that the refusal lands on the generic error
+     * redirect with no session cookie, or that the legitimate restore does
+     * issue one.
+     */
+    it('over HTTP: the refusal redirects to the generic error with no cookie, the legitimate restore sets refresh_token', async () => {
+      const callback = () =>
+        request(server()).get(
+          '/api/v1/auth/google/callback?code=residual-code&state=residual-state',
+        );
+
+      // Refused: a password-only row pre-flagged by an earlier live Google
+      // sign-in — the bypass sequence, end to end.
+      const refused = await makeUser('httpreflag', Role.CUSTOMER);
+      googleProfile.email = refused.email;
+      googleProfile.providerId = `residual-google-${refused.user.id}`;
+      await callback().expect(302);
+      await deleteMe(refused.token).expect(200);
+
+      const refusedRes = await callback();
+      console.log(
+        'item 6 HTTP refusal =',
+        refusedRes.status,
+        refusedRes.headers.location,
+        JSON.stringify(Object.keys(setCookies(refusedRes))),
+      );
+      expect(refusedRes.status).toBe(302);
+      // Byte-identical to a denied consent or a provider error, so the refusal
+      // is not an account-state oracle.
+      expect(refusedRes.headers.location).toContain('error=oauth_failed');
+      expect(setCookies(refusedRes).refresh_token).toBeUndefined();
+      expect(
+        (
+          await userRepo.findOne({
+            where: { id: refused.user.id },
+            withDeleted: true,
+          })
+        )?.deletedAt,
+      ).toBeInstanceOf(Date);
+
+      // Allowed: a genuine social-only signup with no hash at all.
+      const social = await makeUser('httpsocial', Role.CUSTOMER, {
+        social: true,
+      });
+      await deleteMe(social.token).expect(200);
+      googleProfile.email = social.email;
+      googleProfile.providerId = `residual-google-${social.user.id}`;
+
+      const allowedRes = await callback();
+      console.log(
+        'item 6 HTTP legitimate restore =',
+        allowedRes.status,
+        allowedRes.headers.location,
+        JSON.stringify(Object.keys(setCookies(allowedRes))),
+      );
+      expect(allowedRes.status).toBe(302);
+      expect(allowedRes.headers.location).not.toContain('error=');
+      expect(setCookies(allowedRes).refresh_token).toBeDefined();
+      expect(
+        (await userRepo.findOne({ where: { id: social.user.id } }))
+          ?.deletedAt ?? null,
+      ).toBeNull();
     });
   });
 
