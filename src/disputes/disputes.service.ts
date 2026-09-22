@@ -73,6 +73,25 @@ const ACTIVE_STATUSES: DisputeStatus[] = [
  */
 const MONEY_CLAIM_INDEX = 'uq_disputes_money_payment';
 
+/**
+ * F2: the stable code an admin client matches on to recognise the one `400`
+ * from `PATCH /admin/disputes/:id/resolve` that means *the server state
+ * changed under you — refetch*, as opposed to every other `400` on that route,
+ * which means *nothing changed, your retry is still valid*. Published in
+ * `api-contract.md` §6.8 and surfaced to the client as `meta.error`
+ * (`AllExceptionsFilter` lifts a string `errorCode` out of the response object
+ * for any 4xx and leaves `message` alone), the same way
+ * `DISPUTE_RATE_LIMIT_EXCEEDED` arrives.
+ *
+ * It exists because the admin resolve dialog was deciding whether to refetch
+ * by regexing this file's English prose, so B6's reworded message silently
+ * landed in the generic branch and left the dialog showing a dispute another
+ * admin had already settled as still actionable. Only the abandoned-rollback
+ * arm carries this code — see `moveClaimedMoney`.
+ */
+export const DISPUTE_SETTLED_BY_OTHER_ADMIN_ERROR_CODE =
+  'DISPUTE_SETTLED_BY_OTHER_ADMIN';
+
 /** What the money side of a verdict is going to do, decided before any write. */
 interface MoneyPlan {
   action: DisputeMoneyAction;
@@ -655,7 +674,9 @@ export class DisputesService {
    *     rolled back (status, verdict, note and the money claim restored to
    *     what they were) and the provider's specific error is surfaced, so the
    *     dispute is left actionable and never displays an outcome that
-   *     contradicts the payment.
+   *     contradicts the payment. That rollback is itself conditional on the
+   *     ruling still being on the row, so it cannot un-settle a dispute a
+   *     second admin resolved or closed in the meantime (B6).
    *  4. The real money result — the *amount* — is written last, so
    *     `moneyAmount` can only ever describe money that actually moved.
    */
@@ -836,6 +857,10 @@ export class DisputesService {
   /**
    * Step 3 of {@link resolve}: carries out the claimed money action, or rolls
    * the whole ruling back and surfaces the provider's own reason.
+   *
+   * The rollback only ever undoes *this* ruling: it is conditional on the row
+   * still being `RESOLVED` by this admin, so it can never overwrite a decision
+   * another admin reached while the provider call was in flight (B6).
    */
   private async moveClaimedMoney(
     id: number,
@@ -894,7 +919,7 @@ export class DisputesService {
        * payment (see {@link claimForRuling}), and a movement that never
        * happened must not leave the payment claimed.
        */
-      await this.repo
+      const rollback = await this.repo
         .createQueryBuilder()
         .update(Dispute)
         .set({
@@ -909,10 +934,85 @@ export class DisputesService {
           moneyPaymentId: null,
         })
         .where('id = :id', { id })
+        /**
+         * B6: the rollback restates its own precondition, exactly as
+         * {@link claimForRuling} and {@link close} do — it may only undo *this*
+         * ruling, i.e. the row must still be `RESOLVED` and still claimed by
+         * the admin whose money action just failed.
+         *
+         * `WHERE id = :id` alone was enough to un-settle somebody else's
+         * decision: if a second admin closed this dispute during the provider
+         * round-trip, the rollback wrote `status = previous.status`
+         * (`OPEN`/`UNDER_REVIEW`) over their `CLOSED` and replaced their
+         * closing note with this ruling's pre-ruling value — a settled dispute
+         * silently back in the queue, with both parties already holding a
+         * "dispute closed" notification. The same applied to a second *resolve*
+         * that won the row after this claim.
+         */
+        .andWhere('status = :resolved', { resolved: DisputeStatus.RESOLVED })
+        .andWhere('resolved_by_id = :adminId', { adminId: admin.id })
         .execute();
 
+      /**
+       * Rare by construction — an ordinary failed money action affects its one
+       * row and says nothing here. When it does happen the ruling has been
+       * abandoned mid-flight, so it is logged rather than swallowed: no money
+       * moved, but the claim on the payment (`moneyAction` + `moneyPaymentId`)
+       * is still sitting on the row the other admin settled. That is the safe
+       * direction this file already documents for a movement that may or may
+       * not have happened (see {@link claimForRuling}) — the next ruling
+       * declines to touch that payment rather than moving it twice — and this
+       * line is how it gets reconciled.
+       */
+      const abandoned = !rollback.affected;
+      if (abandoned) {
+        this.logger.error(
+          `Dispute ${id}: rollback of admin ${admin.id}'s failed ${plan.action}` +
+            `${plan.amount != null ? ` of ${formatGhs(plan.amount)}` : ''} ` +
+            `on payment ${plan.paymentId} matched no row — the dispute is no longer RESOLVED by ` +
+            `this admin, so another admin resolved or closed it while the provider call was in ` +
+            `flight. Their decision stands and was NOT reverted; no money moved, but this dispute ` +
+            `still holds the abandoned money claim on payment ${plan.paymentId}, which needs manual ` +
+            `reconciliation. Provider failure: ${detail}`,
+        );
+      }
+
+      const what =
+        plan.action === DisputeMoneyAction.REFUND ? 'refund' : 'release';
+
+      /**
+       * F2: the two arms are told apart by a code, not by their wording. Both
+       * are a `400` carrying the provider's reason, but they ask the client for
+       * opposite things — the abandoned arm means *the row is settled by
+       * somebody else now, discard what you are holding and refetch*, while the
+       * uncontested arm means *nothing changed, the dispute is still yours to
+       * rule on*. The admin dialog was distinguishing them by regexing this
+       * prose, so rewording either one moved the client into the wrong branch
+       * silently (security-report.md F2).
+       *
+       * The object form is what `AllExceptionsFilter` needs to promote
+       * `errorCode` into the envelope's `meta.error`; `message` is passed
+       * through untouched, so the admin-facing sentence is unchanged and
+       * `exception.message` still reads as the sentence for any caller that
+       * uses it.
+       *
+       * The uncontested arm deliberately carries **no** code. It is the
+       * ordinary "your money action failed, try again" `400` that every other
+       * refusal on this route also is, and giving it a discriminator would
+       * invite a client to treat it as a state change it is not.
+       */
+      if (abandoned) {
+        throw new BadRequestException({
+          errorCode: DISPUTE_SETTLED_BY_OTHER_ADMIN_ERROR_CODE,
+          message:
+            `The ${what} could not be completed, and another admin resolved or closed this dispute ` +
+            `while it was in flight — their decision stands, so this ruling was not applied. ` +
+            `Reload to see the current state. Reason: ${detail}`,
+        });
+      }
+
       throw new BadRequestException(
-        `The ${plan.action === DisputeMoneyAction.REFUND ? 'refund' : 'release'} could not be completed, ` +
+        `The ${what} could not be completed, ` +
           `so this dispute has NOT been resolved and is still actionable. Reason: ${detail}`,
       );
     }
@@ -1088,8 +1188,9 @@ export class DisputesService {
    *
    * Returns `NONE` with a `skippedReason` for every case where the action is
    * *impossible* — no linked payment (the common case today), a payment
-   * already refunded or released, a sibling dispute that already moved money
-   * on it. Throws only for an amount the backend genuinely rejects.
+   * already refunded or released, a sibling dispute holding the money claim on
+   * it (whether or not that claim's movement completed — B7).
+   * Throws only for an amount the backend genuinely rejects.
    */
   private async planMoneyAction(
     dispute: Dispute,
@@ -1141,11 +1242,24 @@ export class DisputesService {
       },
     });
     if (siblingWithMoney) {
+      if (siblingWithMoney.moneyAmount == null) {
+        // B7: the block stands either way, but an abandoned claim is worth a
+        // trace of its own — this is the moment an operator actually trips
+        // over one, and until now the only record was the failing ruling's
+        // own `logger.error` line.
+        this.logger.warn(
+          `Dispute ${dispute.id}: payment ${payment.id} is still claimed by dispute ` +
+            `${siblingWithMoney.id}, whose ${siblingWithMoney.moneyAction} never recorded an ` +
+            `amount (abandoned mid-flight). Recording the verdict with no money action; ` +
+            `the payment needs reconciliation.`,
+        );
+      }
       return {
         action: DisputeMoneyAction.NONE,
-        skippedReason:
-          `Dispute #${siblingWithMoney.id} already moved money on this payment ` +
-          `(${siblingWithMoney.moneyAction}). No second money action was taken; the verdict has been recorded.`,
+        skippedReason: this.describeSiblingMoneyClaim(
+          siblingWithMoney,
+          ' No second money action was taken; the verdict has been recorded.',
+        ),
       };
     }
 
@@ -1153,6 +1267,43 @@ export class DisputesService {
       return this.planRefund(payment, dto.refundAmountGhs);
     }
     return this.planRelease(payment);
+  }
+
+  /**
+   * B7: why a sibling dispute's claim blocks this payment — in the words that
+   * are actually true of it.
+   *
+   * The block itself is deliberately status- and amount-agnostic (see the
+   * guard in {@link planMoneyAction}): once another dispute holds
+   * `moneyAction` + `moneyPaymentId` on a payment, no second ruling may touch
+   * that money, because "did the provider act before it errored?" is exactly
+   * the ambiguity the claim exists to protect against. What *was* wrong is the
+   * reason given for it. The guard matched on `moneyAction` alone and told
+   * every later admin *"already moved money on this payment"* — but
+   * `moneyAction` is written *before* the provider call, as the claim, while
+   * `moneyAmount` is the only column ever written from a **completed**
+   * movement (step 4 of {@link resolve}). Since B6 the rollback of a ruling
+   * that lost its row to a concurrent close deliberately leaves the claim
+   * behind with `moneyAmount` still null, so that false statement became
+   * permanent for every sibling of that booking.
+   *
+   * So: `moneyAmount IS NOT NULL` → money moved, today's wording.
+   * `IS NULL` → a claim whose movement never recorded an amount, which needs
+   * reconciliation rather than a claim that money moved.
+   */
+  private describeSiblingMoneyClaim(sibling: Dispute, tail = ''): string {
+    if (sibling.moneyAmount != null) {
+      return (
+        `Dispute #${sibling.id} already moved money on this payment ` +
+        `(${sibling.moneyAction}).${tail}`
+      );
+    }
+    return (
+      `A ruling on dispute #${sibling.id} holds the money claim on this payment and its ` +
+      `${sibling.moneyAction} was abandoned mid-flight, so no money is recorded as having ` +
+      `moved but the movement may or may not have completed. This payment needs ` +
+      `reconciliation before another money action can be taken.${tail}`
+    );
   }
 
   private planRefund(payment: Payment, requested?: number): MoneyPlan {
@@ -1252,7 +1403,8 @@ export class DisputesService {
       return {
         canRefund: false,
         canRelease: false,
-        reason: `Dispute #${siblingWithMoney.id} already moved money on this payment (${siblingWithMoney.moneyAction}).`,
+        /** B7: same block, accurate reason — see {@link describeSiblingMoneyClaim}. */
+        reason: this.describeSiblingMoneyClaim(siblingWithMoney),
         refundableAmount: 0,
         releasableAmount: 0,
       };

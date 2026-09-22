@@ -7,7 +7,15 @@ import {
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
-import { DisputesService } from './disputes.service';
+import type { ArgumentsHost } from '@nestjs/common';
+import type { Request, Response } from 'express';
+import type { Logger as WinstonLogger } from 'winston';
+import { AllExceptionsFilter } from '@common/filters/all-exceptions.filter';
+import type { ErrorResponse } from '@common/types/api-response.type';
+import {
+  DISPUTE_SETTLED_BY_OTHER_ADMIN_ERROR_CODE,
+  DisputesService,
+} from './disputes.service';
 import { Dispute } from './entities/dispute.entity';
 import { Booking } from '../bookings/entities/booking.entity';
 import { Job } from '@jobs/entities/job.entity';
@@ -26,6 +34,7 @@ import {
   Role,
 } from '@common/types/enums';
 import { APP_EVENTS } from '@common/events/app.events';
+import { formatGhs } from '@common/utils/currency.util';
 import type { User } from '@users/entities/user.entity';
 
 /**
@@ -454,21 +463,30 @@ describe('DisputesService', () => {
       expect(result.data.moneySkippedReason).toMatch(/already released/i);
     });
 
-    it('hard-guards against a second money action when a sibling dispute already moved money', async () => {
+    /** A sibling dispute on the same booking, holding the money claim. */
+    const withSiblingClaim = (sibling: Partial<Dispute>) => {
       disputeRepo.findOne
         .mockResolvedValueOnce(
           disputeRaisedByCustomer(DisputeStatus.UNDER_REVIEW),
         )
         .mockResolvedValueOnce({
           id: 6,
-          moneyAction: DisputeMoneyAction.REFUND,
           moneyPaymentId: 300,
+          ...sibling,
         } as Dispute);
       jobRepo.findOne.mockResolvedValue({
         id: 200,
         service: null,
       } as unknown as Job);
       paymentRepo.findOne.mockResolvedValue(heldPayment());
+    };
+
+    it('hard-guards against a second money action when a sibling dispute already moved money', async () => {
+      // A *completed* movement: `moneyAmount` is written only from one.
+      withSiblingClaim({
+        moneyAction: DisputeMoneyAction.REFUND,
+        moneyAmount: 1850,
+      });
 
       const result = await service.resolve(admin, 5, {
         outcome: DisputeOutcome.REFUND_CLIENT,
@@ -478,6 +496,102 @@ describe('DisputesService', () => {
       expect(paymentsService.adminRefund).not.toHaveBeenCalled();
       expect(result.data.moneyAction).toBe(DisputeMoneyAction.NONE);
       expect(result.data.moneySkippedReason).toMatch(/#6/);
+      expect(result.data.moneySkippedReason).toMatch(/already moved money/i);
+    });
+
+    /**
+     * B7. B6's rollback deliberately leaves an abandoned claim on the settled
+     * row — `moneyAction` + `moneyPaymentId` set, `moneyAmount` still null,
+     * exactly the row asserted at the end of the first B6 case below. The
+     * sibling guard matched on `moneyAction` alone, so every later ruling on
+     * that booking was told money had *moved* on the payment when none had.
+     *
+     * The block is the money-safety property and is unchanged: a claim whose
+     * movement may or may not have reached the provider must still stop a
+     * second ruling touching that payment. Only the sentence changes.
+     */
+    it('B7: an abandoned sibling claim is still blocked, but is not described as money that moved', async () => {
+      withSiblingClaim({
+        moneyAction: DisputeMoneyAction.REFUND,
+        moneyAmount: null,
+      });
+
+      const result = await service.resolve(admin, 5, {
+        outcome: DisputeOutcome.REFUND_CLIENT,
+        resolution: 'Second dispute on the same booking, ruling for client.',
+      });
+
+      // ── The block is unchanged: no money movement was permitted.
+      expect(paymentsService.adminRefund).not.toHaveBeenCalled();
+      expect(paymentsService.releaseWithheldPayment).not.toHaveBeenCalled();
+      expect(result.data.moneyAction).toBe(DisputeMoneyAction.NONE);
+      expect(result.data.moneyAmount).toBeNull();
+      expect(result.data.moneyPaymentId).toBeNull();
+      // …and this ruling took no claim of its own on the payment, so the
+      // sibling's claim is the only one standing.
+      const setCalls = updateQb.set.mock.calls as [Record<string, unknown>][];
+      expect(setCalls[0][0]).toEqual(
+        expect.objectContaining({
+          status: DisputeStatus.RESOLVED,
+          outcome: DisputeOutcome.REFUND_CLIENT,
+          moneyAction: null,
+          moneyPaymentId: null,
+          moneyAmount: null,
+        }),
+      );
+
+      // ── The reason is accurate: a pending/abandoned claim, not a movement.
+      const reason = String(result.data.moneySkippedReason);
+      expect(reason).not.toMatch(/already moved money/i);
+      expect(reason).toMatch(/#6/);
+      expect(reason).toMatch(/holds the money claim/i);
+      expect(reason).toMatch(/abandoned mid-flight/i);
+      expect(reason).toMatch(/may or may not have completed/i);
+      expect(reason).toMatch(/needs reconciliation/i);
+      // The verdict still landed, and the admin is told so.
+      expect(reason).toMatch(/the verdict has been recorded/i);
+    });
+
+    it('B7: the abandoned claim a sibling ruling trips over is logged for reconciliation', async () => {
+      const warnLog = jest
+        .spyOn(service['logger'], 'warn')
+        .mockImplementation();
+      withSiblingClaim({
+        moneyAction: DisputeMoneyAction.RELEASE,
+        moneyAmount: null,
+      });
+
+      await service.resolve(admin, 5, {
+        outcome: DisputeOutcome.RELEASE_ARTISAN,
+        resolution: 'Second dispute on the same booking, ruling for artisan.',
+      });
+
+      const logged = warnLog.mock.calls.map((call) => String(call[0]));
+      const line = logged.find((l) => /needs reconciliation/i.test(l));
+      expect(line).toBeDefined();
+      expect(line).toContain('Dispute 5');
+      expect(line).toContain('payment 300');
+      expect(line).toContain('dispute 6');
+      expect(line).toContain(DisputeMoneyAction.RELEASE);
+    });
+
+    it('B7: a sibling whose movement completed logs no reconciliation warning', async () => {
+      const warnLog = jest
+        .spyOn(service['logger'], 'warn')
+        .mockImplementation();
+      withSiblingClaim({
+        moneyAction: DisputeMoneyAction.REFUND,
+        moneyAmount: 1850,
+      });
+
+      await service.resolve(admin, 5, {
+        outcome: DisputeOutcome.REFUND_CLIENT,
+        resolution: 'Second dispute on the same booking, ruling for client.',
+      });
+
+      expect(
+        warnLog.mock.calls.map((call) => String(call[0])).join('\n'),
+      ).not.toMatch(/needs reconciliation/i);
     });
 
     it('does NOT mark the dispute resolved when the money action fails, and surfaces the specific failure', async () => {
@@ -708,6 +822,392 @@ describe('DisputesService', () => {
       expect(result.data.moneyAction).toBe(DisputeMoneyAction.REFUND);
     });
 
+    /**
+     * B6. The rollback of a failed money action used to be keyed on
+     * `WHERE id = :id` alone, with no precondition that the row was still the
+     * one this ruling claimed. A second admin closing the dispute during the
+     * provider round-trip therefore had their close overwritten: a settled
+     * dispute went back to `OPEN`/`UNDER_REVIEW`, their closing note was
+     * replaced by the first admin's pre-ruling value, and both parties were
+     * left holding a "dispute closed" notification for a dispute that was open
+     * again. The predicate now restates the precondition — still `RESOLVED`,
+     * still this admin's ruling — the same conditional-UPDATE convention
+     * `claimForRuling()`, `close()` and the B1 guards use.
+     *
+     * These three tests run against a row that honours the statement's own
+     * WHERE clause, so "the other admin's decision was left alone" is asserted
+     * on the row rather than only on the `affected` count.
+     */
+    type DisputeRow = {
+      id: number;
+      status: DisputeStatus;
+      outcome: DisputeOutcome | null;
+      resolution: string | null;
+      adminNotes: string | null;
+      resolvedById: number | null;
+      resolvedAt: Date | null;
+      moneyAction: DisputeMoneyAction | null;
+      moneyAmount: number | null;
+      moneyPaymentId: number | null;
+    };
+
+    /**
+     * Every predicate the resolve path writes, evaluated against a real row.
+     * Exhaustive on purpose: a clause this harness does not recognise throws,
+     * rather than quietly matching everything and hiding a changed guard.
+     */
+    const PREDICATES: Record<
+      string,
+      (row: DisputeRow, params: Record<string, unknown>) => boolean
+    > = {
+      'id = :id': (row, params) => row.id === params.id,
+      'status IN (:...active)': (row, params) =>
+        (params.active as DisputeStatus[]).includes(row.status),
+      'status = :resolved': (row, params) => row.status === params.resolved,
+      'resolved_by_id = :adminId': (row, params) =>
+        row.resolvedById === params.adminId,
+    };
+
+    /**
+     * An UPDATE builder that applies its `set` only to a row its WHERE clause
+     * actually matches, and records what each statement affected.
+     */
+    const builderAgainst = (row: DisputeRow) => {
+      const affected: number[] = [];
+      let pending: Partial<DisputeRow> = {};
+      let clauses: [string, Record<string, unknown>][] = [];
+      const qb: typeof updateQb = {
+        update: jest.fn(() => qb),
+        set: jest.fn((values: Partial<DisputeRow>) => {
+          pending = values;
+          return qb;
+        }),
+        where: jest.fn(
+          (clause: string, params: Record<string, unknown> = {}) => {
+            clauses = [[clause, params]];
+            return qb;
+          },
+        ),
+        andWhere: jest.fn(
+          (clause: string, params: Record<string, unknown> = {}) => {
+            clauses.push([clause, params]);
+            return qb;
+          },
+        ),
+        execute: jest.fn(() => {
+          const matched = clauses.every(([clause, params]) => {
+            const predicate = PREDICATES[clause];
+            if (!predicate) {
+              throw new Error(`Unhandled UPDATE predicate in test: ${clause}`);
+            }
+            return predicate(row, params);
+          });
+          if (matched) Object.assign(row, pending);
+          affected.push(matched ? 1 : 0);
+          return Promise.resolve({ affected: matched ? 1 : 0 });
+        }),
+      };
+      return { qb, affected };
+    };
+
+    /** The row as it stands before any ruling: open work, unclaimed. */
+    const underReviewRow = (): DisputeRow => ({
+      id: 5,
+      status: DisputeStatus.UNDER_REVIEW,
+      outcome: null,
+      resolution: null,
+      adminNotes: null,
+      resolvedById: null,
+      resolvedAt: null,
+      moneyAction: null,
+      moneyAmount: null,
+      moneyPaymentId: null,
+    });
+
+    /** The second admin, who acts on the row while admin A is mid-provider-call. */
+    const adminB = { id: 42, email: 'admin.two@jinva.test' } as User;
+
+    /** Admin A's own note, which must never displace another admin's. */
+    const notesFromA = 'Note attached to the ruling that failed.';
+
+    const refundDeclined =
+      'Paystack refund declined: insufficient settlement balance';
+
+    /** Admin A's ruling, identical across the three cases below. */
+    const rulingFromA = {
+      outcome: DisputeOutcome.REFUND_CLIENT,
+      resolution: 'Ruling for the client on the evidence.',
+      adminNotes: notesFromA,
+    };
+
+    /**
+     * F2: the admin client branches on `meta.error`, not on the thrown object,
+     * so the discriminator is asserted through the real production filter
+     * rather than on the exception alone — `AllExceptionsFilter` is what lifts
+     * a string `errorCode` out of an exception's response body, and it is
+     * registered globally in `src/main.ts`. Without this, a throw could carry
+     * the code in a shape the filter drops and the test would still pass. Same
+     * approach as `src/auth/__qa__/g10-social-only-error-contract.spec.ts`.
+     *
+     * Note the two dispute e2e specs boot the app the Nest testing docs way
+     * (pipe + interceptor only), so they never see this envelope — which is
+     * why the wire shape is pinned here.
+     */
+    const envelopeFor = (exception: unknown): ErrorResponse => {
+      const json = jest.fn<void, [ErrorResponse]>();
+      const res = {
+        status: jest.fn().mockReturnValue({ json }),
+      } as unknown as Response;
+      const host = {
+        switchToHttp: () => ({
+          getResponse: () => res,
+          getRequest: () =>
+            ({
+              method: 'PATCH',
+              url: '/api/v1/admin/disputes/5/resolve',
+            }) as unknown as Request,
+        }),
+      } as unknown as ArgumentsHost;
+      new AllExceptionsFilter({
+        error: jest.fn(),
+      } as unknown as WinstonLogger).catch(exception, host);
+      return json.mock.calls[0][0];
+    };
+
+    /** Runs admin A's ruling and hands back whatever it threw, if anything. */
+    const resolveAndCatch = async (): Promise<unknown> => {
+      try {
+        await service.resolve(admin, 5, rulingFromA);
+        return undefined;
+      } catch (err) {
+        return err;
+      }
+    };
+
+    it("B6: a second admin's close survives a failed rollback — zero rows, row untouched, logged", async () => {
+      const row = underReviewRow();
+      const harness = builderAgainst(row);
+      disputeRepo.createQueryBuilder.mockImplementation(() => harness.qb);
+      const errorLog = jest
+        .spyOn(service['logger'], 'error')
+        .mockImplementation();
+      withHeldPayment();
+
+      const closedAt = new Date('2026-09-22T09:41:00.000Z');
+      const notesFromB = 'Settled by phone with both parties — closing.';
+      // Admin B closes the dispute while A's provider call is in flight, and
+      // the provider then declines.
+      paymentsService.adminRefund.mockImplementation(() => {
+        Object.assign(row, {
+          status: DisputeStatus.CLOSED,
+          resolvedById: adminB.id,
+          resolvedAt: closedAt,
+          adminNotes: notesFromB,
+        });
+        return Promise.reject(new Error(refundDeclined));
+      });
+
+      const failure = await resolveAndCatch();
+
+      // A's claim took one row; the rollback took none.
+      expect(harness.affected).toEqual([1, 0]);
+      // The row is exactly what B left: not reverted to an actionable status,
+      // B's note not overwritten, B's claim on the row not nulled.
+      expect(row).toEqual(
+        expect.objectContaining({
+          status: DisputeStatus.CLOSED,
+          resolvedById: adminB.id,
+          resolvedAt: closedAt,
+          adminNotes: notesFromB,
+        }),
+      );
+      expect(row.status).not.toBe(DisputeStatus.UNDER_REVIEW);
+      expect(row.adminNotes).not.toBe(notesFromA);
+      // No money moved, and none moved twice.
+      expect(paymentsService.adminRefund).toHaveBeenCalledTimes(1);
+      // The abandoned claim deliberately stays on the row, so no later ruling
+      // touches that payment — the log line is how it gets reconciled.
+      expect(row).toEqual(
+        expect.objectContaining({
+          moneyAction: DisputeMoneyAction.REFUND,
+          moneyPaymentId: 300,
+          moneyAmount: null,
+        }),
+      );
+      // A's request still fails, naming the provider's own reason, as the same
+      // exception class the admin UI already handles.
+      expect(failure).toBeInstanceOf(BadRequestException);
+      expect((failure as BadRequestException).message).toMatch(
+        /insufficient settlement balance/,
+      );
+      // …and no longer claims the dispute is still actionable, because it is
+      // now CLOSED.
+      expect((failure as BadRequestException).message).not.toMatch(
+        /still actionable/i,
+      );
+      /**
+       * F2: this arm carries a machine-readable discriminator, so the admin
+       * dialog can decide to discard what it is holding and refetch without
+       * regexing the sentence above — which is exactly how B6's rewording
+       * broke it. `AllExceptionsFilter` lifts a string `errorCode` out of the
+       * response object into `meta.error` for any 4xx, and passes `message`
+       * through, so the sentence the admin reads is unchanged and
+       * `exception.message` still reads as that sentence.
+       */
+      const payload = (failure as BadRequestException).getResponse() as {
+        errorCode?: string;
+        message?: string;
+      };
+      expect(payload.errorCode).toBe(DISPUTE_SETTLED_BY_OTHER_ADMIN_ERROR_CODE);
+      expect(payload.message).toBe((failure as BadRequestException).message);
+      expect(payload.message).toMatch(/their decision stands/i);
+      // And the shape is one the filter actually promotes: the code lands on
+      // `meta.error`, still a 400, with the admin-facing sentence intact.
+      const envelope = envelopeFor(failure);
+      expect(envelope.meta.statusCode).toBe(400);
+      expect(envelope.meta.error).toBe(
+        DISPUTE_SETTLED_BY_OTHER_ADMIN_ERROR_CODE,
+      );
+      expect(envelope.message).toBe((failure as BadRequestException).message);
+      // No resolve notification and no audit row for a ruling that never took.
+      expect(emitter.emit).not.toHaveBeenCalled();
+      expect(auditService.record).not.toHaveBeenCalled();
+      // The abandoned ruling is logged, not swallowed: dispute, admin, money
+      // action, payment and the provider's reason.
+      const logged = errorLog.mock.calls.map((call) => String(call[0]));
+      const abandoned = logged.find((line) => /matched no row/i.test(line));
+      expect(abandoned).toBeDefined();
+      expect(abandoned).toContain('Dispute 5');
+      expect(abandoned).toContain(`admin ${admin.id}`);
+      expect(abandoned).toContain(DisputeMoneyAction.REFUND);
+      expect(abandoned).toContain('payment 300');
+      expect(abandoned).toContain(formatGhs(1850));
+      expect(abandoned).toContain(refundDeclined);
+    });
+
+    it('B6: a rollback onto a row claimed by a different admin is the same logged no-op', async () => {
+      const row = underReviewRow();
+      const harness = builderAgainst(row);
+      disputeRepo.createQueryBuilder.mockImplementation(() => harness.qb);
+      const errorLog = jest
+        .spyOn(service['logger'], 'error')
+        .mockImplementation();
+      withHeldPayment();
+
+      const rulingFromB =
+        'A second ruling that won the row after A claimed it.';
+      // Still RESOLVED, but no longer A's ruling: A must not roll back B's.
+      paymentsService.adminRefund.mockImplementation(() => {
+        Object.assign(row, {
+          status: DisputeStatus.RESOLVED,
+          resolvedById: adminB.id,
+          outcome: DisputeOutcome.MUTUAL,
+          resolution: rulingFromB,
+        });
+        return Promise.reject(new Error(refundDeclined));
+      });
+
+      const failure = await resolveAndCatch();
+
+      expect(harness.affected).toEqual([1, 0]);
+      expect(row).toEqual(
+        expect.objectContaining({
+          status: DisputeStatus.RESOLVED,
+          resolvedById: adminB.id,
+          outcome: DisputeOutcome.MUTUAL,
+          resolution: rulingFromB,
+        }),
+      );
+      expect(failure).toBeInstanceOf(BadRequestException);
+      expect(
+        errorLog.mock.calls.map((call) => String(call[0])).join('\n'),
+      ).toMatch(/matched no row/i);
+      // F2: the other way into the abandoned arm — a second *resolve* rather
+      // than a close — carries the same code, because it asks the client for
+      // the same thing.
+      expect(
+        (
+          (failure as BadRequestException).getResponse() as {
+            errorCode?: string;
+          }
+        ).errorCode,
+      ).toBe(DISPUTE_SETTLED_BY_OTHER_ADMIN_ERROR_CODE);
+      // The ownership half of the guard is what carried this case.
+      expect(harness.qb.andWhere).toHaveBeenCalledWith(
+        'resolved_by_id = :adminId',
+        { adminId: admin.id },
+      );
+      expect(harness.qb.andWhere).toHaveBeenCalledWith('status = :resolved', {
+        resolved: DisputeStatus.RESOLVED,
+      });
+    });
+
+    it('B6: the uncontested rollback still restores all nine columns, silently', async () => {
+      const row = underReviewRow();
+      const harness = builderAgainst(row);
+      disputeRepo.createQueryBuilder.mockImplementation(() => harness.qb);
+      const errorLog = jest
+        .spyOn(service['logger'], 'error')
+        .mockImplementation();
+      withHeldPayment();
+      paymentsService.adminRefund.mockRejectedValueOnce(
+        new Error(refundDeclined),
+      );
+
+      const failure = await resolveAndCatch();
+
+      // Nobody else touched the row, so the rollback found its own ruling.
+      expect(harness.affected).toEqual([1, 1]);
+      const setCalls = harness.qb.set.mock.calls as [Record<string, unknown>][];
+      expect(setCalls[setCalls.length - 1][0]).toEqual({
+        status: DisputeStatus.UNDER_REVIEW,
+        outcome: null,
+        resolution: null,
+        adminNotes: null,
+        resolvedById: null,
+        resolvedAt: null,
+        moneyAction: null,
+        moneyAmount: null,
+        moneyPaymentId: null,
+      });
+      // The row really is back to pre-ruling state, claim released and all.
+      expect(row).toEqual(underReviewRow());
+      // Same message and exception as before this guard existed.
+      expect(failure).toBeInstanceOf(BadRequestException);
+      expect((failure as BadRequestException).message).toMatch(
+        /has NOT been resolved and is still actionable/i,
+      );
+      expect((failure as BadRequestException).message).toContain(
+        refundDeclined,
+      );
+      /**
+       * F2: and it must **not** carry the settled-by-another-admin code. This
+       * arm means the dispute is unchanged and the admin's retry is still
+       * valid, so a client branching on the code must fall through to its
+       * ordinary `400` handling and keep the dialog's state — the opposite of
+       * what the abandoned arm asks for. Nest's plain-string form builds
+       * `{ message, error: 'Bad Request', statusCode }`, so there is no
+       * `errorCode` for `AllExceptionsFilter` to promote and `meta.error`
+       * stays the generic exception name.
+       */
+      const payload = (failure as BadRequestException).getResponse();
+      expect(payload).not.toHaveProperty('errorCode');
+      expect(JSON.stringify(payload)).not.toContain(
+        DISPUTE_SETTLED_BY_OTHER_ADMIN_ERROR_CODE,
+      );
+      const envelope = envelopeFor(failure);
+      expect(envelope.meta.error).not.toBe(
+        DISPUTE_SETTLED_BY_OTHER_ADMIN_ERROR_CODE,
+      );
+      expect(envelope.meta.error).toBe('BadRequestException');
+      expect(envelope.message).toBe((failure as BadRequestException).message);
+      // The abandoned-ruling line is for the contested path only — an ordinary
+      // failed money action must not log it.
+      expect(
+        errorLog.mock.calls.map((call) => String(call[0])).join('\n'),
+      ).not.toMatch(/matched no row/i);
+    });
+
     it('is safe under concurrent resolution — the loser gets a clear message and never moves money', async () => {
       withHeldPayment();
       // The conditional UPDATE matched no row: someone else resolved it first.
@@ -765,6 +1265,98 @@ describe('DisputesService', () => {
           artisanUserId: artisanUser.id,
         }),
       );
+    });
+  });
+
+  // ─── DR2 read path ──────────────────────────────────────────────────────────
+
+  /**
+   * The admin detail read describes the same block the resolve path enforces,
+   * so B7's two cases have to read the same way on both surfaces — the dialog
+   * disables a money verdict with the server's sentence and never composes its
+   * own (api-contract.md §1.2).
+   */
+  describe('findOne — moneyOptions and a sibling money claim (DR2/B7)', () => {
+    type MoneyOptionsRead = {
+      canRefund: boolean;
+      canRelease: boolean;
+      reason?: string | null;
+      refundReason?: string | null;
+      releaseReason?: string | null;
+      refundableAmount: number;
+      releasableAmount: number;
+    };
+
+    const readWithSibling = async (sibling: Partial<Dispute>) => {
+      disputeRepo.findOne.mockResolvedValueOnce(
+        disputeRaisedByCustomer(DisputeStatus.UNDER_REVIEW),
+      );
+      disputeRepo.find.mockResolvedValueOnce([
+        { id: 6, moneyPaymentId: 300, ...sibling } as Dispute,
+      ]);
+      jobRepo.findOne.mockResolvedValue({
+        id: 200,
+        service: null,
+      } as unknown as Job);
+      paymentRepo.findOne.mockResolvedValue(heldPayment());
+
+      const result = await service.findOne(5);
+      return result.data.moneyOptions as MoneyOptionsRead;
+    };
+
+    it('a completed sibling movement keeps the documented "already moved money" wording', async () => {
+      // A `decimal` column arrives from the driver as a string, so the check
+      // has to be "is there an amount at all", not a numeric comparison.
+      const options = await readWithSibling({
+        moneyAction: DisputeMoneyAction.REFUND,
+        moneyAmount: '1850.00' as unknown as number,
+      });
+
+      expect(options.canRefund).toBe(false);
+      expect(options.canRelease).toBe(false);
+      expect(String(options.reason)).toContain(
+        'Dispute #6 already moved money on this payment (REFUND).',
+      );
+    });
+
+    it('B7: an abandoned sibling claim still disables both verdicts, with an accurate reason', async () => {
+      const options = await readWithSibling({
+        moneyAction: DisputeMoneyAction.REFUND,
+        moneyAmount: null,
+      });
+
+      // The block is unchanged — both money verdicts stay off the table.
+      expect(options.canRefund).toBe(false);
+      expect(options.canRelease).toBe(false);
+      expect(options.refundableAmount).toBe(0);
+      expect(options.releasableAmount).toBe(0);
+
+      // Shape is unchanged too: the single top-level `reason`, no per-option
+      // reasons, which is shape (a) the dialog already reads.
+      expect(options.refundReason).toBeUndefined();
+      expect(options.releaseReason).toBeUndefined();
+
+      const reason = String(options.reason);
+      expect(reason).not.toMatch(/already moved money/i);
+      expect(reason).toMatch(/#6/);
+      expect(reason).toMatch(/holds the money claim/i);
+      expect(reason).toMatch(/abandoned mid-flight/i);
+      expect(reason).toMatch(/needs reconciliation/i);
+      // The read path says nothing about a verdict being recorded — that tail
+      // belongs to the resolve response only.
+      expect(reason).not.toMatch(/verdict has been recorded/i);
+    });
+
+    it('a sibling that moved no money at all leaves both verdicts assessable', async () => {
+      const options = await readWithSibling({
+        moneyAction: DisputeMoneyAction.NONE,
+        moneyAmount: null,
+      });
+
+      // NONE is not a claim, so the payment is assessed on its own status.
+      expect(options.canRefund).toBe(true);
+      expect(options.reason).toBeUndefined();
+      expect(options.refundableAmount).toBe(1850);
     });
   });
 
