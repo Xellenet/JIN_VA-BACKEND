@@ -655,7 +655,9 @@ export class DisputesService {
    *     rolled back (status, verdict, note and the money claim restored to
    *     what they were) and the provider's specific error is surfaced, so the
    *     dispute is left actionable and never displays an outcome that
-   *     contradicts the payment.
+   *     contradicts the payment. That rollback is itself conditional on the
+   *     ruling still being on the row, so it cannot un-settle a dispute a
+   *     second admin resolved or closed in the meantime (B6).
    *  4. The real money result — the *amount* — is written last, so
    *     `moneyAmount` can only ever describe money that actually moved.
    */
@@ -836,6 +838,10 @@ export class DisputesService {
   /**
    * Step 3 of {@link resolve}: carries out the claimed money action, or rolls
    * the whole ruling back and surfaces the provider's own reason.
+   *
+   * The rollback only ever undoes *this* ruling: it is conditional on the row
+   * still being `RESOLVED` by this admin, so it can never overwrite a decision
+   * another admin reached while the provider call was in flight (B6).
    */
   private async moveClaimedMoney(
     id: number,
@@ -894,7 +900,7 @@ export class DisputesService {
        * payment (see {@link claimForRuling}), and a movement that never
        * happened must not leave the payment claimed.
        */
-      await this.repo
+      const rollback = await this.repo
         .createQueryBuilder()
         .update(Dispute)
         .set({
@@ -909,11 +915,58 @@ export class DisputesService {
           moneyPaymentId: null,
         })
         .where('id = :id', { id })
+        /**
+         * B6: the rollback restates its own precondition, exactly as
+         * {@link claimForRuling} and {@link close} do — it may only undo *this*
+         * ruling, i.e. the row must still be `RESOLVED` and still claimed by
+         * the admin whose money action just failed.
+         *
+         * `WHERE id = :id` alone was enough to un-settle somebody else's
+         * decision: if a second admin closed this dispute during the provider
+         * round-trip, the rollback wrote `status = previous.status`
+         * (`OPEN`/`UNDER_REVIEW`) over their `CLOSED` and replaced their
+         * closing note with this ruling's pre-ruling value — a settled dispute
+         * silently back in the queue, with both parties already holding a
+         * "dispute closed" notification. The same applied to a second *resolve*
+         * that won the row after this claim.
+         */
+        .andWhere('status = :resolved', { resolved: DisputeStatus.RESOLVED })
+        .andWhere('resolved_by_id = :adminId', { adminId: admin.id })
         .execute();
 
+      /**
+       * Rare by construction — an ordinary failed money action affects its one
+       * row and says nothing here. When it does happen the ruling has been
+       * abandoned mid-flight, so it is logged rather than swallowed: no money
+       * moved, but the claim on the payment (`moneyAction` + `moneyPaymentId`)
+       * is still sitting on the row the other admin settled. That is the safe
+       * direction this file already documents for a movement that may or may
+       * not have happened (see {@link claimForRuling}) — the next ruling
+       * declines to touch that payment rather than moving it twice — and this
+       * line is how it gets reconciled.
+       */
+      const abandoned = !rollback.affected;
+      if (abandoned) {
+        this.logger.error(
+          `Dispute ${id}: rollback of admin ${admin.id}'s failed ${plan.action}` +
+            `${plan.amount != null ? ` of ${formatGhs(plan.amount)}` : ''} ` +
+            `on payment ${plan.paymentId} matched no row — the dispute is no longer RESOLVED by ` +
+            `this admin, so another admin resolved or closed it while the provider call was in ` +
+            `flight. Their decision stands and was NOT reverted; no money moved, but this dispute ` +
+            `still holds the abandoned money claim on payment ${plan.paymentId}, which needs manual ` +
+            `reconciliation. Provider failure: ${detail}`,
+        );
+      }
+
+      const what =
+        plan.action === DisputeMoneyAction.REFUND ? 'refund' : 'release';
       throw new BadRequestException(
-        `The ${plan.action === DisputeMoneyAction.REFUND ? 'refund' : 'release'} could not be completed, ` +
-          `so this dispute has NOT been resolved and is still actionable. Reason: ${detail}`,
+        abandoned
+          ? `The ${what} could not be completed, and another admin resolved or closed this dispute ` +
+            `while it was in flight — their decision stands, so this ruling was not applied. ` +
+            `Reload to see the current state. Reason: ${detail}`
+          : `The ${what} could not be completed, ` +
+            `so this dispute has NOT been resolved and is still actionable. Reason: ${detail}`,
       );
     }
   }
