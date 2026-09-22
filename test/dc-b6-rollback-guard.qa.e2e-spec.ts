@@ -471,6 +471,14 @@ describe('B6: dispute money-action rollback status guard — QA verification (e2
       expect(aMessage).toMatch(
         /another admin resolved or closed this dispute/i,
       );
+      /**
+       * F2 is asserted in `disputes.service.spec.ts` rather than here: this
+       * spec boots the app the Nest testing docs way, without production's
+       * global `AllExceptionsFilter`, so the `{ status, message, meta }`
+       * envelope that carries `meta.error` does not exist on these responses.
+       * The message assertions above are what this spec can see, and they are
+       * unchanged by the code.
+       */
 
       // ── The row is exactly what B left.
       const after = await disputeRepo.findOneByOrFail({ id: disputeId });

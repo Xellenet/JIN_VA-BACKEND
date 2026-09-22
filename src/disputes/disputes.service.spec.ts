@@ -7,7 +7,15 @@ import {
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
-import { DisputesService } from './disputes.service';
+import type { ArgumentsHost } from '@nestjs/common';
+import type { Request, Response } from 'express';
+import type { Logger as WinstonLogger } from 'winston';
+import { AllExceptionsFilter } from '@common/filters/all-exceptions.filter';
+import type { ErrorResponse } from '@common/types/api-response.type';
+import {
+  DISPUTE_SETTLED_BY_OTHER_ADMIN_ERROR_CODE,
+  DisputesService,
+} from './disputes.service';
 import { Dispute } from './entities/dispute.entity';
 import { Booking } from '../bookings/entities/booking.entity';
 import { Job } from '@jobs/entities/job.entity';
@@ -932,6 +940,40 @@ describe('DisputesService', () => {
       adminNotes: notesFromA,
     };
 
+    /**
+     * F2: the admin client branches on `meta.error`, not on the thrown object,
+     * so the discriminator is asserted through the real production filter
+     * rather than on the exception alone — `AllExceptionsFilter` is what lifts
+     * a string `errorCode` out of an exception's response body, and it is
+     * registered globally in `src/main.ts`. Without this, a throw could carry
+     * the code in a shape the filter drops and the test would still pass. Same
+     * approach as `src/auth/__qa__/g10-social-only-error-contract.spec.ts`.
+     *
+     * Note the two dispute e2e specs boot the app the Nest testing docs way
+     * (pipe + interceptor only), so they never see this envelope — which is
+     * why the wire shape is pinned here.
+     */
+    const envelopeFor = (exception: unknown): ErrorResponse => {
+      const json = jest.fn<void, [ErrorResponse]>();
+      const res = {
+        status: jest.fn().mockReturnValue({ json }),
+      } as unknown as Response;
+      const host = {
+        switchToHttp: () => ({
+          getResponse: () => res,
+          getRequest: () =>
+            ({
+              method: 'PATCH',
+              url: '/api/v1/admin/disputes/5/resolve',
+            }) as unknown as Request,
+        }),
+      } as unknown as ArgumentsHost;
+      new AllExceptionsFilter({
+        error: jest.fn(),
+      } as unknown as WinstonLogger).catch(exception, host);
+      return json.mock.calls[0][0];
+    };
+
     /** Runs admin A's ruling and hands back whatever it threw, if anything. */
     const resolveAndCatch = async (): Promise<unknown> => {
       try {
@@ -1003,6 +1045,30 @@ describe('DisputesService', () => {
       expect((failure as BadRequestException).message).not.toMatch(
         /still actionable/i,
       );
+      /**
+       * F2: this arm carries a machine-readable discriminator, so the admin
+       * dialog can decide to discard what it is holding and refetch without
+       * regexing the sentence above — which is exactly how B6's rewording
+       * broke it. `AllExceptionsFilter` lifts a string `errorCode` out of the
+       * response object into `meta.error` for any 4xx, and passes `message`
+       * through, so the sentence the admin reads is unchanged and
+       * `exception.message` still reads as that sentence.
+       */
+      const payload = (failure as BadRequestException).getResponse() as {
+        errorCode?: string;
+        message?: string;
+      };
+      expect(payload.errorCode).toBe(DISPUTE_SETTLED_BY_OTHER_ADMIN_ERROR_CODE);
+      expect(payload.message).toBe((failure as BadRequestException).message);
+      expect(payload.message).toMatch(/their decision stands/i);
+      // And the shape is one the filter actually promotes: the code lands on
+      // `meta.error`, still a 400, with the admin-facing sentence intact.
+      const envelope = envelopeFor(failure);
+      expect(envelope.meta.statusCode).toBe(400);
+      expect(envelope.meta.error).toBe(
+        DISPUTE_SETTLED_BY_OTHER_ADMIN_ERROR_CODE,
+      );
+      expect(envelope.message).toBe((failure as BadRequestException).message);
       // No resolve notification and no audit row for a ruling that never took.
       expect(emitter.emit).not.toHaveBeenCalled();
       expect(auditService.record).not.toHaveBeenCalled();
@@ -1056,6 +1122,16 @@ describe('DisputesService', () => {
       expect(
         errorLog.mock.calls.map((call) => String(call[0])).join('\n'),
       ).toMatch(/matched no row/i);
+      // F2: the other way into the abandoned arm — a second *resolve* rather
+      // than a close — carries the same code, because it asks the client for
+      // the same thing.
+      expect(
+        (
+          (failure as BadRequestException).getResponse() as {
+            errorCode?: string;
+          }
+        ).errorCode,
+      ).toBe(DISPUTE_SETTLED_BY_OTHER_ADMIN_ERROR_CODE);
       // The ownership half of the guard is what carried this case.
       expect(harness.qb.andWhere).toHaveBeenCalledWith(
         'resolved_by_id = :adminId',
@@ -1104,6 +1180,27 @@ describe('DisputesService', () => {
       expect((failure as BadRequestException).message).toContain(
         refundDeclined,
       );
+      /**
+       * F2: and it must **not** carry the settled-by-another-admin code. This
+       * arm means the dispute is unchanged and the admin's retry is still
+       * valid, so a client branching on the code must fall through to its
+       * ordinary `400` handling and keep the dialog's state — the opposite of
+       * what the abandoned arm asks for. Nest's plain-string form builds
+       * `{ message, error: 'Bad Request', statusCode }`, so there is no
+       * `errorCode` for `AllExceptionsFilter` to promote and `meta.error`
+       * stays the generic exception name.
+       */
+      const payload = (failure as BadRequestException).getResponse();
+      expect(payload).not.toHaveProperty('errorCode');
+      expect(JSON.stringify(payload)).not.toContain(
+        DISPUTE_SETTLED_BY_OTHER_ADMIN_ERROR_CODE,
+      );
+      const envelope = envelopeFor(failure);
+      expect(envelope.meta.error).not.toBe(
+        DISPUTE_SETTLED_BY_OTHER_ADMIN_ERROR_CODE,
+      );
+      expect(envelope.meta.error).toBe('BadRequestException');
+      expect(envelope.message).toBe((failure as BadRequestException).message);
       // The abandoned-ruling line is for the contested path only — an ordinary
       // failed money action must not log it.
       expect(

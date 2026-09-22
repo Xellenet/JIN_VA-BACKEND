@@ -73,6 +73,25 @@ const ACTIVE_STATUSES: DisputeStatus[] = [
  */
 const MONEY_CLAIM_INDEX = 'uq_disputes_money_payment';
 
+/**
+ * F2: the stable code an admin client matches on to recognise the one `400`
+ * from `PATCH /admin/disputes/:id/resolve` that means *the server state
+ * changed under you — refetch*, as opposed to every other `400` on that route,
+ * which means *nothing changed, your retry is still valid*. Published in
+ * `api-contract.md` §6.8 and surfaced to the client as `meta.error`
+ * (`AllExceptionsFilter` lifts a string `errorCode` out of the response object
+ * for any 4xx and leaves `message` alone), the same way
+ * `DISPUTE_RATE_LIMIT_EXCEEDED` arrives.
+ *
+ * It exists because the admin resolve dialog was deciding whether to refetch
+ * by regexing this file's English prose, so B6's reworded message silently
+ * landed in the generic branch and left the dialog showing a dispute another
+ * admin had already settled as still actionable. Only the abandoned-rollback
+ * arm carries this code — see `moveClaimedMoney`.
+ */
+export const DISPUTE_SETTLED_BY_OTHER_ADMIN_ERROR_CODE =
+  'DISPUTE_SETTLED_BY_OTHER_ADMIN';
+
 /** What the money side of a verdict is going to do, decided before any write. */
 interface MoneyPlan {
   action: DisputeMoneyAction;
@@ -960,13 +979,41 @@ export class DisputesService {
 
       const what =
         plan.action === DisputeMoneyAction.REFUND ? 'refund' : 'release';
-      throw new BadRequestException(
-        abandoned
-          ? `The ${what} could not be completed, and another admin resolved or closed this dispute ` +
+
+      /**
+       * F2: the two arms are told apart by a code, not by their wording. Both
+       * are a `400` carrying the provider's reason, but they ask the client for
+       * opposite things — the abandoned arm means *the row is settled by
+       * somebody else now, discard what you are holding and refetch*, while the
+       * uncontested arm means *nothing changed, the dispute is still yours to
+       * rule on*. The admin dialog was distinguishing them by regexing this
+       * prose, so rewording either one moved the client into the wrong branch
+       * silently (security-report.md F2).
+       *
+       * The object form is what `AllExceptionsFilter` needs to promote
+       * `errorCode` into the envelope's `meta.error`; `message` is passed
+       * through untouched, so the admin-facing sentence is unchanged and
+       * `exception.message` still reads as the sentence for any caller that
+       * uses it.
+       *
+       * The uncontested arm deliberately carries **no** code. It is the
+       * ordinary "your money action failed, try again" `400` that every other
+       * refusal on this route also is, and giving it a discriminator would
+       * invite a client to treat it as a state change it is not.
+       */
+      if (abandoned) {
+        throw new BadRequestException({
+          errorCode: DISPUTE_SETTLED_BY_OTHER_ADMIN_ERROR_CODE,
+          message:
+            `The ${what} could not be completed, and another admin resolved or closed this dispute ` +
             `while it was in flight — their decision stands, so this ruling was not applied. ` +
-            `Reload to see the current state. Reason: ${detail}`
-          : `The ${what} could not be completed, ` +
-            `so this dispute has NOT been resolved and is still actionable. Reason: ${detail}`,
+            `Reload to see the current state. Reason: ${detail}`,
+        });
+      }
+
+      throw new BadRequestException(
+        `The ${what} could not be completed, ` +
+          `so this dispute has NOT been resolved and is still actionable. Reason: ${detail}`,
       );
     }
   }
