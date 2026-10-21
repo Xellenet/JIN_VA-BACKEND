@@ -95,9 +95,10 @@ export class ArtisanProfileResponseDto {
   isProfileComplete: boolean;
 
   @ApiProperty({
-    example: ['bio', 'hourlyRate'],
+    example: ['hourlyRate', 'location'],
     description:
-      'F3: required fields still missing when `isProfileComplete` is false (empty otherwise).',
+      'F3: required fields still missing when `isProfileComplete` is false (empty otherwise). ' +
+      'Possible keys: `hourlyRate`, `location`, `services`. Bio is optional and never listed (B2).',
     type: [String],
   })
   @Expose()

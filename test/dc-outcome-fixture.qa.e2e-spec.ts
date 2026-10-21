@@ -71,7 +71,7 @@ describe('QA DC3.5 outcome fixture (setup only)', () => {
     );
 
     const customer = await userRepo.findOneByOrFail({
-      email: 'abena.boateng@gmail.com',
+      email: 'abena.boateng@example.com',
       role: Role.CUSTOMER,
     });
     const artisanUser = await userRepo.findOneByOrFail({

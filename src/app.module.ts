@@ -31,6 +31,7 @@ import { PaymentsModule } from './payments/payments.module';
 import { PortfolioModule } from './portfolio/portfolio.module';
 import { AdminAuditModule } from './admin-audit/admin-audit.module';
 import { AnalyticsModule } from './analytics/analytics.module';
+import { LocationsModule } from './locations/locations.module';
 
 @Module({
   imports: [
@@ -73,6 +74,8 @@ import { AnalyticsModule } from './analytics/analytics.module';
     // AN1: PRD §7's AnalyticsModule — `GET /analytics/artisan` (own data only)
     // and `GET /admin/analytics` (admin-only).
     AnalyticsModule,
+    // LOC10: public `GET /locations/suggestions` (Photon proxy, no personal data).
+    LocationsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

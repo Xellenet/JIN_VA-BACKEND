@@ -7,9 +7,18 @@ export const VALIDATION_MESSAGES = {
   DATE_OF_BIRTH_INVALID: 'Date of Birth must be a valid ISO date string',
   FIRSTNAME_MAX_LENGTH: 'First name cannot be more than 15 characters.',
   LASTNAME_MAX_LENGTH: 'Last name cannot be more than 15 characters.',
-  PHONE_NUMBER_INVALID: 'Phone number must be in the format XXX-XXX-XXXX',
-  PHONE_NUMBER_MAX_LENGTH: 'Phone number cannot be more than 12 characters.',
-  GENDER_INVALID: 'Gender must be either MALE, FEMALE, or OTHER.',
+  /**
+   * PH7: developer-facing text. Users see the frontend's per-country copy
+   * ("Enter a valid Ghana number, like 024 123 4567"), not this (V6).
+   */
+  PHONE_NUMBER_INVALID:
+    'phoneNumber must be a valid phone number for a supported country',
+  PHONE_NUMBER_REQUIRED: 'Phone number is required',
+  /** PH7: E.164 allows at most 15 digits, plus the leading `+`. */
+  PHONE_NUMBER_MAX_LENGTH: 'Phone number cannot be more than 16 characters.',
+  /** DI5: `OTHER` stays in the enum for existing rows but is not accepted as input. */
+  GENDER_INVALID: 'Gender must be either MALE or FEMALE.',
+  GENDER_REQUIRED: 'Gender is required',
   ROLE_INVALID: 'Role must be either CUSTOMER, STYLIST, or ADMIN.',
   PASSWORD_REQUIRED: 'Password is required',
   EMAIL_REQUIRED: 'Email is required',

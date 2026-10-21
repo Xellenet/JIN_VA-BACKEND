@@ -39,14 +39,14 @@ const addr = (label: string) => `qa-r4b-${label}@${DOMAIN}`;
 
 /** Deterministic, obviously-fake Ghana numbers that no seeded row uses. */
 const PHONE = {
-  artGap: '024-990-0001',
-  artMulti: '024-990-0002',
-  artComplete: '024-990-0003',
-  artSave: '024-990-0004',
-  phoneHolder: '024-990-0005',
-  cust: '024-990-0006',
-  custDelete: '024-990-0007',
-  custDeleted: '024-990-0008',
+  artGap: '+233249900001',
+  artMulti: '+233249900002',
+  artComplete: '+233249900003',
+  artSave: '+233249900004',
+  phoneHolder: '+233249900005',
+  cust: '+233249900006',
+  custDelete: '+233249900007',
+  custDeleted: '+233249900008',
 };
 
 describe('QA browser fixture for auth-residual-findings (setup only)', () => {

@@ -46,6 +46,15 @@ export interface PrivateMediaObject {
   contentLength?: number;
 }
 
+/**
+ * A public-folder object streamed out of the bucket for proxied delivery
+ * (`STORAGE_PUBLIC_DELIVERY=proxy`). `contentRange` is set when a byte range
+ * was requested and honoured, so the caller answers 206 instead of 200.
+ */
+export interface PublicMediaObject extends PrivateMediaObject {
+  contentRange?: string;
+}
+
 export interface IStorageProvider {
   readonly providerName: string;
   upload(buffer: Buffer, options: UploadOptions): Promise<UploadResult>;

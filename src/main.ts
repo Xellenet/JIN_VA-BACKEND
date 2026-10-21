@@ -9,6 +9,7 @@ import { setupSwagger } from './config/swagger.config';
 import { Logger, ValidationPipe } from '@nestjs/common';
 import cookieParser from 'cookie-parser';
 import { applyLegacyMediaServing } from './uploads/legacy-media.config';
+import { applyBucketMediaServing } from './uploads/bucket-media-serving';
 import { resolveTrustProxyHops } from './config/trust-proxy.config';
 import type { Logger as WinstonLogger } from 'winston';
 
@@ -77,6 +78,9 @@ async function bootstrap() {
   // Logged with Nest's own Logger (already routed into winston by `useLogger`
   // above) because the injected nest-winston LoggerService exposes `log`, not
   // `info`.
+  // Bucket streaming first, so `/uploads/<folder>/<file>` is served from the
+  // bucket when it has the object and from legacy local disk otherwise.
+  new Logger('MediaServing').log(applyBucketMediaServing(app).description);
   new Logger('MediaServing').log(applyLegacyMediaServing(app).description);
 
   app.setGlobalPrefix('api/v1', { exclude: ['/'] });

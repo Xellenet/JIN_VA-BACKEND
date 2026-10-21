@@ -59,6 +59,9 @@ describe('S3StorageProvider — BI1 failure discipline', () => {
     delete process.env.AWS_S3_ACCESS_KEY_ID;
     delete process.env.AWS_S3_SECRET_ACCESS_KEY;
     delete process.env.AWS_S3_PUBLIC_URL_BASE;
+    delete process.env.AWS_S3_ENDPOINT;
+    delete process.env.AWS_S3_PRIVATE_BUCKET;
+    delete process.env.STORAGE_PUBLIC_DELIVERY;
   });
 
   afterAll(() => {
@@ -400,6 +403,172 @@ describe('S3StorageProvider — BI1 failure discipline', () => {
       expect(logged[0]).toContain('NoSuchKey');
       expect(logged[0]).not.toContain('leak-sentinel');
       warnSpy.mockRestore();
+    });
+  });
+
+  describe('STORAGE_PUBLIC_DELIVERY', () => {
+    it('defaults to direct: public folders get the bucket URL, as before', async () => {
+      sendMock.mockResolvedValueOnce({});
+
+      const result = await new S3StorageProvider().upload(
+        Buffer.from('b'),
+        JPEG_UPLOAD,
+      );
+
+      expect(result.url).toBe(
+        `https://jinva-media-test.s3.eu-west-1.amazonaws.com/avatars/${result.filename}`,
+      );
+    });
+
+    it('proxy: public folders get the /uploads URL this process streams', async () => {
+      process.env.STORAGE_PUBLIC_DELIVERY = 'proxy';
+      sendMock.mockResolvedValueOnce({});
+
+      const result = await new S3StorageProvider().upload(
+        Buffer.from('b'),
+        JPEG_UPLOAD,
+      );
+
+      expect(result.url).toBe(`/uploads/avatars/${result.filename}`);
+    });
+
+    it('proxy: KYC folders still get the non-fetchable private reference', async () => {
+      process.env.STORAGE_PUBLIC_DELIVERY = 'proxy';
+      sendMock.mockResolvedValueOnce({});
+
+      const result = await new S3StorageProvider().upload(Buffer.from('b'), {
+        folder: 'selfies',
+        originalName: 's.jpg',
+        mimetype: 'image/jpeg',
+      });
+
+      // Same reference shape as before; it is not fetchable because no handler
+      // mounts a KYC folder (see bucket-media-serving.spec.ts), and the object
+      // itself lives under the private/ key prefix.
+      expect(result.url).toBe(`/uploads/selfies/${result.filename}`);
+      expect(String(sendMock.mock.calls[0][0].input.Key)).toBe(
+        `private/selfies/${result.filename}`,
+      );
+    });
+
+    it('reports an unknown delivery value instead of guessing', () => {
+      process.env.STORAGE_PUBLIC_DELIVERY = 'public';
+      expect(new S3StorageProvider().missingConfiguration()).toEqual([
+        'STORAGE_PUBLIC_DELIVERY',
+      ]);
+    });
+
+    it('readPublic forwards a byte range and reports the honoured range', async () => {
+      sendMock.mockResolvedValueOnce({
+        Body: {},
+        ContentType: 'video/mp4',
+        ContentLength: 100,
+        ContentRange: 'bytes 0-99/5000',
+      });
+
+      const object = await new S3StorageProvider().readPublic(
+        'portfolio',
+        'clip.mp4',
+        'bytes=0-99',
+      );
+
+      expect(sendMock.mock.calls[0][0].input).toEqual(
+        expect.objectContaining({
+          Key: 'portfolio/clip.mp4',
+          Range: 'bytes=0-99',
+        }),
+      );
+      expect(object?.contentRange).toBe('bytes 0-99/5000');
+    });
+  });
+
+  describe('S3-compatible endpoint (e.g. Backblaze B2)', () => {
+    const KYC_PDF = {
+      folder: 'documents',
+      originalName: 'id.pdf',
+      mimetype: 'application/pdf',
+    } as const;
+
+    beforeEach(() => {
+      process.env.AWS_S3_ENDPOINT =
+        'https://s3.eu-central-003.backblazeb2.com/';
+      process.env.AWS_S3_REGION = 'eu-central-003';
+      process.env.AWS_S3_PRIVATE_BUCKET = 'jinva-kyc-test';
+    });
+
+    it('refuses to run without a private bucket, since B2 visibility is per bucket', () => {
+      delete process.env.AWS_S3_PRIVATE_BUCKET;
+      expect(new S3StorageProvider().missingConfiguration()).toEqual([
+        'AWS_S3_PRIVATE_BUCKET',
+      ]);
+    });
+
+    it('configures the client for the endpoint with path-style addressing', async () => {
+      const { S3Client } = jest.requireMock<{ S3Client: jest.Mock }>(
+        '@aws-sdk/client-s3',
+      );
+      S3Client.mockClear();
+      sendMock.mockResolvedValueOnce({});
+
+      await new S3StorageProvider().upload(Buffer.from('b'), JPEG_UPLOAD);
+
+      expect(S3Client).toHaveBeenCalledWith(
+        expect.objectContaining({
+          endpoint: 'https://s3.eu-central-003.backblazeb2.com',
+          forcePathStyle: true,
+          requestChecksumCalculation: 'WHEN_REQUIRED',
+        }),
+      );
+    });
+
+    it('builds public URLs on the endpoint, path-style', async () => {
+      sendMock.mockResolvedValueOnce({});
+
+      const result = await new S3StorageProvider().upload(
+        Buffer.from('b'),
+        JPEG_UPLOAD,
+      );
+
+      expect(result.url).toBe(
+        `https://s3.eu-central-003.backblazeb2.com/jinva-media-test/avatars/${result.filename}`,
+      );
+    });
+
+    it('allows ONE private bucket for everything when delivery is proxy', () => {
+      process.env.STORAGE_PUBLIC_DELIVERY = 'proxy';
+      process.env.AWS_S3_PRIVATE_BUCKET = 'jinva-media-test';
+      expect(new S3StorageProvider().missingConfiguration()).toEqual([]);
+    });
+
+    it('refuses one shared bucket when delivery is direct, since that bucket is public', () => {
+      process.env.AWS_S3_PRIVATE_BUCKET = 'jinva-media-test';
+      expect(new S3StorageProvider().missingConfiguration()).toEqual([
+        'AWS_S3_PRIVATE_BUCKET',
+      ]);
+    });
+
+    it('writes public folders to the main bucket', async () => {
+      sendMock.mockResolvedValueOnce({});
+
+      await new S3StorageProvider().upload(Buffer.from('b'), JPEG_UPLOAD);
+
+      expect(sendMock.mock.calls[0][0].input.Bucket).toBe('jinva-media-test');
+    });
+
+    it('writes, reads and deletes KYC objects only in the private bucket', async () => {
+      sendMock.mockResolvedValue({ Body: {}, ContentType: 'application/pdf' });
+      const provider = new S3StorageProvider();
+
+      const { filename } = await provider.upload(Buffer.from('b'), KYC_PDF);
+      await provider.readPrivate('documents', filename);
+      await provider.delete(filename, 'documents');
+
+      const buckets = sendMock.mock.calls.map((c) => c[0].input.Bucket);
+      expect(buckets).toEqual([
+        'jinva-kyc-test',
+        'jinva-kyc-test',
+        'jinva-kyc-test',
+      ]);
     });
   });
 });

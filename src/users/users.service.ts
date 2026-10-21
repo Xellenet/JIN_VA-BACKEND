@@ -73,6 +73,38 @@ function getDummyPasswordHash(): Promise<string> {
 }
 void getDummyPasswordHash();
 
+/**
+ * Profile details an artisan supplies at signup (today only the social
+ * complete-signup step), so the profile `createUser` provisions is filled in —
+ * and searchable — from the start instead of empty.
+ */
+export interface InitialArtisanProfile {
+  /** B1: optional at signup; `null` is stored as "no bio yet". */
+  bio: string | null;
+  hourlyRate: number;
+  location: string;
+  serviceIds: number[];
+  businessName?: string;
+  experienceYears?: number;
+}
+
+/**
+ * Extras for {@link UsersService.createUser} that deliberately do not live on
+ * `CreateUserDto`, because that DTO is also bound to the public register
+ * endpoint and none of these may be caller-settable there.
+ */
+export interface CreateUserOptions {
+  /** Run every write on this manager — the caller owns the transaction. */
+  manager?: EntityManager;
+  /**
+   * Create the account already verified, at this instant. Social signup only:
+   * the provider has verified the address (G10).
+   */
+  verifiedAt?: Date;
+  /** Fill in the provisioned artisan profile. Ignored unless role is ARTISAN. */
+  artisanProfile?: InitialArtisanProfile;
+}
+
 @Injectable()
 export class UsersService {
   private readonly logger = new Logger(UsersService.name);
@@ -97,18 +129,32 @@ export class UsersService {
    * (artisan or customer). Password is bcrypt-hashed before persistence.
    *
    * @param createUserDto - Required fields for the new user.
+   * @param options - Non-DTO extras (transaction manager, pre-verified
+   *   account, initial artisan profile) — see {@link CreateUserOptions}.
    * @returns `{ message, data: User }` — callers that need the raw `User` entity
    *   (e.g. `AuthService`) should destructure: `const { data: user } = await createUser(dto)`.
    * @throws {BadRequestException} When no email is provided.
    * @throws {UserAlreadyExists} When a user with the same email already exists.
+   * @throws {NotFoundException} When an initial artisan profile names a
+   *   service that does not exist.
    */
   async createUser(
     createUserDto: CreateUserDto,
+    options: CreateUserOptions = {},
   ): Promise<{ message: string; data: User }> {
     const email = createUserDto.email;
     if (!email) {
       throw new BadRequestException('Provide User Email!');
     }
+
+    const { manager, verifiedAt, artisanProfile: initialProfile } = options;
+    const usersRepository =
+      manager?.getRepository(User) ?? this.usersRepository;
+    const artisanProfilesRepository =
+      manager?.getRepository(ArtisanProfile) ?? this.artisanProfilesRepository;
+    const customerProfilesRepository =
+      manager?.getRepository(CustomerProfile) ??
+      this.customerProfilesRepository;
 
     const existingUser = await this.findUserByEmail(email);
     if (existingUser) {
@@ -123,19 +169,22 @@ export class UsersService {
     const hashedPassword = createUserDto.password
       ? await bcrypt.hash(createUserDto.password, VARIABLES.SALT_OR_ROUNDS)
       : null;
-    const user = this.usersRepository.create({
+    const user = usersRepository.create({
       ...createUserDto,
       password: hashedPassword,
+      ...(verifiedAt ? { accountVerified: true, verifiedAt } : {}),
     });
 
     this.logger.log(`Created user with id: ${user.id}`);
 
-    const savedUser = await this.usersRepository.save(user);
+    const savedUser = await usersRepository.save(user);
 
     if (savedUser.role === Role.ARTISAN) {
-      const artisanProfile = this.artisanProfilesRepository.create({
+      const artisanProfile = artisanProfilesRepository.create({
         user: savedUser,
-        bio: '',
+        // B1: "no bio" is stored as NULL (column default) on every signup
+        // path, never ''.
+        bio: undefined,
         experienceYears: undefined,
         hourlyRate: undefined,
         businessName: '',
@@ -144,21 +193,81 @@ export class UsersService {
         availabilityStatus: 'AVAILABLE',
         services: [],
       });
-      await this.artisanProfilesRepository.save(artisanProfile);
+      if (initialProfile) {
+        Object.assign(artisanProfile, {
+          bio: initialProfile.bio,
+          hourlyRate: initialProfile.hourlyRate,
+          location: initialProfile.location,
+          businessName: initialProfile.businessName ?? '',
+          experienceYears: initialProfile.experienceYears,
+          services: await this.findServicesByIds(
+            initialProfile.serviceIds,
+            manager,
+          ),
+        });
+        // Same single definition of "complete" every other profile write
+        // uses, so a fully filled-in signup is searchable immediately.
+        artisanProfile.isProfileComplete =
+          computeProfileCompleteness(artisanProfile).isComplete;
+      }
+      await artisanProfilesRepository.save(artisanProfile);
     }
 
     if (savedUser.role === Role.CUSTOMER) {
-      const customerProfile = this.customerProfilesRepository.create({
+      const customerProfile = customerProfilesRepository.create({
         user: savedUser,
         bio: '',
         preferredServices: [],
         budgetMin: undefined,
         budgetMax: undefined,
       });
-      await this.customerProfilesRepository.save(customerProfile);
+      await customerProfilesRepository.save(customerProfile);
     }
 
     return { message: SUCCESS_MESSAGES.USER.CREATED, data: savedUser };
+  }
+
+  /**
+   * {@link createUser} inside one database transaction, so a failure anywhere
+   * (a taken phone number, a missing service, the profile insert) leaves no
+   * user row behind.
+   */
+  async createUserInTransaction(
+    createUserDto: CreateUserDto,
+    options: Omit<CreateUserOptions, 'manager'> = {},
+  ): Promise<{ message: string; data: User }> {
+    return this.usersRepository.manager.transaction((manager) =>
+      this.createUser(createUserDto, { ...options, manager }),
+    );
+  }
+
+  /**
+   * Whether every one of these service ids exists. Lets a caller reject a bad
+   * selection as a validation error before it commits to anything.
+   */
+  async servicesExist(serviceIds: number[]): Promise<boolean> {
+    const unique = [...new Set(serviceIds)];
+    if (unique.length === 0) return true;
+    const found = await this.servicesRepository.countBy({ id: In(unique) });
+    return found === unique.length;
+  }
+
+  /**
+   * Resolves service ids to entities, failing if any is unknown — the same
+   * rule (and message) as {@link updateArtisanProfile}.
+   */
+  private async findServicesByIds(
+    serviceIds: number[],
+    manager?: EntityManager,
+  ): Promise<ServiceEntity[]> {
+    const repo =
+      manager?.getRepository(ServiceEntity) ?? this.servicesRepository;
+    const unique = [...new Set(serviceIds)];
+    const services = await repo.findBy({ id: In(unique) });
+    if (services.length !== unique.length) {
+      throw new NotFoundException('One or more services were not found.');
+    }
+    return services;
   }
 
   /**

@@ -11,12 +11,20 @@ interface PgQueryFailedError extends QueryFailedError {
 }
 
 /**
+ * PH9: the stable, machine-readable `meta.error` on the duplicate-phone 409.
+ * The frontend matches on it to show "This number is already used by another
+ * JinVa account" on the phone field (V5) instead of a toast.
+ */
+export const PHONE_NUMBER_IN_USE_ERROR_CODE = 'PHONE_NUMBER_IN_USE';
+
+/**
  * Global exception filter that intercepts TypeORM {@link QueryFailedError} instances
  * and converts PostgreSQL driver errors into meaningful HTTP responses before they
  * reach the catch-all {@link AllExceptionsFilter}.
  *
  * Currently handles:
  * - `23505` (unique_violation) → 409 Conflict with a column-specific message.
+ *   A duplicate phone number also carries `meta.error: "PHONE_NUMBER_IN_USE"`.
  */
 @Catch(QueryFailedError)
 export class TypeOrmFilter implements ExceptionFilter {
@@ -42,6 +50,7 @@ export class TypeOrmFilter implements ExceptionFilter {
 
     let message = 'Database operation failed';
     let status = 500;
+    let errorCode: string | undefined;
 
     if (pgCode === '23505') {
       status = 409;
@@ -52,6 +61,7 @@ export class TypeOrmFilter implements ExceptionFilter {
         message = 'Username already exists';
       } else if (detail.includes('phone_number')) {
         message = 'Phone number already in use';
+        errorCode = PHONE_NUMBER_IN_USE_ERROR_CODE;
       } else {
         message = 'Duplicate entry detected';
       }
@@ -66,6 +76,7 @@ export class TypeOrmFilter implements ExceptionFilter {
         timestamp: new Date().toISOString(),
         path: request.url,
         statusCode: status,
+        ...(errorCode ? { error: errorCode } : {}),
       },
     });
   }

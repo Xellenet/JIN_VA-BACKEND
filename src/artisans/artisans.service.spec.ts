@@ -4,7 +4,10 @@ import type { ArtisanProfile } from '@users/entities/artisan-profile.entity';
 import type { User } from '@users/entities/user.entity';
 import type { ServiceEntity } from '@services/entities/service.entity';
 import type { Job } from '@jobs/entities/job.entity';
-import { ArtisansService, computeProfileCompleteness } from './artisans.service';
+import {
+  ArtisansService,
+  computeProfileCompleteness,
+} from './artisans.service';
 
 describe('computeProfileCompleteness (F3)', () => {
   const complete = {
@@ -14,38 +17,44 @@ describe('computeProfileCompleteness (F3)', () => {
     services: [{ id: 1 } as any],
   };
 
-  it('is complete when bio, hourlyRate, location, and at least one service are all present', () => {
+  it('is complete when hourlyRate, location, and at least one service are all present', () => {
     const result = computeProfileCompleteness(complete);
     expect(result).toEqual({ isComplete: true, missingFields: [] });
   });
 
   it('reports every missing field on an empty profile', () => {
     const result = computeProfileCompleteness({
-      bio: undefined,
       hourlyRate: undefined,
       location: undefined,
       services: [],
     });
     expect(result.isComplete).toBe(false);
     expect(result.missingFields.sort()).toEqual([
-      'bio',
       'hourlyRate',
       'location',
       'services',
     ]);
   });
 
-  it('treats a whitespace-only bio/location as missing', () => {
+  it('treats a whitespace-only location as missing', () => {
     const result = computeProfileCompleteness({
       ...complete,
-      bio: '   ',
       location: '  ',
     });
     expect(result.isComplete).toBe(false);
-    expect(result.missingFields).toEqual(
-      expect.arrayContaining(['bio', 'location']),
-    );
+    expect(result.missingFields).toEqual(['location']);
   });
+
+  it.each([undefined, null, '', '   '])(
+    'does not require a bio — %p still leaves the profile complete (B2)',
+    (bio) => {
+      const result = computeProfileCompleteness({
+        ...complete,
+        bio: bio as string | undefined,
+      } as typeof complete);
+      expect(result).toEqual({ isComplete: true, missingFields: [] });
+    },
+  );
 
   it('flags hourlyRate as missing only when null/undefined, not when zero', () => {
     const result = computeProfileCompleteness({ ...complete, hourlyRate: 0 });

@@ -4,6 +4,7 @@ import { SnakeNamingStrategy } from 'typeorm-naming-strategies';
 import * as bcrypt from 'bcrypt';
 import { User } from '../../users/entities/user.entity';
 import { ArtisanProfile } from '../../users/entities/artisan-profile.entity';
+import { computeProfileCompleteness } from '../../artisans/artisans.service';
 import { CustomerProfile } from '../../users/entities/customer-profile.entity';
 import { Address } from '../../users/entities/address.entity';
 import { UserToken } from '../../users/entities/user-token.entity';
@@ -50,31 +51,9 @@ const dataSource = new DataSource({
   username: process.env.DB_USER,
   password: process.env.DB_PASS,
   database: process.env.DB_NAME,
-  entities: [
-    User,
-    ArtisanProfile,
-    CustomerProfile,
-    Address,
-    UserToken,
-    ServiceEntity,
-    Job,
-    JobApplication,
-    Review,
-    Favourite,
-    Conversation,
-    Message,
-    Notification,
-    NotificationPreferences,
-    ArtisanAvailability,
-    ArtisanVerification,
-    Booking,
-    DeviceToken,
-    // DR3: the seed now produces the booking → job → payment → dispute chain
-    // the admin Linked Payment panel walks, so it has something real to show.
-    JobStatusHistory,
-    Payment,
-    Dispute,
-  ],
+  // Glob, not a hand-kept list: a list drifts whenever an entity gains a new
+  // relation (e.g. Review#photos → ReviewPhoto) and metadata building fails.
+  entities: [__dirname + '/../../**/*.entity{.ts,.js}'],
   synchronize: false,
   namingStrategy: new SnakeNamingStrategy(),
 });
@@ -224,7 +203,7 @@ async function seed() {
       password: hashedPassword,
       gender: Gender.MALE,
       role: Role.ADMIN,
-      phoneNumber: '020-000-0001',
+      phoneNumber: '+233200000001',
       accountVerified: true,
       verifiedAt,
       dateOfBirth: new Date('1980-01-15'),
@@ -248,9 +227,9 @@ async function seed() {
     {
       firstname: 'Ama',
       lastname: 'Mensah',
-      email: 'ama.mensah@gmail.com',
+      email: 'ama.mensah@example.com',
       gender: Gender.FEMALE,
-      phone: '020-111-0001',
+      phone: '+233201110001',
       dateOfBirth: new Date('1992-03-20'),
       street: '12 Independence Ave',
       budgetMin: 50,
@@ -260,9 +239,9 @@ async function seed() {
     {
       firstname: 'Kofi',
       lastname: 'Asante',
-      email: 'kofi.asante@gmail.com',
+      email: 'kofi.asante@example.com',
       gender: Gender.MALE,
-      phone: '020-111-0002',
+      phone: '+233201110002',
       dateOfBirth: new Date('1988-07-14'),
       street: '7 Castle Road',
       budgetMin: 100,
@@ -272,9 +251,9 @@ async function seed() {
     {
       firstname: 'Abena',
       lastname: 'Boateng',
-      email: 'abena.boateng@gmail.com',
+      email: 'abena.boateng@example.com',
       gender: Gender.FEMALE,
-      phone: '020-111-0003',
+      phone: '+233201110003',
       dateOfBirth: new Date('1995-11-08'),
       street: '3 High Street',
       budgetMin: 80,
@@ -284,9 +263,9 @@ async function seed() {
     {
       firstname: 'Kwame',
       lastname: 'Darko',
-      email: 'kwame.darko@gmail.com',
+      email: 'kwame.darko@example.com',
       gender: Gender.MALE,
-      phone: '020-111-0004',
+      phone: '+233201110004',
       dateOfBirth: new Date('1990-05-22'),
       street: '21 Liberation Road',
       budgetMin: 60,
@@ -346,7 +325,7 @@ async function seed() {
       lastname: 'Osei',
       email: 'yaw.osei@jinva.com',
       gender: Gender.MALE,
-      phone: '020-222-0001',
+      phone: '+233202220001',
       dateOfBirth: new Date('1986-09-03'),
       bio: 'Certified plumber with 8 years of experience in residential and commercial pipe installations.',
       experience: 8,
@@ -361,7 +340,7 @@ async function seed() {
       lastname: 'Frimpong',
       email: 'akua.frimpong@jinva.com',
       gender: Gender.FEMALE,
-      phone: '020-222-0002',
+      phone: '+233202220002',
       dateOfBirth: new Date('1993-01-27'),
       bio: 'Licensed electrician specialising in solar panel installations and smart home wiring systems.',
       experience: 6,
@@ -376,7 +355,7 @@ async function seed() {
       lastname: 'Agyeman',
       email: 'efua.agyeman@jinva.com',
       gender: Gender.FEMALE,
-      phone: '020-222-0003',
+      phone: '+233202220003',
       dateOfBirth: new Date('1997-06-15'),
       bio: 'Professional hair braider with expertise in knotless braids, locs, and protective natural styles.',
       experience: 5,
@@ -391,7 +370,7 @@ async function seed() {
       lastname: 'Amoah',
       email: 'kweku.amoah@jinva.com',
       gender: Gender.MALE,
-      phone: '020-222-0004',
+      phone: '+233202220004',
       dateOfBirth: new Date('1984-12-10'),
       bio: 'Master carpenter crafting custom furniture, fitted wardrobes, and cabinetry since 2012.',
       experience: 12,
@@ -406,7 +385,7 @@ async function seed() {
       lastname: 'Ansah',
       email: 'adwoa.ansah@jinva.com',
       gender: Gender.FEMALE,
-      phone: '020-222-0005',
+      phone: '+233202220005',
       dateOfBirth: new Date('1991-04-05'),
       bio: 'Experienced painter delivering quality interior and exterior finishes for homes and commercial spaces.',
       experience: 7,
@@ -438,16 +417,23 @@ async function seed() {
       }),
     );
 
+    const profileData = {
+      user,
+      bio: a.bio,
+      experienceYears: a.experience,
+      hourlyRate: a.rate,
+      businessName: a.businessName,
+      availabilityStatus: 'AVAILABLE',
+      location: a.location,
+      services: a.services,
+    };
     const profile = await artisanProfileRepo.save(
       artisanProfileRepo.create({
-        user,
-        bio: a.bio,
-        experienceYears: a.experience,
-        hourlyRate: a.rate,
-        businessName: a.businessName,
-        availabilityStatus: 'AVAILABLE',
-        location: a.location,
-        services: a.services,
+        ...profileData,
+        // F3: search only lists complete profiles. The app sets this flag on
+        // profile edits; a direct insert has to set it the same way, or every
+        // seeded artisan is invisible to customers.
+        isProfileComplete: computeProfileCompleteness(profileData).isComplete,
       }),
     );
 
@@ -1385,8 +1371,12 @@ async function seed() {
   console.log('══════════════════════════════════════════════════════════');
   console.log(`  Password for all accounts : ${SEED_PASSWORD}`);
   console.log('  Admin    : admin@jinva.com');
-  console.log('  Customers: ama.mensah@gmail.com  |  kofi.asante@gmail.com');
-  console.log('             abena.boateng@gmail.com  |  kwame.darko@gmail.com');
+  console.log(
+    '  Customers: ama.mensah@example.com  |  kofi.asante@example.com',
+  );
+  console.log(
+    '             abena.boateng@example.com  |  kwame.darko@example.com',
+  );
   console.log('  Artisans : yaw.osei@jinva.com  |  akua.frimpong@jinva.com');
   console.log('             efua.agyeman@jinva.com  |  kweku.amoah@jinva.com');
   console.log('             adwoa.ansah@jinva.com');

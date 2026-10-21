@@ -9,6 +9,7 @@ import {
   MaxLength,
   Matches,
   IsEnum,
+  IsIn,
   ArrayMinSize,
   IsArray,
   IsOptional,
@@ -18,6 +19,20 @@ import {
 import { CreateAddressDto } from './create-address.dto';
 import { VALIDATION_MESSAGES } from '@common/constants/validation-messages.constants';
 import { VARIABLES } from '@common/constants/variables.constants';
+import {
+  IsSupportedPhoneNumber,
+  NormalizePhoneNumber,
+} from '@common/validators/is-supported-phone-number.decorator';
+
+/**
+ * DI5: the genders an endpoint accepts as **new input**. The `Gender` enum
+ * (and the `users_gender_enum` Postgres type) keeps `OTHER` so existing rows
+ * stay valid and still read back, but no endpoint accepts it any more.
+ */
+export const INPUT_GENDERS: readonly [Gender.MALE, Gender.FEMALE] = [
+  Gender.MALE,
+  Gender.FEMALE,
+];
 
 export class CreateUserDto {
   @ApiProperty({
@@ -74,20 +89,24 @@ export class CreateUserDto {
   lastname: string;
 
   @ApiProperty({
-    example: '123-456-7890',
-    description: 'Phone number of the user',
+    example: '+233241234567',
+    description:
+      'Phone number of the user. Normalised to E.164 (PH7): national input is ' +
+      'read as Ghanaian, so `024 123 4567` is stored as `+233241234567`. Must ' +
+      'be a valid number from a supported country.',
+    required: false,
   })
+  @NormalizePhoneNumber()
   @IsString()
   @IsOptional()
-  @MaxLength(12, { message: VALIDATION_MESSAGES.PHONE_NUMBER_MAX_LENGTH })
-  @Matches(VARIABLES.PHONENUMBER_REGEX, {
-    message: VALIDATION_MESSAGES.PHONE_NUMBER_INVALID,
-  })
+  @MaxLength(16, { message: VALIDATION_MESSAGES.PHONE_NUMBER_MAX_LENGTH })
+  @IsSupportedPhoneNumber()
   phoneNumber?: string;
 
   @ApiProperty({
-    example: 'male',
-    description: 'The gender of the user.',
+    enum: INPUT_GENDERS,
+    example: Gender.MALE,
+    description: 'The gender of the user. MALE or FEMALE only (DI5).',
     required: false,
   })
   // G5 fix: social signups never supply a gender (Google doesn't provide
@@ -95,7 +114,7 @@ export class CreateUserDto {
   // `password` field above for the same reasoning. See
   // docs/team/google-oauth-fix/qa-report.md ([MINOR]).
   @IsOptional()
-  @IsEnum(Gender, { message: VALIDATION_MESSAGES.GENDER_INVALID })
+  @IsIn(INPUT_GENDERS, { message: VALIDATION_MESSAGES.GENDER_INVALID })
   gender?: Gender;
 
   @ApiProperty({

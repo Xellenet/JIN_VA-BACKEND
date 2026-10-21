@@ -87,7 +87,10 @@ export class UserResponseDto {
   @Expose()
   role: Role;
 
-  @ApiProperty({ example: '123-456-7890', description: 'User phone number' })
+  @ApiProperty({
+    example: '+233241234567',
+    description: 'User phone number in E.164',
+  })
   @Expose()
   phoneNumber: string;
 

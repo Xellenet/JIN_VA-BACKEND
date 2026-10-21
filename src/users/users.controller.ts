@@ -304,7 +304,8 @@ export class UsersController {
     description:
       'Self-view only. Always includes `isProfileComplete` and a populated ' +
       '`missingFields` array — `[]` when the profile is complete, never ' +
-      'absent. Possible keys: `bio`, `hourlyRate`, `location`, `services`. ' +
+      'absent. Possible keys: `hourlyRate`, `location`, `services` (bio is ' +
+      'optional and never listed, B2). ' +
       '`missingFields` is never exposed on any public artisan profile.',
   })
   @ApiOkResponse({

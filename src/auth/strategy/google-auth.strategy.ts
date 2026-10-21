@@ -54,8 +54,9 @@ export class GoogleAuthStrategy implements SocialAuthStrategy {
       response_type: 'code',
       scope: 'email profile',
       state,
-      access_type: 'offline',
-      prompt: 'consent',
+      // GP8: no `access_type: 'offline'` / `prompt: 'consent'`. Nothing stores
+      // or uses a Google refresh token, and forcing consent made every
+      // returning user sit through Google's full consent screen again.
     });
 
     return `${VARIABLES.GOOGLE_AUTHORIZATION_URL}?${params.toString()}`;
@@ -79,7 +80,14 @@ export class GoogleAuthStrategy implements SocialAuthStrategy {
       );
       return data.access_token;
     } catch (error) {
-      this.logger.error('Error exchanging Google authorization code', error);
+      // Google's reason (invalid_client, invalid_grant, redirect_uri_mismatch…)
+      // lives in the response body; the raw axios error object hides it.
+      const { status, data } =
+        (error as { response?: { status?: number; data?: unknown } })
+          .response ?? {};
+      this.logger.error(
+        `Error exchanging Google authorization code: ${status ?? 'no response'} ${JSON.stringify(data ?? (error as Error).message)}`,
+      );
       throw new UnauthorizedException(
         'Failed to exchange Google authorization code',
       );
@@ -94,9 +102,9 @@ export class GoogleAuthStrategy implements SocialAuthStrategy {
           `${VARIABLES.GOOGLE_USERINFO_URL}?access_token=${accessToken}`,
         ),
       );
-      this.logger.log(
-        `Successfully fetched Google user profile for email: ${data.email}`,
-      );
+      // PR6: never the address — this line runs before any JinVa account is
+      // resolved, so there is no user id to log either.
+      this.logger.log(`Successfully fetched Google user profile`);
 
       return {
         email: data.email,

@@ -2,14 +2,17 @@ import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Gender } from '@common/types/enums';
 import {
   IsDateString,
-  IsEnum,
+  IsIn,
   IsOptional,
   IsString,
-  Matches,
   MaxLength,
 } from 'class-validator';
-import { VARIABLES } from '@common/constants/variables.constants';
 import { VALIDATION_MESSAGES } from '@common/constants/validation-messages.constants';
+import {
+  IsSupportedPhoneNumber,
+  NormalizePhoneNumber,
+} from '@common/validators/is-supported-phone-number.decorator';
+import { INPUT_GENDERS } from './create-user.dto';
 
 /**
  * DTO for a user updating their own base profile via `PATCH /users/me`.
@@ -44,15 +47,17 @@ export class UpdateMeDto {
   lastname?: string;
 
   @ApiPropertyOptional({
-    example: '123-456-7890',
-    description: 'Phone in NXX-NXX-XXXX format',
+    example: '+233241234567',
+    description:
+      'Phone number; omit to leave unchanged (PH6). Normalised to E.164 ' +
+      '(PH7): national input is read as Ghanaian. Must be a valid number ' +
+      'from a supported country.',
   })
+  @NormalizePhoneNumber()
   @IsOptional()
   @IsString()
-  @MaxLength(12, { message: VALIDATION_MESSAGES.PHONE_NUMBER_MAX_LENGTH })
-  @Matches(VARIABLES.PHONENUMBER_REGEX, {
-    message: VALIDATION_MESSAGES.PHONE_NUMBER_INVALID,
-  })
+  @MaxLength(16, { message: VALIDATION_MESSAGES.PHONE_NUMBER_MAX_LENGTH })
+  @IsSupportedPhoneNumber()
   phoneNumber?: string;
 
   @ApiPropertyOptional({
@@ -63,9 +68,14 @@ export class UpdateMeDto {
   @IsDateString({}, { message: VALIDATION_MESSAGES.DATE_OF_BIRTH_INVALID })
   dateOfBirth?: string;
 
-  @ApiPropertyOptional({ example: 'MALE', enum: Gender, description: 'Gender' })
+  @ApiPropertyOptional({
+    example: 'MALE',
+    enum: INPUT_GENDERS,
+    description:
+      'Gender, MALE or FEMALE (DI5). An existing OTHER value still reads back but cannot be set.',
+  })
   @IsOptional()
-  @IsEnum(Gender, { message: VALIDATION_MESSAGES.GENDER_INVALID })
+  @IsIn(INPUT_GENDERS, { message: VALIDATION_MESSAGES.GENDER_INVALID })
   gender?: Gender;
 
   @ApiPropertyOptional({
