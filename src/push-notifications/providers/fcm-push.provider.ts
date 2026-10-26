@@ -25,16 +25,28 @@ export class FcmPushProvider implements IPushProvider, OnModuleInit {
     }
 
     if (!getApps().length) {
-      initializeApp({
-        credential: cert({
-          projectId,
-          clientEmail: this.config.get<string>('FIREBASE_CLIENT_EMAIL'),
-          privateKey: this.config
-            .get<string>('FIREBASE_PRIVATE_KEY')
-            ?.replace(/\\n/g, '\n'),
-        }),
-      });
-      this.logger.log('Firebase Admin SDK initialised');
+      // A malformed credential must not take the whole API down at boot:
+      // push stays inactive (send() is a no-op without an app) and the log
+      // names the problem — by error code only, never the key material.
+      try {
+        initializeApp({
+          credential: cert({
+            projectId,
+            clientEmail: this.config.get<string>('FIREBASE_CLIENT_EMAIL'),
+            privateKey: this.config
+              .get<string>('FIREBASE_PRIVATE_KEY')
+              ?.replace(/\\n/g, '\n'),
+          }),
+        });
+        this.logger.log('Firebase Admin SDK initialised');
+      } catch (err) {
+        const code = (err as { code?: string }).code ?? 'unknown';
+        this.logger.error(
+          `Firebase Admin SDK not initialised (${code}) — push notifications are inactive. ` +
+            'Check FIREBASE_CLIENT_EMAIL and FIREBASE_PRIVATE_KEY: they come from the service-account JSON ' +
+            '(Project settings → Service accounts → Generate new private key), not the web app config.',
+        );
+      }
     }
   }
 

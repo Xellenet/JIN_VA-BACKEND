@@ -65,7 +65,7 @@ describe('QA DC3.6 strip fixture (setup only)', () => {
     );
 
     const customer = await userRepo.findOneByOrFail({
-      email: 'abena.boateng@gmail.com',
+      email: 'abena.boateng@example.com',
       role: Role.CUSTOMER,
     });
     const artisanUser = await userRepo.findOneByOrFail({

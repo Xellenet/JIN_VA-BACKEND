@@ -1019,7 +1019,8 @@ describe('auth-settings-closeout C1/C2 (QA e2e)', () => {
           username: `qare${uniq}`,
           firstname: 'Re',
           lastname: 'Register',
-          phoneNumber: '024-400-9999',
+          phoneNumber: '+233244009999',
+          gender: 'MALE',
           role: Role.CUSTOMER,
         });
 
@@ -1389,12 +1390,8 @@ describe('auth-settings-closeout C1/C2 (QA e2e)', () => {
       expect(res.status).toBe(200);
       const d = (res.body as Body).data!;
       expect(d.isProfileComplete).toBe(false);
-      expect(d.missingFields).toEqual([
-        'bio',
-        'hourlyRate',
-        'location',
-        'services',
-      ]);
+      expect(d.missingFields).toEqual(['hourlyRate', 'location', 'services']);
+      expect(d.missingFields).not.toContain('bio');
     });
 
     it('C2.2: filling the last field via PATCH /users/me/artisan-profile flips the flag and makes the artisan searchable', async () => {
@@ -1662,7 +1659,8 @@ describe('auth-settings-closeout C1/C2 (QA e2e)', () => {
           username: `qaleak${uniq}`,
           firstname: 'Leak',
           lastname: 'Check',
-          phoneNumber: '024-400-8888',
+          phoneNumber: '+233244008888',
+          gender: 'FEMALE',
           role: Role.CUSTOMER,
         });
       const created = await userRepo.findOne({ where: { email: e } });

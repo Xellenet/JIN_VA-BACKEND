@@ -42,6 +42,7 @@ import { ServiceEntity } from '@services/entities/service.entity';
 import { Booking } from '../src/bookings/entities/booking.entity';
 import { UserTokenService } from '@users/token.service';
 import { AuthService } from '../src/auth/auth.service';
+import type { AuthTokenResult } from '../src/auth/dto/login-response.dto';
 import { AccountPurgeService } from '@users/account-purge.service';
 import { SocialAuthStrategyFactory } from '../src/auth/social-auth.factory';
 import { OAuthStateService } from '../src/auth/oauth-state.service';
@@ -109,9 +110,17 @@ describe('auth-residual-findings (backend items 1, 2, 3, 6, 9)', () => {
 
   const server = () => app.getHttpServer();
   const email = (label: string) => `residual-${label}-${uniq}@test.jinva.local`;
-  /** `PHONENUMBER_REGEX` is `\d{3}-\d{3}-\d{4}`, max 12 chars. */
-  const phone = (n: number) =>
-    `02${n}-${String(uniq).slice(-6, -3)}-${String(uniq).slice(-4)}`;
+  /**
+   * PH10: a per-run unique, **valid** Ghana number in E.164 (`+23324` + 7
+   * digits). The old `02N-…` generator emitted ranges such as `021-…` that
+   * libphonenumber-js rejects for GH.
+   */
+  const phone = (n: number) => `+23324${n}${String(uniq).slice(-6)}`;
+  /** The same number as a user types it (PH2): `024 NNN NNNN`. */
+  const nationalPhone = (n: number) => {
+    const nsn = phone(n).slice(4);
+    return `0${nsn.slice(0, 2)} ${nsn.slice(2, 5)} ${nsn.slice(5)}`;
+  };
 
   const deleteMe = (token: string) =>
     request(server())
@@ -354,15 +363,49 @@ describe('auth-residual-findings (backend items 1, 2, 3, 6, 9)', () => {
           username: `residualreg${uniq}`,
           firstname: 'Reg',
           lastname: 'Hygiene',
-          phoneNumber: phone(1),
+          // PH2: typed nationally, stored as E.164 (PH7).
+          phoneNumber: nationalPhone(1),
+          gender: 'FEMALE',
           role: Role.CUSTOMER,
         });
       const created = await userRepo.findOne({ where: { email: e } });
       if (created) createdUserIds.push(created.id);
 
       expect(res.status).toBe(201);
+      expect(created?.phoneNumber).toBe(phone(1));
       // `/auth/*` bypasses the envelope, so the body *is* the user payload.
       assertNoCredentialMaterial('register', res.body, res.body);
+    });
+
+    it('POST /auth/register: phone and gender are required, OTHER and invalid numbers rejected (PH6, DI5)', async () => {
+      const base = {
+        password: PASSWORD,
+        firstname: 'Reg',
+        lastname: 'Required',
+        phoneNumber: phone(2),
+        gender: 'MALE',
+        role: Role.CUSTOMER,
+      };
+      const cases: Array<[string, Record<string, unknown>]> = [
+        ['no phone', { phoneNumber: undefined }],
+        ['no gender', { gender: undefined }],
+        ['gender OTHER', { gender: 'OTHER' }],
+        ['US-style phone', { phoneNumber: '123-456-7890' }],
+        ['too-short phone', { phoneNumber: '024123456' }],
+      ];
+      for (const [label, override] of cases) {
+        const e = email(`register-req-${label.replace(/\W+/g, '-')}`);
+        const res = await request(server())
+          .post('/api/v1/auth/register')
+          .send({
+            ...base,
+            email: e,
+            username: `residualreq${label.length}${uniq}`,
+            ...override,
+          });
+        expect({ label, status: res.status }).toEqual({ label, status: 400 });
+        expect(await userRepo.count({ where: { email: e } })).toBe(0);
+      }
     });
 
     it('POST /auth/change-password: no password key, including the hash it just computed', async () => {
@@ -644,11 +687,14 @@ describe('auth-residual-findings (backend items 1, 2, 3, 6, 9)', () => {
   // ───────── item 6: Google restore is social-accounts only ─────────
 
   describe('item 6 — Google sign-in cannot restore a password-only account', () => {
+    // Every case here resolves to an existing (or restored) account, never a
+    // brand-new one, so the callback signs in rather than parking a pending
+    // signup.
     const completeGoogleFlow = () =>
       authService.handleOAuthCallback('google', {
         code: 'residual-code',
         state: 'residual-state',
-      } as never);
+      } as never) as Promise<AuthTokenResult>;
 
     it('refuses a password-only soft-deleted account, restores nothing, duplicates nothing', async () => {
       const u = await makeUser('pwonly', Role.CUSTOMER);

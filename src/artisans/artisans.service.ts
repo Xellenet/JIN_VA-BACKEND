@@ -38,15 +38,18 @@ type PrivateItem = { message: string; data: ArtisanProfileResponseDto };
 
 /**
  * F3: fields an artisan profile must have to be considered "complete enough"
- * to appear in customer-facing search. Resolves requirements.md open question
- * #2 — bio, an hourly rate, a service area, and at least one offered service
- * are the minimum a customer needs to evaluate and book the artisan.
+ * to appear in customer-facing search: an hourly rate, a service area, and at
+ * least one offered service are the minimum a customer needs to evaluate and
+ * book the artisan.
+ *
+ * B2 (google-signup-prefill): **bio is no longer required**. It is optional at
+ * sign-up (B1), and an artisan without one stays searchable, so `missingFields`
+ * never contains `'bio'`. Possible keys: `hourlyRate`, `location`, `services`.
  */
 export function computeProfileCompleteness(
-  profile: Pick<ArtisanProfile, 'bio' | 'hourlyRate' | 'location' | 'services'>,
+  profile: Pick<ArtisanProfile, 'hourlyRate' | 'location' | 'services'>,
 ): { isComplete: boolean; missingFields: string[] } {
   const missingFields: string[] = [];
-  if (!profile.bio?.trim()) missingFields.push('bio');
   if (profile.hourlyRate === null || profile.hourlyRate === undefined)
     missingFields.push('hourlyRate');
   if (!profile.location?.trim()) missingFields.push('location');

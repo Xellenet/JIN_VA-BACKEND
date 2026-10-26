@@ -177,6 +177,157 @@ describe('UsersService', () => {
     });
   });
 
+  /**
+   * The social complete-signup path: the user row, its role profile and (for
+   * an artisan) the filled-in profile all go through one transaction's
+   * manager, and the account is created already verified.
+   */
+  describe('createUserInTransaction', () => {
+    const txUsers = {
+      create: jest.fn((d: Record<string, unknown>) => d),
+      save: jest.fn((d: Record<string, unknown>) =>
+        Promise.resolve({ id: 30, ...d }),
+      ),
+    };
+    const txArtisans = {
+      create: jest.fn((d: Record<string, unknown>) => ({ ...d })),
+      save: jest.fn((d: unknown) => Promise.resolve(d)),
+    };
+    const txCustomers = {
+      create: jest.fn((d: Record<string, unknown>) => d),
+      save: jest.fn((d: unknown) => Promise.resolve(d)),
+    };
+    const txServices = { findBy: jest.fn() };
+    const repoFor = (entity: unknown): unknown =>
+      new Map<unknown, unknown>([
+        [User, txUsers],
+        [ArtisanProfile, txArtisans],
+        [CustomerProfile, txCustomers],
+        [ServiceEntity, txServices],
+      ]).get(entity);
+
+    const social = (role: Role) =>
+      ({
+        email: 'social@example.com',
+        firstname: 'Ama',
+        lastname: 'Owusu',
+        isSocialLogin: true,
+        role,
+      }) as unknown as CreateUserDto;
+
+    beforeEach(() => {
+      mockUsersRepository.findOne.mockResolvedValue(null);
+      mockUsersRepository.manager.transaction.mockImplementation(
+        (cb: (m: unknown) => unknown): unknown =>
+          cb({ getRepository: repoFor }),
+      );
+    });
+
+    it('writes only through the transaction manager and creates the account verified', async () => {
+      const verifiedAt = new Date('2026-10-19T10:00:00Z');
+
+      const { data } = await service.createUserInTransaction(
+        social(Role.CUSTOMER),
+        { verifiedAt },
+      );
+
+      expect(mockUsersRepository.manager.transaction).toHaveBeenCalledTimes(1);
+      expect(txUsers.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          password: null,
+          accountVerified: true,
+          verifiedAt,
+        }),
+      );
+      expect(txCustomers.save).toHaveBeenCalled();
+      expect(mockUsersRepository.save).not.toHaveBeenCalled();
+      expect(mockCustomerProfilesRepository.save).not.toHaveBeenCalled();
+      expect(data.id).toBe(30);
+    });
+
+    it('fills in the artisan profile and marks it complete, so it is searchable at once', async () => {
+      const services = [{ id: 1 }, { id: 2 }];
+      txServices.findBy.mockResolvedValueOnce(services);
+
+      await service.createUserInTransaction(social(Role.ARTISAN), {
+        artisanProfile: {
+          bio: 'Plumber.',
+          hourlyRate: 50,
+          location: 'Accra',
+          serviceIds: [1, 2],
+          businessName: 'Owusu Ltd',
+          experienceYears: 4,
+        },
+      });
+
+      expect(txArtisans.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          bio: 'Plumber.',
+          hourlyRate: 50,
+          location: 'Accra',
+          businessName: 'Owusu Ltd',
+          experienceYears: 4,
+          services,
+          isProfileComplete: true,
+        }),
+      );
+      expect(mockArtisanProfilesRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('fails (rolling the transaction back) when a service does not exist', async () => {
+      txServices.findBy.mockResolvedValueOnce([{ id: 1 }]);
+
+      await expect(
+        service.createUserInTransaction(social(Role.ARTISAN), {
+          artisanProfile: {
+            bio: 'Plumber.',
+            hourlyRate: 50,
+            location: 'Accra',
+            serviceIds: [1, 999],
+          },
+        }),
+      ).rejects.toThrow(NotFoundException);
+      expect(txArtisans.save).not.toHaveBeenCalled();
+    });
+
+    it('leaves a plain createUser without options exactly as before (unverified, empty profile)', async () => {
+      mockUsersRepository.create.mockImplementationOnce(
+        (d: Record<string, unknown>) => d,
+      );
+      mockUsersRepository.save.mockImplementationOnce(
+        (d: Record<string, unknown>) => Promise.resolve({ id: 31, ...d }),
+      );
+      mockArtisanProfilesRepository.create.mockImplementationOnce(
+        (d: Record<string, unknown>) => d,
+      );
+
+      await service.createUser(social(Role.ARTISAN));
+
+      const [[created]] = mockUsersRepository.create.mock.calls as [
+        [Record<string, unknown>],
+      ];
+      expect(created).not.toHaveProperty('accountVerified');
+      expect(mockArtisanProfilesRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ bio: undefined, services: [] }),
+      );
+      const [[profile]] = mockArtisanProfilesRepository.save.mock.calls as [
+        [Record<string, unknown>],
+      ];
+      expect(profile).not.toHaveProperty('isProfileComplete');
+    });
+  });
+
+  describe('servicesExist', () => {
+    it('counts distinct ids against the services table', async () => {
+      const countBy = jest.fn().mockResolvedValue(2);
+      Object.assign(mockServicesRepository, { countBy });
+
+      await expect(service.servicesExist([1, 2, 2])).resolves.toBe(true);
+      countBy.mockResolvedValueOnce(1);
+      await expect(service.servicesExist([1, 999])).resolves.toBe(false);
+    });
+  });
+
   describe('findUserByEmail', () => {
     it('should throw NotFoundException if email is missing', async () => {
       await expect(
@@ -712,7 +863,7 @@ describe('UsersService', () => {
         expect(data.isProfileComplete).toBe(true);
       });
 
-      it('lists exactly the missing required fields for an incomplete profile', async () => {
+      it('lists exactly the missing required fields for an incomplete profile — never bio (B2)', async () => {
         mockArtisanProfilesRepository.findOne.mockResolvedValueOnce({
           ...completeProfile,
           bio: '   ',
@@ -722,7 +873,7 @@ describe('UsersService', () => {
 
         const { data } = await service.findArtisanProfileByUserId(1);
 
-        expect(data.missingFields).toEqual(['bio', 'hourlyRate']);
+        expect(data.missingFields).toEqual(['hourlyRate']);
         expect(data.isProfileComplete).toBe(false);
       });
 

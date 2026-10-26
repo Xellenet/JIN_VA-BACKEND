@@ -14,8 +14,14 @@ export const ERROR_MESSAGES = {
     NOT_FOUND_WITH_EMAIL: (email: string) =>
       `User with email ${email} not found`,
     NOT_FOUND_WITH_ID: (id: string) => `User with id ${id} not found`,
-    EMAIL_ALREADY_EXISTS: (email: string) =>
-      `User with email ${email} exists already`,
+    /**
+     * PR6: deliberately does **not** echo the address. `AllExceptionsFilter`
+     * logs every error message, so an address here landed in the logs on each
+     * duplicate registration. The caller already knows what they submitted.
+     * The parameter stays so call sites read the same.
+     */
+    EMAIL_ALREADY_EXISTS: (_email: string) =>
+      'An account with this email address already exists',
     /**
      * C1.1: deletion is refused (409) while the account still has live
      * commitments. `blockers` are already-phrased clauses (see
@@ -97,6 +103,13 @@ export const ERROR_MESSAGES = {
     // folding this into the generic invalid-credentials toast.
     SOCIAL_ONLY_ACCOUNT:
       'This account signs in with Google. Continue with Google, or use "Forgot password" to set a password for this account.',
+    /**
+     * The pending social signup behind `/auth/social/*` is missing, unknown or
+     * past its TTL. Paired with `meta.error: SOCIAL_SIGNUP_EXPIRED`, which is
+     * what the frontend branches on.
+     */
+    SOCIAL_SIGNUP_EXPIRED:
+      'Your sign-up session expired. Please continue with Google again.',
   },
   REVIEW: {
     JOB_NOT_FOUND: 'Job not found.',

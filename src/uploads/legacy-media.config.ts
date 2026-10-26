@@ -169,7 +169,7 @@ export function resolveLegacyMediaPlan(
       mode: 'legacy-only',
       description:
         `STORAGE_PROVIDER=s3 — new media is written to the bucket and served from ` +
-        `AWS_S3_PUBLIC_URL_BASE, never by this process. ${LEGACY_MEDIA_PREFIX}/{${LEGACY_MEDIA_SERVED_FOLDERS.join(',')}} ` +
+        `AWS_S3_PUBLIC_URL_BASE (STORAGE_PUBLIC_DELIVERY=direct) or streamed by this process (proxy — see bucket-media-serving.ts). ${LEGACY_MEDIA_PREFIX}/{${LEGACY_MEDIA_SERVED_FOLDERS.join(',')}} ` +
         `is mounted read-only for pre-cutover rows only; set SERVE_LEGACY_UPLOADS=false once they are gone. ` +
         withheld,
     };

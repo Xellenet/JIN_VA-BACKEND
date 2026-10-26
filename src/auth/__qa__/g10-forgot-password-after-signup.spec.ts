@@ -5,9 +5,9 @@ import { UserTokenService } from '@users/token.service';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { SocialAuthStrategyFactory } from '../social-auth.factory';
 import { OAuthStateService } from '../oauth-state.service';
-import { Role } from '@common/types/enums';
+import { PendingSocialSignupService } from '../pending-social-signup.service';
+import { Gender, Role } from '@common/types/enums';
 import { LoginDto } from '../dto/login.dto';
-import { SocialUserProfile } from '@common/types/user-interfaces.type';
 
 /**
  * QA verification (google-oauth-fix, G10) — FIX VERIFICATION.
@@ -26,16 +26,22 @@ import { SocialUserProfile } from '@common/types/user-interfaces.type';
  *
  * Fix applied: `registerSocialUser()` now sets `accountVerified: true` (and
  * `verifiedAt`) at creation time, consistent with G6's existing trust of
- * Google's verified email. This file now verifies:
+ * Google's verified email. Since the complete-signup step, that happens in
+ * the same transaction that inserts the row (`createUserInTransaction`'s
+ * `verifiedAt` option) rather than as a follow-up update, and the account is
+ * created by `completeSocialSignup`. This file now verifies:
  *   1. A brand-new Google signup is created with `accountVerified: true`.
  *   2. The end-to-end sequence (signup -> Forgot Password sets a real
  *      password -> email/password login) now succeeds instead of throwing.
  */
 describe('G10 fix: Google signup -> Forgot Password -> email/password login', () => {
   let service: AuthService;
+  let pendingStore: PendingSocialSignupService;
   const mockUsersService = {
     findUserByEmail: jest.fn(),
     createUser: jest.fn(),
+    createUserInTransaction: jest.fn(),
+    isEmailRegistered: jest.fn(),
     getPasswordCheckResult: jest.fn(),
     updateUserData: jest.fn(),
   };
@@ -51,48 +57,50 @@ describe('G10 fix: Google signup -> Forgot Password -> email/password login', ()
         { provide: EventEmitter2, useValue: mockEmitter },
         { provide: SocialAuthStrategyFactory, useValue: {} },
         { provide: OAuthStateService, useValue: {} },
+        PendingSocialSignupService,
       ],
     }).compile();
     service = module.get<AuthService>(AuthService);
+    pendingStore = module.get(PendingSocialSignupService);
     jest.clearAllMocks();
   });
 
-  it('fix: registerSocialUser() creates the account with accountVerified: true', async () => {
-    const socialProfile: SocialUserProfile = {
+  it('fix: a completed Google signup creates the account with accountVerified: true', async () => {
+    const key = pendingStore.create({
       email: 'google-user@example.com',
       firstname: 'Google',
       lastname: 'User',
       provider: 'google',
       providerId: 'google-id-1',
-      profilePicture: undefined,
-    };
-    mockUsersService.createUser.mockResolvedValueOnce({
+    });
+    mockUsersService.isEmailRegistered.mockResolvedValueOnce(false);
+    mockUsersService.createUserInTransaction.mockResolvedValueOnce({
       data: {
         id: 99,
-        email: socialProfile.email,
+        email: 'google-user@example.com',
         role: Role.CUSTOMER,
         password: null,
-        accountVerified: false, // simulates the DB row before the follow-up update
+        accountVerified: true,
       },
     });
+    mockUserTokenService.createJWTTokens.mockResolvedValueOnce({
+      access_token: 'access-token',
+      refresh_token: 'refresh-token',
+      expires_at: new Date(),
+    });
 
-    // Access the private helper the same way the pre-existing suite does,
-    // via the exported service instance's prototype.
-    const user = await (
-      service as unknown as {
-        registerSocialUser: (
-          p: SocialUserProfile,
-          r?: Role,
-        ) => Promise<{ id: number; accountVerified: boolean }>;
-      }
-    ).registerSocialUser(socialProfile, Role.CUSTOMER);
+    const { result } = await service.completeSocialSignup(key, {
+      role: Role.CUSTOMER,
+      firstname: 'Google',
+      lastname: 'User',
+      phoneNumber: '+233245551234',
+      gender: Gender.MALE,
+    });
 
-    expect(mockUsersService.updateUserData).toHaveBeenCalledWith(
-      99,
-      expect.objectContaining({ accountVerified: true }),
-    );
-    // The in-memory user returned to the caller is also kept in sync.
-    expect(user.accountVerified).toBe(true);
+    const [, options] = mockUsersService.createUserInTransaction.mock
+      .calls[0] as [unknown, { verifiedAt?: Date }];
+    expect(options.verifiedAt).toBeInstanceOf(Date);
+    expect(result.data.accountVerified).toBe(true);
   });
 
   it('fix: succeeds instead of throwing after a real password has been set via Forgot Password', async () => {

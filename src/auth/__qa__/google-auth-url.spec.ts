@@ -38,6 +38,19 @@ describe('GoogleAuthStrategy — authorization URL shape (G1/G2)', () => {
     expect(url.searchParams.get('state')).toBe('csrf-state-value');
   });
 
+  it('does not request offline access or force the consent screen (GP8)', () => {
+    process.env.GOOGLE_CLIENT_ID = 'test-client-id';
+    process.env.GOOGLE_CLIENT_SECRET = 'test-secret';
+    process.env.GOOGLE_REDIRECT_URI = 'https://api.example.test/cb';
+
+    const strategy = new GoogleAuthStrategy({} as HttpService);
+    const url = new URL(strategy.getAuthorizationUrl('state-gp8'));
+
+    expect(url.searchParams.has('access_type')).toBe(false);
+    expect(url.searchParams.has('prompt')).toBe(false);
+    expect(url.searchParams.get('scope')).toBe('email profile');
+  });
+
   it('falls back to GOOGLE_CALLBACK_URL when GOOGLE_REDIRECT_URI is unset (G2)', () => {
     process.env.GOOGLE_CLIENT_ID = 'test-client-id';
     process.env.GOOGLE_CLIENT_SECRET = 'test-secret';

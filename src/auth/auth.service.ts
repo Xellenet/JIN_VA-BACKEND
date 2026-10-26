@@ -12,7 +12,11 @@ import { UsersService } from '@users/users.service';
 import { plainToInstance } from 'class-transformer';
 import { UserResponseDto } from '@users/dto/user-response.dto';
 import { LoginDto } from './dto/login.dto';
-import { AuthTokenResult, LoginResponseDto } from './dto/login-response.dto';
+import {
+  AuthTokenResult,
+  LoginResponseDto,
+  OAuthCallbackOutcome,
+} from './dto/login-response.dto';
 import { VARIABLES } from '@common/constants/variables.constants';
 import { SUCCESS_MESSAGES } from '@common/constants/success-messages.constants';
 import { InvalidCredentialsException } from '@common/exceptions/invalid-credentials.exceptions';
@@ -40,6 +44,12 @@ import { OAuthCallbackDto } from './dto/oauth-callback.dto';
 import { SocialUserProfile } from '@common/types/user-interfaces.type';
 import { SocialAuthStrategyFactory } from './social-auth.factory';
 import { OAuthStateService } from './oauth-state.service';
+import {
+  PendingSocialSignup,
+  PendingSocialSignupService,
+} from './pending-social-signup.service';
+import { CompleteSocialSignupDto } from './dto/complete-social-signup.dto';
+import { PendingSocialSignupResponseDto } from './dto/pending-social-signup-response.dto';
 import { UnauthorizedException } from '@nestjs/common/exceptions/unauthorized.exception';
 import {
   APP_EVENTS,
@@ -50,6 +60,13 @@ import { hashEmailForLog } from '@common/utils/log-identifier.util';
 
 const SELF_REGISTERABLE_ROLES = [Role.CUSTOMER, Role.ARTISAN];
 
+/**
+ * `meta.error` on every `/auth/social/*` refusal caused by a missing, unknown
+ * or expired pending signup. The complete-signup page matches on this (not on
+ * the 401 status or the message text) to send the user back through Google.
+ */
+export const SOCIAL_SIGNUP_EXPIRED_ERROR_CODE = 'SOCIAL_SIGNUP_EXPIRED';
+
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
@@ -59,6 +76,7 @@ export class AuthService {
     private readonly userTokenService: UserTokenService,
     private readonly socialAuthStrategyFactory: SocialAuthStrategyFactory,
     private readonly oauthStateService: OAuthStateService,
+    private readonly pendingSocialSignupService: PendingSocialSignupService,
   ) {}
 
   /**
@@ -97,7 +115,9 @@ export class AuthService {
       throw new BadRequestException(ERROR_MESSAGES.AUTH.ROLE_NOT_ALLOWED);
     }
 
-    this.logger.log(`Registering User with email ${email}`);
+    this.logger.log(
+      `Registering user with email hash ${hashEmailForLog(email)}`,
+    );
 
     // C1.6: the check spans soft-deleted rows on purpose. `findUserByEmail`
     // excludes them, which meant a deleted address never hit this branch and
@@ -113,7 +133,7 @@ export class AuthService {
       );
     }
     const { data: user } = await this.userService.createUser(createUserDto);
-    this.logger.log(`User registered with email ${user.email}`);
+    this.logger.log(`User registered with id: ${user.id}`);
 
     const verificationToken = await this.userTokenService.createToken(
       user,
@@ -127,7 +147,7 @@ export class AuthService {
       verificationToken: verificationToken.token,
     });
     this.logger.log(
-      `Emitted event for sending registration email to ${user.email}`,
+      `Emitted event for sending registration email to user with id: ${user.id}`,
     );
 
     this.emitIfArtisan(user);
@@ -591,7 +611,7 @@ export class AuthService {
       resetToken: resetToken.token,
     });
     this.logger.log(
-      `Emitted event for sending password reset email to ${user.email}`,
+      `Emitted event for sending password reset email to user with id: ${user.id}`,
     );
   }
 
@@ -641,7 +661,7 @@ export class AuthService {
       firstname: user.firstname,
     });
     this.logger.log(
-      `Emitted event for sending password reset success email to ${user.email}`,
+      `Emitted event for sending password reset success email to user with id: ${user.id}`,
     );
     this.emmitter.emit(APP_EVENTS.SECURITY_ALERT, {
       userId: user.id,
@@ -732,7 +752,7 @@ export class AuthService {
       firstname: user.firstname,
     });
     this.logger.log(
-      `Emitted event for sending password change notification email to ${user.email}`,
+      `Emitted event for sending password change notification email to user with id: ${user.id}`,
     );
     this.emmitter.emit(APP_EVENTS.SECURITY_ALERT, {
       userId: user.id,
@@ -756,11 +776,20 @@ export class AuthService {
 
   /**
    * G9: normalizes the frontend's `role` query param to a safe signup role.
-   * Missing/unrecognized values (and anything other than `artisan`) default
-   * to CUSTOMER — this can never produce ADMIN, regardless of input.
+   * Only `customer` and `artisan` are recognized; anything else — including a
+   * missing param, which is what the login page sends — is `undefined`, so
+   * the complete-signup page asks instead of guessing. This can never produce
+   * ADMIN, regardless of input.
    */
-  private normalizeSignupRole(role?: string | null): Role {
-    return role?.toLowerCase() === 'artisan' ? Role.ARTISAN : Role.CUSTOMER;
+  private normalizeSignupRole(role?: string | null): Role | undefined {
+    switch (role?.toLowerCase()) {
+      case 'artisan':
+        return Role.ARTISAN;
+      case 'customer':
+        return Role.CUSTOMER;
+      default:
+        return undefined;
+    }
   }
 
   /**
@@ -790,13 +819,16 @@ export class AuthService {
    * Handle OAuth callback - Complete the OAuth flow
    * @param provider - Social provider name
    * @param callbackDto - Callback data from provider
-   * @returns `{ result, refreshToken }` — the controller sets `refreshToken` as an
-   *   httpOnly cookie and returns only `result`, exactly like `loginUser()` (G3).
+   * @returns For an existing (or restored) account, `{ result, refreshToken }`
+   *   — the controller sets `refreshToken` as an httpOnly cookie and returns
+   *   only `result`, exactly like `loginUser()` (G3). For a brand-new user,
+   *   `{ pendingSignupKey }`: nothing is written to the database and no
+   *   tokens are issued until `completeSocialSignup` succeeds.
    */
   async handleOAuthCallback(
     provider: string,
     callbackDto: OAuthCallbackDto,
-  ): Promise<AuthTokenResult> {
+  ): Promise<OAuthCallbackOutcome> {
     const { code, state, error, error_description } = callbackDto;
 
     // Handle OAuth errors (e.g. the user denied/cancelled Google's consent screen)
@@ -830,9 +862,9 @@ export class AuthService {
     this.logger.log(`Access token obtained from ${provider}`);
 
     const socialProfile = await strategy.getUserProfile(accessToken);
-    this.logger.log(
-      `User profile retrieved from ${provider}: ${socialProfile.email}`,
-    );
+    // PR6: no address in the log — the profile has no JinVa id yet, and the
+    // provider id is just as identifying, so the line names the provider only.
+    this.logger.log(`User profile retrieved from ${provider}`);
 
     if (!socialProfile.email) {
       throw new BadRequestException('Email not provided by social provider');
@@ -859,16 +891,41 @@ export class AuthService {
       const restored = await this.restoreSoftDeletedForSocialLogin(
         socialProfile.email,
       );
-      user =
-        restored ??
-        (await this.registerSocialUser(socialProfile, stateData.role));
+      if (!restored) {
+        // A brand-new user. Creating the account here used to mean guessing
+        // the role — CUSTOMER whenever the flow started from the login page —
+        // so an artisan who tapped Google there silently became a customer.
+        // Nothing is written now: the profile is parked until the user picks
+        // a role and fills in their details on the complete-signup page. If
+        // they abandon it, the entry expires and the next Google sign-in asks
+        // again.
+        const pendingSignupKey = this.pendingSocialSignupService.create({
+          email: socialProfile.email,
+          firstname: socialProfile.firstname,
+          lastname: socialProfile.lastname,
+          profilePicture: socialProfile.profilePicture,
+          provider: socialProfile.provider,
+          providerId: socialProfile.providerId,
+          suggestedRole:
+            stateData.role && SELF_REGISTERABLE_ROLES.includes(stateData.role)
+              ? stateData.role
+              : undefined,
+        });
+        this.logger.log(
+          `No account for this ${provider} profile — pending signup stored, awaiting role and details`,
+        );
+        return { pendingSignupKey };
+      }
+      user = restored;
     }
 
-    this.logger.log(`Generating tokens for social login user: ${user.email}`);
+    this.logger.log(
+      `Generating tokens for social login user with id: ${user.id}`,
+    );
     const { access_token, refresh_token, expires_at } =
       await this.userTokenService.createJWTTokens(user);
 
-    this.logger.log(`Social login successful for user: ${user.email}`);
+    this.logger.log(`Social login successful for user with id: ${user.id}`);
 
     const result = plainToInstance(LoginResponseDto, {
       access_token,
@@ -983,69 +1040,181 @@ export class AuthService {
   }
 
   /**
-   * Register a new user from social provider - PRIVATE HELPER
-   * @param role - G9: the intended signup role, already normalized by
-   *   `initiateOAuthFlow`/`normalizeSignupRole`. Re-normalized here as a
-   *   defense-in-depth guard so this method can never produce an ADMIN
-   *   account regardless of what reaches it.
+   * `GET /auth/social/pending`: what the complete-signup page prefills.
+   * Read-only — the entry stays put for the submit that follows.
+   *
+   * @throws {UnauthorizedException} `SOCIAL_SIGNUP_EXPIRED` when the key is
+   *   missing, unknown or past its TTL.
+   */
+  getPendingSocialSignup(
+    key: string | undefined,
+  ): PendingSocialSignupResponseDto {
+    const pending = this.pendingSocialSignupService.peek(key);
+    if (!pending) throw this.socialSignupExpired();
+
+    return {
+      message: SUCCESS_MESSAGES.AUTH.SOCIAL_SIGNUP_PENDING,
+      data: {
+        email: pending.email,
+        firstname: pending.firstname,
+        lastname: pending.lastname,
+        profilePicture: pending.profilePicture ?? null,
+        suggestedRole: pending.suggestedRole ?? null,
+        provider: pending.provider,
+      },
+    };
+  }
+
+  /**
+   * `POST /auth/social/complete`: creates the account a brand-new social user
+   * has just described, and signs them in exactly like `loginUser()`.
+   *
+   * The body has already passed the `ValidationPipe` by the time this runs,
+   * and the one check it cannot do (do the chosen services exist) runs here
+   * **before** the pending entry is touched — so a fixable mistake never
+   * costs the user their session. Only then is the entry taken (read and
+   * removed in one step, so a double submit cannot create two accounts).
+   *
+   * @throws {UnauthorizedException} `SOCIAL_SIGNUP_EXPIRED` — no live pending
+   *   signup for this key.
+   * @throws {BadRequestException} A selected service does not exist.
+   * @throws {UserAlreadyExists} The address was registered since the Google
+   *   flow started (a parallel signup); nothing is created.
+   */
+  async completeSocialSignup(
+    key: string | undefined,
+    dto: CompleteSocialSignupDto,
+  ): Promise<AuthTokenResult> {
+    const isArtisan = dto.role === Role.ARTISAN;
+
+    if (isArtisan && !(await this.userService.servicesExist(dto.serviceIds!))) {
+      throw new BadRequestException('One or more services were not found.');
+    }
+
+    const pending = this.pendingSocialSignupService.take(key);
+    if (!pending) throw this.socialSignupExpired();
+
+    // C1.6: spans soft-deleted rows, like `registerUser`'s check.
+    if (await this.userService.isEmailRegistered(pending.email)) {
+      this.logger.warn(
+        `Social signup refused: the address was registered while the signup was pending`,
+      );
+      throw new UserAlreadyExists(
+        ERROR_MESSAGES.USER.EMAIL_ALREADY_EXISTS(pending.email),
+      );
+    }
+
+    let user: User;
+    try {
+      user = await this.registerSocialUser(pending, dto);
+    } catch (err) {
+      // Nothing was committed (one transaction). Put the entry back so a
+      // fixable failure — typically a phone number already in use — can be
+      // corrected and resubmitted rather than sending the user back to Google.
+      this.pendingSocialSignupService.restore(key!, pending);
+      throw err;
+    }
+
+    const { access_token, refresh_token, expires_at } =
+      await this.userTokenService.createJWTTokens(user);
+    this.logger.log(`Social signup completed for user ${user.id}`);
+
+    const result = plainToInstance(LoginResponseDto, {
+      access_token,
+      expires_at,
+      message: SUCCESS_MESSAGES.AUTH.SOCIAL_SIGNUP_COMPLETED,
+      data: plainToInstance(UserResponseDto, user, {
+        excludeExtraneousValues: true,
+      }),
+    });
+    return { result, refreshToken: refresh_token };
+  }
+
+  /** `POST /auth/social/cancel`: drops the pending signup, if any. Idempotent. */
+  cancelSocialSignup(key: string | undefined): void {
+    this.pendingSocialSignupService.discard(key);
+  }
+
+  private socialSignupExpired(): UnauthorizedException {
+    return new UnauthorizedException({
+      errorCode: SOCIAL_SIGNUP_EXPIRED_ERROR_CODE,
+      message: ERROR_MESSAGES.AUTH.SOCIAL_SIGNUP_EXPIRED,
+    });
+  }
+
+  /**
+   * Creates the account for a completed social signup - PRIVATE HELPER.
+   *
+   * The role is the one the user explicitly picked on the complete-signup
+   * page — there is no default any more. `CompleteSocialSignupDto` only admits
+   * CUSTOMER or ARTISAN; re-checked here as defense in depth so this method
+   * can never produce an ADMIN account regardless of what reaches it (G9).
+   *
+   * The user row, its role profile and (for an artisan) the filled-in profile
+   * with its services are written in one transaction, so a failure leaves
+   * nothing behind.
    */
   private async registerSocialUser(
-    socialProfile: SocialUserProfile,
-    role?: Role,
+    pending: PendingSocialSignup,
+    dto: CompleteSocialSignupDto,
   ): Promise<User> {
-    this.logger.log(`Registering new social user: ${socialProfile.email}`);
-
-    const safeRole = role === Role.ARTISAN ? Role.ARTISAN : Role.CUSTOMER;
+    if (!SELF_REGISTERABLE_ROLES.includes(dto.role)) {
+      throw new BadRequestException(ERROR_MESSAGES.AUTH.ROLE_NOT_ALLOWED);
+    }
+    this.logger.log(`Registering new social user from ${pending.provider}`);
 
     const createUserDto = plainToInstance(CreateUserDto, {
-      email: socialProfile.email,
-      firstname: socialProfile.firstname,
-      lastname: socialProfile.lastname,
-      profilePicture: socialProfile.profilePicture,
-      socialProvider: socialProfile.provider,
-      socialProviderId: socialProfile.providerId,
+      email: pending.email,
+      firstname: dto.firstname.trim(),
+      lastname: dto.lastname.trim(),
+      phoneNumber: dto.phoneNumber,
+      gender: dto.gender,
+      dateOfBirth: dto.dateOfBirth,
+      profilePicture: pending.profilePicture,
+      socialProvider: pending.provider,
+      socialProviderId: pending.providerId,
       isSocialLogin: true,
-      role: safeRole,
-      // G5: no `password`/`gender` — Google never supplies either, and both
-      // columns are nullable via migration so account creation no longer
-      // crashes. `password` stays null until the user sets a real one via
+      role: dto.role,
+      // G5: no `password` — Google never supplies one, and the column is
+      // nullable. It stays null until the user sets a real one via
       // change-password or the forgot/reset-password flow (G10).
     });
 
-    const { data: user } = await this.userService.createUser(createUserDto);
+    const { data: user } = await this.userService.createUserInTransaction(
+      createUserDto,
+      {
+        // G10: Google already verifies the address as a condition of returning
+        // it in the OAuth profile, so trust it — consistent with G6. Passed as
+        // an option rather than a `CreateUserDto` field: that DTO is also bound
+        // to the public register endpoint, where an `accountVerified` override
+        // would let a normal signup skip email verification. Without it, a
+        // Google-only account would stay unverified forever (no verification
+        // email is ever sent for one), and the S4 gate would block password
+        // login even after the user set a password via Forgot Password.
+        verifiedAt: new Date(),
+        artisanProfile:
+          dto.role === Role.ARTISAN
+            ? {
+                // B1: optional; blank or absent is stored as null.
+                bio: dto.bio?.trim() || null,
+                hourlyRate: dto.hourlyRate!,
+                location: dto.location!.trim(),
+                serviceIds: dto.serviceIds!,
+                businessName: dto.businessName?.trim() || undefined,
+                // The column only admits positive values; "0 years" is the
+                // same thing as not saying.
+                experienceYears: dto.experienceYears || undefined,
+              }
+            : undefined,
+      },
+    );
 
-    // G10 fix: Google already verifies the account's email address as a
-    // condition of returning it in the OAuth profile, so trust it here —
-    // consistent with G6's existing trust-Google's-verified-email precedent.
-    // Deliberately NOT added as a settable field on CreateUserDto: that DTO
-    // is also bound to the public self-registration endpoint, and exposing
-    // an `accountVerified` override there would let a normal signup skip
-    // email verification entirely. Set it via a direct follow-up update
-    // instead, and keep the returned `user` object in sync so the rest of
-    // this request (e.g. the response DTO) reflects it too.
-    //
-    // Without this, a Google-only account has no DB default for
-    // `accountVerified` (lands `null`) and is never routed through
-    // verifyEmail() (no verification token/email is ever created for a
-    // social signup) — so even after the user later sets a real password
-    // via Forgot Password, email/password login would remain permanently
-    // blocked by the unrelated S4 "email not verified" gate. See
-    // docs/team/google-oauth-fix/qa-report.md (BLOCKER) and
-    // security-report.md ([HIGH]).
-    const verifiedAt = new Date();
-    await this.userService.updateUserData(user.id, {
-      accountVerified: true,
-      verifiedAt,
-    });
-    user.accountVerified = true;
-    user.verifiedAt = verifiedAt;
-
-    this.logger.log(`Social user registered: ${user.email}`);
+    this.logger.log(`Social user registered: user ${user.id}`);
 
     this.emmitter.emit(MailEvent.SOCIAL_USER_REGISTERED, {
       email: user.email,
       firstname: user.firstname,
-      provider: socialProfile.provider,
+      provider: pending.provider,
     });
 
     this.emitIfArtisan(user);

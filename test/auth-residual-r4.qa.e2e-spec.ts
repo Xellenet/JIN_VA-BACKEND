@@ -367,6 +367,9 @@ describe('auth-residual-findings round 4 (QA e2e)', () => {
           username: `qar4reg${uniq}`,
           firstname: 'QaR4',
           lastname: 'Register',
+          // PH6/DI5: register requires a valid phone and a gender.
+          phoneNumber: `+233241${String(uniq).slice(-6)}`,
+          gender: 'FEMALE',
           role: Role.CUSTOMER,
         });
 
@@ -1158,6 +1161,8 @@ describe('auth-residual-findings round 4 (QA e2e)', () => {
           username: `qar4b2d${uniq}`,
           firstname: 'Qa',
           lastname: 'B2',
+          phoneNumber: `+233242${String(uniq).slice(-6)}`,
+          gender: 'MALE',
           role: Role.CUSTOMER,
         });
       const onLive = await request(server())
@@ -1168,6 +1173,8 @@ describe('auth-residual-findings round 4 (QA e2e)', () => {
           username: `qar4b2l${uniq}`,
           firstname: 'Qa',
           lastname: 'B2',
+          phoneNumber: `+233243${String(uniq).slice(-6)}`,
+          gender: 'MALE',
           role: Role.CUSTOMER,
         });
 

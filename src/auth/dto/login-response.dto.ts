@@ -51,3 +51,16 @@ export interface AuthTokenResult {
   result: LoginResponseDto;
   refreshToken: string;
 }
+
+/**
+ * Internal outcome of the OAuth callback for a brand-new social user: nothing
+ * was written to the database, a pending signup was stored instead, and the
+ * controller sets `pendingSignupKey` as an httpOnly cookie and sends the
+ * browser to the complete-signup page. No tokens are issued.
+ */
+export interface PendingSocialSignupOutcome {
+  pendingSignupKey: string;
+}
+
+/** What `AuthService.handleOAuthCallback` resolves to. */
+export type OAuthCallbackOutcome = AuthTokenResult | PendingSocialSignupOutcome;

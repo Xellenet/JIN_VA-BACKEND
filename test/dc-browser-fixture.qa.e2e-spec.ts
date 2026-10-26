@@ -32,7 +32,7 @@ import {
  * browser can sign in with the ordinary seed password rather than needing new
  * credentials:
  *
- *   customer : abena.boateng@gmail.com
+ *   customer : abena.boateng@example.com
  *   artisan  : efua.agyeman@jinva.com
  *
  * It creates, and deliberately does **not** clean up (the browser pass runs
@@ -81,7 +81,7 @@ describe('QA browser fixture (setup only)', () => {
     );
 
     const customer = await userRepo.findOneByOrFail({
-      email: 'abena.boateng@gmail.com',
+      email: 'abena.boateng@example.com',
       role: Role.CUSTOMER,
     });
     const artisanUser = await userRepo.findOneByOrFail({

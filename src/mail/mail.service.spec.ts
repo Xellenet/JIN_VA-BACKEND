@@ -1,4 +1,5 @@
 import { ConfigService } from '@nestjs/config';
+import { hashEmailForLog } from '@common/utils/log-identifier.util';
 import { MailService } from './mail.service';
 import { MailTemplateService } from './mail.template';
 import { MailProviderFactory } from './providers/mail-provider.factory';
@@ -98,9 +99,12 @@ describe('MailService (BI4)', () => {
       service.sendMail('ama@example.test', 'user.password-reset', {}),
     ).rejects.toThrow(/transport exploded/);
 
-    expect(String(errorSpy.mock.calls[0][0])).toContain(
-      'Failed to send mail to ama@example.test',
+    const line = String(errorSpy.mock.calls[0][0]);
+    expect(line).toContain(
+      `Failed to send mail to email hash ${hashEmailForLog('ama@example.test')}`,
     );
+    // PR6: the recipient address itself never reaches the log.
+    expect(line).not.toContain('ama@example.test');
     errorSpy.mockRestore();
   });
 
@@ -130,7 +134,11 @@ describe('MailService (BI4)', () => {
 
     await service.sendMail('ama@example.test', 'user.welcome', {});
 
-    expect(String(logSpy.mock.calls[0][0])).toContain('ama@example.test');
+    // PR6: the recipient is named by its hash, never in plaintext.
+    expect(String(logSpy.mock.calls[0][0])).toContain(
+      hashEmailForLog('ama@example.test'),
+    );
+    expect(String(logSpy.mock.calls[0][0])).not.toContain('ama@example.test');
     expect(String(logSpy.mock.calls[0][0])).toContain('user.welcome');
     logSpy.mockRestore();
   });

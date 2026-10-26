@@ -116,5 +116,8 @@ export const SUCCESS_MESSAGES = {
     ACCOUNT_RESTORED_VERIFY_EMAIL:
       'Your account has been restored. Verify your email address to sign in.',
     LOGGED_OUT: 'User logged out successfully',
+    SOCIAL_SIGNUP_PENDING: 'Pending sign-up retrieved',
+    SOCIAL_SIGNUP_COMPLETED: 'Account created successfully',
+    SOCIAL_SIGNUP_CANCELLED: 'Sign-up cancelled',
   },
 };

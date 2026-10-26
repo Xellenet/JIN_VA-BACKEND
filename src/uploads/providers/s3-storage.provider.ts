@@ -15,6 +15,8 @@ import type {
   IStorageProvider,
   PrivateMediaObject,
   PrivateUploadFolder,
+  PublicMediaObject,
+  PublicUploadFolder,
   UploadFolder,
   UploadOptions,
   UploadResult,
@@ -24,6 +26,7 @@ import {
   buildS3ObjectKey,
   isPrivateUploadFolder,
 } from '../upload-folders';
+import { LEGACY_MEDIA_PREFIX } from '../legacy-media.config';
 
 /**
  * PF2a: S3-backed implementation of {@link IStorageProvider}, built ahead of
@@ -46,6 +49,25 @@ import {
  * - `AWS_S3_PUBLIC_URL_BASE`   (optional — e.g. a CDN domain fronting the
  *                                bucket; falls back to the bucket's virtual-
  *                                hosted-style S3 URL when unset)
+ * - `AWS_S3_ENDPOINT`          (optional — an S3-compatible service instead of
+ *                                AWS, e.g. Backblaze B2's
+ *                                `https://s3.<region>.backblazeb2.com`. Turns
+ *                                on path-style addressing, and public URLs
+ *                                default to `<endpoint>/<bucket>/<key>`)
+ * - `AWS_S3_PRIVATE_BUCKET`    (optional — a separate bucket for the private
+ *                                KYC folders. Required in practice on services
+ *                                like B2, where visibility is per bucket, not
+ *                                per prefix: in one public bucket the
+ *                                `private/` prefix would be publicly readable)
+ * - `STORAGE_PUBLIC_DELIVERY`  (optional — how public-folder media reaches
+ *                                browsers. `direct` (default): the URL points
+ *                                at the bucket, which must be public. `proxy`:
+ *                                the URL is `/uploads/<folder>/<file>` and this
+ *                                process streams it from the bucket (see
+ *                                `bucket-media-serving.ts`), so the bucket can
+ *                                stay private. Switching proxy → direct later
+ *                                needs no data change: proxied URLs already
+ *                                stored keep working through the same route)
  *
  * BI1 (failure discipline). Three rules hold for every code path below:
  *  1. **Never a silent no-op success.** Required configuration is validated
@@ -110,7 +132,7 @@ export class S3StorageProvider implements IStorageProvider {
     try {
       await this.getClient(config).send(
         new PutObjectCommand({
-          Bucket: config.bucket,
+          Bucket: bucketFor(config, options.folder),
           Key: key,
           Body: buffer,
           ContentType: options.mimetype,
@@ -128,7 +150,9 @@ export class S3StorageProvider implements IStorageProvider {
       // what turns a later bucket-policy mistake into a data breach.
       url: isPrivateUploadFolder(options.folder)
         ? buildPrivateMediaReference(options.folder, filename)
-        : this.buildPublicUrl(config, key),
+        : config.publicDelivery === 'proxy'
+          ? `${LEGACY_MEDIA_PREFIX}/${options.folder}/${filename}`
+          : this.buildPublicUrl(config, key),
       filename,
       folder: options.folder,
       sizeBytes: buffer.length,
@@ -152,7 +176,10 @@ export class S3StorageProvider implements IStorageProvider {
 
     try {
       await this.getClient(config).send(
-        new DeleteObjectCommand({ Bucket: config.bucket, Key: key }),
+        new DeleteObjectCommand({
+          Bucket: bucketFor(config, folder),
+          Key: key,
+        }),
       );
     } catch (err) {
       // Mirrors LocalStorageProvider: an already-gone/unreachable object is
@@ -185,18 +212,46 @@ export class S3StorageProvider implements IStorageProvider {
     folder: PrivateUploadFolder,
     filename: string,
   ): Promise<PrivateMediaObject | null> {
+    return this.readObject(folder, filename);
+  }
+
+  /**
+   * Streams a public-folder object for proxied delivery
+   * (`STORAGE_PUBLIC_DELIVERY=proxy`). Same contract as `readPrivate`: `null`
+   * when the bucket does not hold it, so the caller can fall back to legacy
+   * local disk. `range` is a validated `bytes=` header, passed through so
+   * portfolio videos can seek.
+   */
+  async readPublic(
+    folder: PublicUploadFolder,
+    filename: string,
+    range?: string,
+  ): Promise<PublicMediaObject | null> {
+    return this.readObject(folder, filename, range);
+  }
+
+  private async readObject(
+    folder: UploadFolder,
+    filename: string,
+    range?: string,
+  ): Promise<PublicMediaObject | null> {
     const config = this.requireConfiguration();
     const key = buildS3ObjectKey(folder, filename);
 
     try {
       const output = await this.getClient(config).send(
-        new GetObjectCommand({ Bucket: config.bucket, Key: key }),
+        new GetObjectCommand({
+          Bucket: bucketFor(config, folder),
+          Key: key,
+          ...(range ? { Range: range } : {}),
+        }),
       );
       if (!output.Body) return null;
       return {
         stream: output.Body as Readable,
         contentType: output.ContentType ?? 'application/octet-stream',
         contentLength: output.ContentLength,
+        contentRange: output.ContentRange,
       };
     } catch (err) {
       if (isMissingObject(err)) return null;
@@ -219,6 +274,25 @@ export class S3StorageProvider implements IStorageProvider {
     // permanently breaking that asset. That is exactly the silent-wrong-
     // success this check exists to prevent.
     if (!readEnv('AWS_S3_REGION')) missing.push('AWS_S3_REGION');
+    // On an S3-compatible endpoint visibility is per bucket, so KYC objects
+    // in the main (public) bucket would be anonymously readable. Refuse to
+    // run that way rather than rely on the `private/` prefix.
+    const delivery = readEnv('STORAGE_PUBLIC_DELIVERY');
+    if (delivery && delivery !== 'direct' && delivery !== 'proxy') {
+      missing.push('STORAGE_PUBLIC_DELIVERY');
+    }
+    const privateBucket = readEnv('AWS_S3_PRIVATE_BUCKET');
+    if (readEnv('AWS_S3_ENDPOINT')) {
+      // Direct delivery means the main bucket is public, so KYC needs a
+      // *different* one; proxied delivery may keep everything in a single
+      // private bucket, but it still has to be named explicitly.
+      if (
+        !privateBucket ||
+        (delivery !== 'proxy' && privateBucket === readEnv('AWS_S3_BUCKET'))
+      ) {
+        missing.push('AWS_S3_PRIVATE_BUCKET');
+      }
+    }
     return missing;
   }
 
@@ -242,6 +316,10 @@ export class S3StorageProvider implements IStorageProvider {
       bucket: readEnv('AWS_S3_BUCKET')!,
       region: readEnv('AWS_S3_REGION')!,
       publicUrlBase: readEnv('AWS_S3_PUBLIC_URL_BASE'),
+      endpoint: readEnv('AWS_S3_ENDPOINT')?.replace(/\/+$/, ''),
+      privateBucket: readEnv('AWS_S3_PRIVATE_BUCKET'),
+      publicDelivery:
+        readEnv('STORAGE_PUBLIC_DELIVERY') === 'proxy' ? 'proxy' : 'direct',
     };
   }
 
@@ -273,6 +351,19 @@ export class S3StorageProvider implements IStorageProvider {
           accessKeyId && secretAccessKey
             ? { accessKeyId, secretAccessKey }
             : undefined,
+        // S3-compatible services (e.g. Backblaze B2) are reached at their own
+        // endpoint with path-style URLs, and only send the SDK's default
+        // CRC checksum headers when an operation requires them — newer SDKs
+        // add them to every request, and not every compatible service
+        // accepts them.
+        ...(config.endpoint
+          ? {
+              endpoint: config.endpoint,
+              forcePathStyle: true,
+              requestChecksumCalculation: 'WHEN_REQUIRED' as const,
+              responseChecksumValidation: 'WHEN_REQUIRED' as const,
+            }
+          : {}),
       });
     }
     return this.client;
@@ -281,6 +372,9 @@ export class S3StorageProvider implements IStorageProvider {
   private buildPublicUrl(config: S3ProviderConfig, key: string): string {
     if (config.publicUrlBase) {
       return `${config.publicUrlBase.replace(/\/+$/, '')}/${key}`;
+    }
+    if (config.endpoint) {
+      return `${config.endpoint}/${config.bucket}/${key}`;
     }
     return `https://${config.bucket}.s3.${config.region}.amazonaws.com/${key}`;
   }
@@ -314,6 +408,19 @@ interface S3ProviderConfig {
   bucket: string;
   region: string;
   publicUrlBase?: string;
+  endpoint?: string;
+  privateBucket?: string;
+  publicDelivery: 'direct' | 'proxy';
+}
+
+/**
+ * Private (KYC) folders go to `AWS_S3_PRIVATE_BUCKET` when it is set, and to
+ * the main bucket otherwise — the existing single-bucket AWS behaviour.
+ */
+function bucketFor(config: S3ProviderConfig, folder: UploadFolder): string {
+  return isPrivateUploadFolder(folder) && config.privateBucket
+    ? config.privateBucket
+    : config.bucket;
 }
 
 /** Trims so a variable set to whitespace counts as unset. */

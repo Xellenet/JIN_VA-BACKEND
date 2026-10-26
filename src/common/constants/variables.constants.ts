@@ -3,7 +3,6 @@ export const VARIABLES = {
   SALT_OR_ROUNDS: 12,
   PASSWORD_REGEX:
     /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*])[A-Za-z\d!@#$%^&*]{8,128}$/,
-  PHONENUMBER_REGEX: /^\d{3}-\d{3}-\d{4}$/,
   TOKEN_EXAMPLE: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...',
   EMAIL_VERIFICATION_TOKEN_EXPIRES_IN_MINUTES: 7,
   PASSWORD_RESET_TOKEN_EXPIRES_IN_MINUTES: 60,
@@ -61,6 +60,21 @@ export const VARIABLES = {
    * in `docs/team/google-oauth-fix/api-contract.md` for the frontend-engineer.
    */
   OAUTH_FRONTEND_LANDING_PATH: '/auth/callback',
+  /**
+   * Frontend route a brand-new social user is sent to after
+   * `GET /auth/google/callback`, to pick a role and fill in the details an
+   * account needs before anything is written to the database.
+   */
+  SOCIAL_SIGNUP_FRONTEND_PATH: '/auth/complete-signup',
+  /**
+   * How long a pending social signup (and its cookie) lives. Abandoning the
+   * page leaves nothing behind: the entry simply expires.
+   */
+  PENDING_SOCIAL_SIGNUP_TTL_MS: 15 * 60 * 1000,
+  /** HttpOnly cookie carrying the opaque pending-social-signup key. */
+  PENDING_SOCIAL_SIGNUP_COOKIE_NAME: 'jinva_pending_signup',
+  /** Scoped to the auth routes — no other route ever needs to read it. */
+  PENDING_SOCIAL_SIGNUP_COOKIE_PATH: '/api/v1/auth',
 
   /** BOOKING / JOB LIFECYCLE CONSTANTS (availability-booking-job-lifecycle remediation) */
   /** A2: used when a service has no `estimatedDurationMins` configured yet. */

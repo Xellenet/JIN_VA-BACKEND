@@ -29,7 +29,7 @@ import {
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
-import { CreateUserDto } from '@users/dto/create-user.dto';
+import { RegisterUserDto } from './dto/register-user.dto';
 import { UserResponseDto } from '@users/dto/user-response.dto';
 import { SUCCESS_MESSAGES } from '@common/constants/success-messages.constants';
 import { ERROR_MESSAGES } from '@common/constants/error-messages.constants';
@@ -41,6 +41,8 @@ import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ResendVerificationDto } from './dto/resend-verification.dto';
 import { RestoreAccountDto } from './dto/restore-account.dto';
 import { RestoreAccountResponseDto } from './dto/restore-account-response.dto';
+import { CompleteSocialSignupDto } from './dto/complete-social-signup.dto';
+import { PendingSocialSignupResponseDto } from './dto/pending-social-signup-response.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import {
   AuthCredentialsThrottlerGuard,
@@ -57,6 +59,12 @@ import {
   setAuthSessionCookie,
   clearAuthSessionCookie,
 } from './utils/session-cookie.util';
+import {
+  setPendingSignupCookie,
+  clearPendingSignupCookie,
+  readPendingSignupCookie,
+} from './utils/pending-signup-cookie.util';
+import { UserAlreadyExists } from '@common/exceptions/user-already-exists.exception';
 
 /**
  * G4: query-param convention for the redirect back to the frontend after
@@ -94,7 +102,8 @@ const RATE_LIMITED_DESCRIPTION =
  * **Rate limiting.** Every route here that lets a caller guess a secret (a
  * password or a one-time token) or that sends mail to a caller-supplied address
  * is throttled per client IP — `login`, `restore-account`, `reset-password`,
- * `verify-email` and `change-password` under the `auth-credentials` throttler
+ * `verify-email`, `change-password` and `social/complete` under the
+ * `auth-credentials` throttler
  * (default 10/minute, `AUTH_RATE_LIMIT_PER_MINUTE`); `register`,
  * `forgot-password` and `resend-verification` under the stricter `auth-email`
  * one (default 5/minute, `AUTH_EMAIL_RATE_LIMIT_PER_MINUTE`). Each route counts
@@ -140,14 +149,17 @@ export class AuthController {
   })
   @ApiBadRequestResponse({
     description:
-      'Validation failed (missing fields, weak password, invalid email format)',
+      'Validation failed (missing fields — phone number and gender are required — weak password, ' +
+      'invalid email format, a phone number that is not valid for a supported country, or a gender other than MALE/FEMALE)',
   })
   @ApiConflictResponse({
-    description: 'An account with this email address already exists',
+    description:
+      'An account with this email address already exists, or the phone number is already in use ' +
+      '(`meta.error: PHONE_NUMBER_IN_USE`)',
   })
   @ApiTooManyRequestsResponse({ description: RATE_LIMITED_DESCRIPTION })
-  registerUser(@Body() createUserDto: CreateUserDto) {
-    return this.authService.registerUser(createUserDto);
+  registerUser(@Body() registerUserDto: RegisterUserDto) {
+    return this.authService.registerUser(registerUserDto);
   }
 
   /**
@@ -608,16 +620,17 @@ export class AuthController {
     description:
       'Redirects the browser to the Google consent screen. Optionally accepts ' +
       "a `role` query param (`customer` | `artisan`) from the signup page's role " +
-      'toggle — embedded into the CSRF state and applied only when the callback ' +
-      'creates a brand-new account; missing/unrecognized values default to ' +
-      '`customer` and this can never produce an `admin` account.',
+      'toggle — embedded into the CSRF state and, for a brand-new user only, ' +
+      'used to preselect the role on the complete-signup page. Missing or ' +
+      'unrecognized values preselect nothing, and this can never produce an ' +
+      '`admin` account.',
   })
   @ApiQuery({
     name: 'role',
     required: false,
     enum: ['customer', 'artisan'],
     description:
-      'Intended role for a brand-new signup. Ignored for an existing account (matched by email).',
+      'Role to preselect for a brand-new signup. Ignored for an existing account (matched by email).',
   })
   @ApiFoundResponse({
     description: "302 redirect to Google's OAuth consent screen",
@@ -657,10 +670,13 @@ export class AuthController {
   @ApiOperation({
     summary: 'Google OAuth callback',
     description:
-      'Called by Google after the user completes (or denies) consent. On success, ' +
-      'sets the same httpOnly refresh + session cookies as `POST /auth/login` and ' +
+      'Called by Google after the user completes (or denies) consent. For an ' +
+      'existing account, sets the same httpOnly refresh + session cookies as ' +
+      '`POST /auth/login` and 302-redirects to `${FRONTEND_URL}' +
+      `${VARIABLES.OAUTH_FRONTEND_LANDING_PATH}\`. For a brand-new user nothing is ` +
+      'created: it sets the httpOnly `jinva_pending_signup` cookie (15 min) and ' +
       '302-redirects to `${FRONTEND_URL}' +
-      `${VARIABLES.OAUTH_FRONTEND_LANDING_PATH}\`. On any failure it still redirects ` +
+      `${VARIABLES.SOCIAL_SIGNUP_FRONTEND_PATH}\`, with no session cookies. On any failure it still redirects ` +
       'there, with `?error=access_denied` (consent denied/cancelled) or ' +
       '`?error=oauth_failed` (anything else) — never a raw JSON error response.',
   })
@@ -680,8 +696,20 @@ export class AuthController {
     };
 
     try {
-      const { result, refreshToken } =
-        await this.authService.handleOAuthCallback('google', callbackDto);
+      const outcome = await this.authService.handleOAuthCallback(
+        'google',
+        callbackDto,
+      );
+      if ('pendingSignupKey' in outcome) {
+        // Brand-new user: no account and no session yet — the complete-signup
+        // page collects the role and details first.
+        setPendingSignupCookie(res, outcome.pendingSignupKey);
+        res.redirect(
+          `${process.env.FRONTEND_URL ?? ''}${VARIABLES.SOCIAL_SIGNUP_FRONTEND_PATH}`,
+        );
+        return;
+      }
+      const { result, refreshToken } = outcome;
       setRefreshTokenCookie(res, refreshToken);
       setAuthSessionCookie(res, {
         sub: result.data.id,
@@ -697,6 +725,126 @@ export class AuthController {
         : OAUTH_ERROR_CODES.OAUTH_FAILED;
       res.redirect(this.buildFrontendRedirect(code));
     }
+  }
+
+  /**
+   * Returns the pending social signup the complete-signup page prefills from.
+   * Read-only: the entry stays valid for the submit that follows.
+   *
+   * @param req - The pending signup's key is read from its httpOnly cookie.
+   */
+  @Get('social/pending')
+  @ApiOperation({
+    summary: 'Read the pending social signup',
+    description:
+      'Reads the httpOnly `jinva_pending_signup` cookie set by the Google callback ' +
+      'for a brand-new user and returns what Google supplied, plus `suggestedRole` ' +
+      '(the signup-page toggle, or `null` when the flow started from the login page). ' +
+      'Nothing has been written to the database at this point.',
+  })
+  @ApiOkResponse({ type: PendingSocialSignupResponseDto })
+  @ApiUnauthorizedResponse({
+    description:
+      'No live pending signup (missing, unknown or expired cookie) — `meta.error` is `SOCIAL_SIGNUP_EXPIRED`',
+  })
+  getPendingSocialSignup(@Req() req: Request): PendingSocialSignupResponseDto {
+    return this.authService.getPendingSocialSignup(
+      readPendingSignupCookie(req),
+    );
+  }
+
+  /**
+   * Creates the account for a pending social signup and signs the user in,
+   * exactly like `POST /auth/login`.
+   *
+   * @param dto - The chosen role and details (artisan profile fields when ARTISAN).
+   * @param req - The pending signup's key is read from its httpOnly cookie.
+   * @param res - Used to set the session cookies and clear the pending one.
+   */
+  @Post('social/complete')
+  @HttpCode(200)
+  // Same exposure as login: a public route that ends in a session.
+  @UseGuards(AuthCredentialsThrottlerGuard)
+  @ApiOperation({
+    summary: 'Complete a Google sign-up: choose a role and create the account',
+    description:
+      'Validates the body first — a validation error (400) leaves the pending signup ' +
+      'intact so the user can fix it and resubmit. Then consumes the pending signup ' +
+      'and creates the account (verified, Google-linked, no password) with its role ' +
+      'profile in one transaction; for ARTISAN the profile is filled in with the ' +
+      'submitted services, location, hourly rate and bio, so it is searchable at once. ' +
+      'If creation fails (e.g. phone number already in use, 409) nothing is created and ' +
+      'the pending signup is kept. On success, responds exactly like `POST /auth/login` ' +
+      'and clears the pending cookie. Rate-limited per client IP.',
+  })
+  @ApiBody({ type: CompleteSocialSignupDto })
+  @ApiOkResponse({
+    description:
+      'Account created and signed in — access token returned; refresh token set as httpOnly cookie',
+    type: LoginResponseDto,
+  })
+  @ApiBadRequestResponse({
+    description: 'Validation failed, or a selected service does not exist',
+  })
+  @ApiUnauthorizedResponse({
+    description:
+      'No live pending signup — `meta.error` is `SOCIAL_SIGNUP_EXPIRED`; start the Google flow again',
+  })
+  @ApiConflictResponse({
+    description:
+      'The email was registered in the meantime (nothing created; sign in instead), or the phone number is already in use (`meta.error: PHONE_NUMBER_IN_USE`; the pending entry survives for a resubmit)',
+  })
+  @ApiTooManyRequestsResponse({ description: RATE_LIMITED_DESCRIPTION })
+  async completeSocialSignup(
+    @Body() dto: CompleteSocialSignupDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<LoginResponseDto> {
+    try {
+      const { result, refreshToken } =
+        await this.authService.completeSocialSignup(
+          readPendingSignupCookie(req),
+          dto,
+        );
+      clearPendingSignupCookie(res);
+      setRefreshTokenCookie(res, refreshToken);
+      setAuthSessionCookie(res, {
+        sub: result.data.id,
+        role: result.data.role,
+      });
+      return result;
+    } catch (err) {
+      // The address is taken: the pending signup was consumed and can never
+      // complete, so don't leave its cookie behind.
+      if (err instanceof UserAlreadyExists) clearPendingSignupCookie(res);
+      throw err;
+    }
+  }
+
+  /**
+   * Abandons a pending social signup. Idempotent — succeeds with or without one.
+   *
+   * @param req - The pending signup's key is read from its httpOnly cookie.
+   * @param res - Used to clear the pending cookie.
+   */
+  @Post('social/cancel')
+  @HttpCode(200)
+  @ApiOperation({
+    summary: 'Cancel a pending Google sign-up',
+    description:
+      'Discards the pending signup (if any) and clears its cookie. Nothing was ever ' +
+      'written to the database for it. Always 200.',
+  })
+  @ApiOkResponse({
+    description: 'Pending signup discarded (or there was none)',
+  })
+  cancelSocialSignup(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): { message: string } {
+    this.authService.cancelSocialSignup(readPendingSignupCookie(req));
+    clearPendingSignupCookie(res);
+    return { message: SUCCESS_MESSAGES.AUTH.SOCIAL_SIGNUP_CANCELLED };
   }
 
   /**

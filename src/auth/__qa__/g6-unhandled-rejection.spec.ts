@@ -5,6 +5,7 @@ import { UserTokenService } from '@users/token.service';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { SocialAuthStrategyFactory } from '../social-auth.factory';
 import { OAuthStateService } from '../oauth-state.service';
+import { PendingSocialSignupService } from '../pending-social-signup.service';
 import { Role } from '@common/types/enums';
 import { OAuthCallbackDto } from '../dto/oauth-callback.dto';
 
@@ -77,6 +78,7 @@ describe('AuthService.handleOAuthCallback — existing-account profile-sync writ
           useValue: mockSocialAuthStrategyFactory,
         },
         { provide: OAuthStateService, useValue: mockOAuthStateService },
+        PendingSocialSignupService,
       ],
     }).compile();
     service = module.get<AuthService>(AuthService);

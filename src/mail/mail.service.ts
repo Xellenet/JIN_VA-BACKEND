@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { MailProviderFactory } from './providers/mail-provider.factory';
 import { MailTemplateService } from './mail.template';
 import { getErrorMessage } from '@common/utils/error.util';
+import { hashEmailForLog } from '@common/utils/log-identifier.util';
 
 @Injectable()
 export class MailService {
@@ -41,10 +42,13 @@ export class MailService {
         text: html.replace(/<[^>]*>?/gm, ''),
       });
 
-      this.logger.log(`✅ Mail sent to ${to} [${eventType}]`);
+      // PR6: the recipient is logged as its hash, never in plaintext.
+      this.logger.log(
+        `✅ Mail sent to email hash ${hashEmailForLog(to)} [${eventType}]`,
+      );
     } catch (err) {
       this.logger.error(
-        `❌ Failed to send mail to ${to}: ${getErrorMessage(err)}`,
+        `❌ Failed to send mail to email hash ${hashEmailForLog(to)}: ${getErrorMessage(err)}`,
       );
       throw err;
     }

@@ -12,6 +12,7 @@ import { HttpModule } from '@nestjs/axios';
 import { SocialAuthStrategyFactory } from './social-auth.factory';
 import { GoogleAuthStrategy } from './strategy/google-auth.strategy';
 import { OAuthStateService } from './oauth-state.service';
+import { PendingSocialSignupService } from './pending-social-signup.service';
 import { ThrottlingModule } from '@common/throttling/throttling.module';
 import {
   AuthCredentialsThrottlerGuard,
@@ -49,7 +50,7 @@ const publicKey = loadKey('JWT_PUBLIC_KEY', 'keys/public.key');
      * Rate limiting for the credential-guessing / account-enumeration surface
      * of this controller (`login`, `restore-account`, `register`,
      * `forgot-password`, `reset-password`, `verify-email`,
-     * `resend-verification`, `change-password`). Opt-in per route via
+     * `resend-verification`, `change-password`, `social/complete`). Opt-in per route via
      * `@UseGuards(...)` — importing this module throttles nothing by itself.
      */
     ThrottlingModule,
@@ -59,6 +60,7 @@ const publicKey = loadKey('JWT_PUBLIC_KEY', 'keys/public.key');
     AuthService,
     JwtStrategy,
     OAuthStateService,
+    PendingSocialSignupService,
     SocialAuthStrategyFactory,
     GoogleAuthStrategy,
     // Registered as providers (not merely referenced by `@UseGuards`) so Nest

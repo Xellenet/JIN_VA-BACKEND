@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { AuthService } from './auth.service';
+import { AuthService, SOCIAL_SIGNUP_EXPIRED_ERROR_CODE } from './auth.service';
 import {
   BadRequestException,
   ForbiddenException,
@@ -11,12 +11,24 @@ import { SocialOnlyAccountException } from '@common/exceptions/social-only-accou
 import { CreateUserDto } from '@users/dto/create-user.dto';
 import { LoginDto } from './dto/login.dto';
 import { UsersService } from '@users/users.service';
+import type { CreateUserOptions } from '@users/users.service';
 import { UserTokenService } from '@users/token.service';
 import { UserResponseDto } from '@users/dto/user-response.dto';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { SocialAuthStrategyFactory } from './social-auth.factory';
 import { OAuthStateService } from './oauth-state.service';
-import { Role } from '@common/types/enums';
+import { PendingSocialSignupService } from './pending-social-signup.service';
+import type {
+  AuthTokenResult,
+  OAuthCallbackOutcome,
+} from './dto/login-response.dto';
+import type { CompleteSocialSignupDto } from './dto/complete-social-signup.dto';
+import type { ArgumentsHost } from '@nestjs/common';
+import type { Request, Response } from 'express';
+import type { Logger as WinstonLogger } from 'winston';
+import { AllExceptionsFilter } from '@common/filters/all-exceptions.filter';
+import type { ErrorResponse } from '@common/types/api-response.type';
+import { Gender, Role } from '@common/types/enums';
 import { OAuthCallbackDto } from './dto/oauth-callback.dto';
 import { AccountPendingDeletionException } from '@common/exceptions/account-pending-deletion.exception';
 import { VARIABLES } from '@common/constants/variables.constants';
@@ -26,8 +38,20 @@ import { addDays, subDays } from 'date-fns';
 import { plainToInstance } from 'class-transformer';
 import { hashEmailForLog } from '@common/utils/log-identifier.util';
 
+/**
+ * Narrows a callback outcome to the signed-in arm, failing the test if the
+ * callback parked a pending signup instead.
+ */
+const signedIn = (outcome: OAuthCallbackOutcome): AuthTokenResult => {
+  if ('pendingSignupKey' in outcome) {
+    throw new Error('expected a sign-in, got a pending social signup');
+  }
+  return outcome;
+};
+
 describe('AuthService', () => {
   let service: AuthService;
+  let pendingStore: PendingSocialSignupService;
 
   const mockUser = {
     id: 1,
@@ -43,6 +67,8 @@ describe('AuthService', () => {
     findUserById: jest.fn(),
     isEmailRegistered: jest.fn(),
     createUser: jest.fn(),
+    createUserInTransaction: jest.fn(),
+    servicesExist: jest.fn(),
     validatePassword: jest.fn(),
     hasUsablePassword: jest.fn(),
     getPasswordCheckResult: jest.fn(),
@@ -86,10 +112,14 @@ describe('AuthService', () => {
           useValue: mockSocialAuthStrategyFactory,
         },
         { provide: OAuthStateService, useValue: mockOAuthStateService },
+        // The real in-memory store: the pending-signup tests are about what
+        // it ends up holding, not about which methods were called on it.
+        PendingSocialSignupService,
       ],
     }).compile();
 
     service = module.get<AuthService>(AuthService);
+    pendingStore = module.get(PendingSocialSignupService);
     jest.clearAllMocks();
     // Default to "has a usable password, not yet validated" so existing
     // loginUser tests (written before G10) don't need to know about the new
@@ -131,7 +161,7 @@ describe('AuthService', () => {
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('should default role to CUSTOMER when omitted and log registering user with email', async () => {
+    it('should default role to CUSTOMER when omitted and log the registration without the address (PR6)', async () => {
       const dto: CreateUserDto = {
         email: 'test@example.com',
         password: 'pass',
@@ -147,11 +177,15 @@ describe('AuthService', () => {
 
       expect(dto.role).toEqual(Role.CUSTOMER);
       expect(loggerSpy).toHaveBeenCalledWith(
-        `Registering User with email ${dto.email}`,
+        `Registering user with email hash ${hashEmailForLog(dto.email)}`,
       );
       expect(loggerSpy).toHaveBeenCalledWith(
-        `User registered with email ${mockUser.email}`,
+        `User registered with id: ${mockUser.id}`,
       );
+      // PR6: no log line carries a plaintext address.
+      const lines = loggerSpy.mock.calls.map((c) => String(c[0]));
+      expect(lines.some((l) => l.includes(dto.email))).toBe(false);
+      expect(lines.some((l) => l.includes(mockUser.email))).toBe(false);
     });
 
     it('should reject role: ADMIN on self-registration (S3)', async () => {
@@ -702,14 +736,25 @@ describe('AuthService', () => {
       expect(url).toEqual('https://accounts.google.com/authorize?...');
     });
 
+    it('normalizes `customer` and embeds it in the generated state', async () => {
+      await service.initiateOAuthFlow('google', 'Customer');
+
+      expect(mockOAuthStateService.generateState).toHaveBeenCalledWith(
+        'google',
+        Role.CUSTOMER,
+      );
+    });
+
+    // No silent CUSTOMER default any more: a missing role (the login page) is
+    // carried as "unknown", so the complete-signup page asks.
     it.each([undefined, '', 'admin', 'not-a-role'])(
-      'defaults role %p to CUSTOMER — never ADMIN',
+      'embeds no role for %p — never ADMIN, never a guessed CUSTOMER',
       async (role) => {
         await service.initiateOAuthFlow('google', role);
 
         expect(mockOAuthStateService.generateState).toHaveBeenCalledWith(
           'google',
-          Role.CUSTOMER,
+          undefined,
         );
       },
     );
@@ -779,9 +824,11 @@ describe('AuthService', () => {
       });
       mockUsersService.findUserByEmail.mockResolvedValueOnce(mockUser);
 
-      const { result, refreshToken } = await service.handleOAuthCallback(
-        'google',
-        { code: 'auth-code', state: 'state-123' } as OAuthCallbackDto,
+      const { result, refreshToken } = signedIn(
+        await service.handleOAuthCallback('google', {
+          code: 'auth-code',
+          state: 'state-123',
+        } as OAuthCallbackDto),
       );
 
       expect(mockUsersService.createUser).not.toHaveBeenCalled();
@@ -789,10 +836,9 @@ describe('AuthService', () => {
       expect(refreshToken).toEqual('refresh-token');
     });
 
-    it('registers a brand-new account with the state-embedded role, and logs it in immediately (G3/G5/G9)', async () => {
-      mockOAuthStateService.consumeState.mockReturnValueOnce({
-        role: Role.ARTISAN,
-      });
+    /** Wires the provider to return a profile no account exists for. */
+    const givenBrandNewProfile = (role: Role | undefined): void => {
+      mockOAuthStateService.consumeState.mockReturnValueOnce({ role });
       mockStrategy.getAccessToken.mockResolvedValueOnce(
         'provider-access-token',
       );
@@ -800,63 +846,64 @@ describe('AuthService', () => {
         email: 'new-social@example.com',
         firstname: 'New',
         lastname: 'Signup',
+        profilePicture: 'https://example.com/p.jpg',
         provider: 'google',
         providerId: 'google-id-2',
       });
       mockUsersService.findUserByEmail.mockResolvedValueOnce(null);
-      mockUsersService.createUser.mockResolvedValueOnce({
-        data: {
-          ...mockUser,
-          id: 2,
-          email: 'new-social@example.com',
-          role: Role.ARTISAN,
-          password: null,
-        },
-      });
+    };
 
-      const { result, refreshToken } = await service.handleOAuthCallback(
-        'google',
-        { code: 'auth-code', state: 'state-123' } as OAuthCallbackDto,
-      );
+    it('writes nothing for a brand-new user and parks a pending signup instead — no tokens', async () => {
+      givenBrandNewProfile(Role.ARTISAN);
 
-      expect(mockUsersService.createUser).toHaveBeenCalledWith(
-        expect.objectContaining({
-          email: 'new-social@example.com',
-          role: Role.ARTISAN,
-        }),
-      );
-      // G3: same AuthTokenResult shape as loginUser — no refresh token in the body.
-      expect(result).not.toHaveProperty('refresh_token');
-      expect(refreshToken).toEqual('refresh-token');
-    });
-
-    it('never creates an ADMIN account, even if the state somehow carried one (defense in depth, G9)', async () => {
-      mockOAuthStateService.consumeState.mockReturnValueOnce({
-        role: Role.ADMIN,
-      });
-      mockStrategy.getAccessToken.mockResolvedValueOnce(
-        'provider-access-token',
-      );
-      mockStrategy.getUserProfile.mockResolvedValueOnce({
-        email: 'sneaky@example.com',
-        firstname: 'Sneaky',
-        lastname: 'Signup',
-        provider: 'google',
-        providerId: 'google-id-3',
-      });
-      mockUsersService.findUserByEmail.mockResolvedValueOnce(null);
-      mockUsersService.createUser.mockResolvedValueOnce({
-        data: { ...mockUser, id: 3, email: 'sneaky@example.com' },
-      });
-
-      await service.handleOAuthCallback('google', {
+      const outcome = await service.handleOAuthCallback('google', {
         code: 'auth-code',
         state: 'state-123',
       } as OAuthCallbackDto);
 
-      expect(mockUsersService.createUser).toHaveBeenCalledWith(
-        expect.objectContaining({ role: Role.CUSTOMER }),
+      expect(Object.keys(outcome)).toEqual(['pendingSignupKey']);
+      expect(mockUsersService.createUser).not.toHaveBeenCalled();
+      expect(mockUsersService.createUserInTransaction).not.toHaveBeenCalled();
+      expect(mockUsersService.updateUserData).not.toHaveBeenCalled();
+      expect(mockUserTokenService.createJWTTokens).not.toHaveBeenCalled();
+      expect(mockEmitter.emit).not.toHaveBeenCalled();
+
+      const key = (outcome as { pendingSignupKey: string }).pendingSignupKey;
+      expect(pendingStore.peek(key)).toEqual(
+        expect.objectContaining({
+          email: 'new-social@example.com',
+          firstname: 'New',
+          lastname: 'Signup',
+          profilePicture: 'https://example.com/p.jpg',
+          provider: 'google',
+          providerId: 'google-id-2',
+          suggestedRole: Role.ARTISAN,
+        }),
       );
+    });
+
+    it('carries no suggested role when the flow started without one (the login page)', async () => {
+      givenBrandNewProfile(undefined);
+
+      const outcome = await service.handleOAuthCallback('google', {
+        code: 'auth-code',
+        state: 'state-123',
+      } as OAuthCallbackDto);
+
+      const key = (outcome as { pendingSignupKey: string }).pendingSignupKey;
+      expect(pendingStore.peek(key)?.suggestedRole).toBeUndefined();
+    });
+
+    it('never suggests ADMIN, even if the state somehow carried one (defense in depth, G9)', async () => {
+      givenBrandNewProfile(Role.ADMIN);
+
+      const outcome = await service.handleOAuthCallback('google', {
+        code: 'auth-code',
+        state: 'state-123',
+      } as OAuthCallbackDto);
+
+      const key = (outcome as { pendingSignupKey: string }).pendingSignupKey;
+      expect(pendingStore.peek(key)?.suggestedRole).toBeUndefined();
     });
 
     // C1.4: a Google-only account has no password, so the OAuth completion is
@@ -893,10 +940,12 @@ describe('AuthService', () => {
         isSocialLogin: true,
       });
 
-      const { refreshToken } = await service.handleOAuthCallback('google', {
-        code: 'auth-code',
-        state: 'state-123',
-      } as OAuthCallbackDto);
+      const { refreshToken } = signedIn(
+        await service.handleOAuthCallback('google', {
+          code: 'auth-code',
+          state: 'state-123',
+        } as OAuthCallbackDto),
+      );
 
       expect(mockUsersService.restoreAccountById).toHaveBeenCalledWith(8);
       // No duplicate account, and the user lands logged in.
@@ -990,11 +1039,13 @@ describe('AuthService', () => {
         );
       };
 
-      const completeFlow = () =>
-        service.handleOAuthCallback('google', {
-          code: 'auth-code',
-          state: 'state-123',
-        } as OAuthCallbackDto);
+      const completeFlow = async () =>
+        signedIn(
+          await service.handleOAuthCallback('google', {
+            code: 'auth-code',
+            state: 'state-123',
+          } as OAuthCallbackDto),
+        );
 
       const expectRefused = async (): Promise<void> => {
         await expect(completeFlow()).rejects.toThrow(UnauthorizedException);
@@ -1147,10 +1198,12 @@ describe('AuthService', () => {
         profilePicture: null,
       });
 
-      const { refreshToken } = await service.handleOAuthCallback('google', {
-        code: 'auth-code',
-        state: 'state-123',
-      } as OAuthCallbackDto);
+      const { refreshToken } = signedIn(
+        await service.handleOAuthCallback('google', {
+          code: 'auth-code',
+          state: 'state-123',
+        } as OAuthCallbackDto),
+      );
 
       expect(refreshToken).toBe('refresh-token');
       expect(
@@ -1243,11 +1296,7 @@ describe('AuthService', () => {
         refresh_token: 'refresh-token',
         expires_at: new Date(),
       });
-      mockUsersService.createUser.mockResolvedValueOnce({
-        data: { ...mockUser, id: 100 },
-      });
-
-      await service.handleOAuthCallback('google', {
+      const outcome = await service.handleOAuthCallback('google', {
         code: 'auth-code',
         state: 'state-123',
       } as OAuthCallbackDto);
@@ -1255,6 +1304,7 @@ describe('AuthService', () => {
       // The purged row is invisible to the restore lookup, so the callback
       // treats this as a brand-new signup — it never resurrects the old
       // account, and never emits a restore confirmation for it.
+      expect(outcome).toHaveProperty('pendingSignupKey');
       expect(mockUsersService.restoreAccountById).not.toHaveBeenCalled();
       expect(mockEmitter.emit).not.toHaveBeenCalledWith(
         MailEvent.ACCOUNT_RESTORED,
@@ -1491,7 +1541,7 @@ describe('AuthService', () => {
       username: 'hygiene',
       firstname: 'Hy',
       lastname: 'Giene',
-      phoneNumber: '024-000-0000',
+      phoneNumber: '+233240000000',
       role: Role.ARTISAN,
       accountVerified: true,
       // Credential material. Present in memory despite `select: false`.
@@ -1622,6 +1672,346 @@ describe('AuthService', () => {
         expect(keys).not.toContain(key);
       }
       expect(keys).toEqual(expect.arrayContaining(REQUIRED_KEYS));
+    });
+  });
+
+  /**
+   * The complete-signup step: a brand-new social user is parked by the
+   * callback (above) and only becomes an account here, with the role and
+   * details they chose.
+   */
+  describe('social signup completion', () => {
+    const KEY_PROFILE = {
+      email: 'new-social@example.com',
+      firstname: 'Ama',
+      lastname: 'Owusu',
+      profilePicture: 'https://example.com/p.jpg',
+      provider: 'google',
+      providerId: 'google-id-55',
+    };
+
+    const customerDto = (): CompleteSocialSignupDto => ({
+      role: Role.CUSTOMER,
+      firstname: ' Ama ',
+      lastname: 'Owusu',
+      phoneNumber: '+233245551234',
+      gender: Gender.FEMALE,
+    });
+
+    const artisanDto = (): CompleteSocialSignupDto => ({
+      role: Role.ARTISAN,
+      firstname: 'Ama',
+      lastname: 'Owusu',
+      phoneNumber: '+233245551234',
+      gender: Gender.FEMALE,
+      serviceIds: [1, 2],
+      location: ' Accra ',
+      hourlyRate: 50,
+      bio: 'Plumber with ten years in Accra.',
+      businessName: 'Owusu Plumbing',
+      experienceYears: 0,
+    });
+
+    /** Runs a thrown exception through the production filter, like the G10 contract spec. */
+    const envelopeFor = (exception: unknown): ErrorResponse => {
+      const json = jest.fn<void, [ErrorResponse]>();
+      const res = {
+        status: jest.fn().mockReturnValue({ json }),
+      } as unknown as Response;
+      const host = {
+        switchToHttp: () => ({
+          getResponse: () => res,
+          getRequest: () =>
+            ({
+              method: 'POST',
+              url: '/api/v1/auth/social/complete',
+            }) as unknown as Request,
+        }),
+      } as unknown as ArgumentsHost;
+      new AllExceptionsFilter({
+        error: jest.fn(),
+      } as unknown as WinstonLogger).catch(exception, host);
+      return json.mock.calls[0][0];
+    };
+
+    const catchError = async (fn: () => unknown): Promise<unknown> => {
+      try {
+        await fn();
+      } catch (e) {
+        return e;
+      }
+      throw new Error('expected a throw');
+    };
+
+    /** The (dto, options) of the one `createUserInTransaction` call. */
+    const createCall = () =>
+      mockUsersService.createUserInTransaction.mock.calls[0] as [
+        CreateUserDto,
+        CreateUserOptions,
+      ];
+
+    let key: string;
+
+    beforeEach(() => {
+      key = pendingStore.create({
+        ...KEY_PROFILE,
+        suggestedRole: Role.ARTISAN,
+      });
+      mockUsersService.servicesExist.mockResolvedValue(true);
+      mockUsersService.createUserInTransaction.mockImplementation(
+        (dto: CreateUserDto) =>
+          Promise.resolve({
+            data: { ...mockUser, ...dto, id: 77, accountVerified: true },
+          }),
+      );
+      mockUserTokenService.createJWTTokens.mockResolvedValue({
+        access_token: 'access-token',
+        refresh_token: 'refresh-token',
+        expires_at: new Date(),
+      });
+    });
+
+    describe('getPendingSocialSignup', () => {
+      it('returns the prefill data without consuming the entry', () => {
+        const response = service.getPendingSocialSignup(key);
+
+        expect(response.data).toEqual({
+          email: KEY_PROFILE.email,
+          firstname: 'Ama',
+          lastname: 'Owusu',
+          profilePicture: 'https://example.com/p.jpg',
+          suggestedRole: Role.ARTISAN,
+          provider: 'google',
+        });
+        expect(pendingStore.peek(key)).not.toBeNull();
+      });
+
+      it('reports a missing suggested role and picture as null', () => {
+        const bare = pendingStore.create({
+          ...KEY_PROFILE,
+          profilePicture: undefined,
+        });
+
+        const { data } = service.getPendingSocialSignup(bare);
+
+        expect(data.suggestedRole).toBeNull();
+        expect(data.profilePicture).toBeNull();
+      });
+
+      it.each([undefined, 'unknown-key'])(
+        'refuses %p with 401 SOCIAL_SIGNUP_EXPIRED',
+        async (k) => {
+          const err = await catchError(() => service.getPendingSocialSignup(k));
+
+          expect(err).toBeInstanceOf(UnauthorizedException);
+          const envelope = envelopeFor(err);
+          expect(envelope.meta.statusCode).toBe(401);
+          expect(envelope.meta.error).toBe(SOCIAL_SIGNUP_EXPIRED_ERROR_CODE);
+          expect(envelope.message).toBe(
+            ERROR_MESSAGES.AUTH.SOCIAL_SIGNUP_EXPIRED,
+          );
+        },
+      );
+
+      it('treats an entry past its TTL as absent', async () => {
+        jest.useFakeTimers({ now: Date.now() });
+        try {
+          const k = pendingStore.create(KEY_PROFILE);
+          jest.advanceTimersByTime(VARIABLES.PENDING_SOCIAL_SIGNUP_TTL_MS + 1);
+
+          const err = await catchError(() => service.getPendingSocialSignup(k));
+          expect(envelopeFor(err).meta.error).toBe(
+            SOCIAL_SIGNUP_EXPIRED_ERROR_CODE,
+          );
+        } finally {
+          jest.useRealTimers();
+        }
+      });
+    });
+
+    describe('completeSocialSignup', () => {
+      it('creates a verified, Google-linked CUSTOMER with the chosen details, in one transaction, and signs in', async () => {
+        const { result, refreshToken } = await service.completeSocialSignup(
+          key,
+          customerDto(),
+        );
+
+        expect(mockUsersService.createUserInTransaction).toHaveBeenCalledTimes(
+          1,
+        );
+        const [dto, options] = createCall();
+        expect(dto).toEqual(
+          expect.objectContaining({
+            email: KEY_PROFILE.email,
+            firstname: 'Ama',
+            lastname: 'Owusu',
+            phoneNumber: '+233245551234',
+            gender: Gender.FEMALE,
+            profilePicture: KEY_PROFILE.profilePicture,
+            socialProvider: 'google',
+            socialProviderId: 'google-id-55',
+            isSocialLogin: true,
+            role: Role.CUSTOMER,
+          }),
+        );
+        expect(dto.password).toBeUndefined();
+        expect(options.verifiedAt).toBeInstanceOf(Date);
+        expect(options.artisanProfile).toBeUndefined();
+        // Never the old two-step create-then-update.
+        expect(mockUsersService.createUser).not.toHaveBeenCalled();
+        expect(mockUsersService.updateUserData).not.toHaveBeenCalled();
+
+        expect(result.access_token).toBe('access-token');
+        expect(result).not.toHaveProperty('refresh_token');
+        expect(result.data.role).toBe(Role.CUSTOMER);
+        expect(refreshToken).toBe('refresh-token');
+        // Consumed.
+        expect(pendingStore.peek(key)).toBeNull();
+        expect(mockEmitter.emit).toHaveBeenCalledWith(
+          MailEvent.SOCIAL_USER_REGISTERED,
+          expect.objectContaining({
+            email: KEY_PROFILE.email,
+            provider: 'google',
+          }),
+        );
+      });
+
+      it('ignores artisan-only fields on a CUSTOMER signup', async () => {
+        await service.completeSocialSignup(key, {
+          ...artisanDto(),
+          role: Role.CUSTOMER,
+        });
+
+        const [, options] = createCall();
+        expect(options.artisanProfile).toBeUndefined();
+        expect(mockUsersService.servicesExist).not.toHaveBeenCalled();
+      });
+
+      it('creates an ARTISAN with a filled-in profile and emits ARTISAN_REGISTERED', async () => {
+        await service.completeSocialSignup(key, artisanDto());
+
+        expect(mockUsersService.servicesExist).toHaveBeenCalledWith([1, 2]);
+        const [dto, options] = createCall();
+        expect(dto.role).toBe(Role.ARTISAN);
+        expect(options.artisanProfile).toEqual({
+          bio: 'Plumber with ten years in Accra.',
+          hourlyRate: 50,
+          location: 'Accra',
+          serviceIds: [1, 2],
+          businessName: 'Owusu Plumbing',
+          // "0 years" is stored as not set: the column only admits > 0.
+          experienceYears: undefined,
+        });
+        expect(mockEmitter.emit).toHaveBeenCalledWith(
+          'artisan.registered',
+          expect.objectContaining({ artisanUserId: 77 }),
+        );
+      });
+
+      it('creates an ARTISAN without a bio, storing null (B1)', async () => {
+        await service.completeSocialSignup(key, {
+          ...artisanDto(),
+          bio: undefined,
+        });
+
+        const [, options] = createCall();
+        expect(options.artisanProfile).toEqual(
+          expect.objectContaining({ bio: null, location: 'Accra' }),
+        );
+      });
+
+      it('rejects an unknown service before touching the pending entry', async () => {
+        mockUsersService.servicesExist.mockResolvedValueOnce(false);
+
+        await expect(
+          service.completeSocialSignup(key, artisanDto()),
+        ).rejects.toThrow(BadRequestException);
+
+        expect(pendingStore.peek(key)).not.toBeNull();
+        expect(mockUsersService.createUserInTransaction).not.toHaveBeenCalled();
+      });
+
+      it('refuses a missing/expired entry with 401 SOCIAL_SIGNUP_EXPIRED and creates nothing', async () => {
+        const err = await catchError(() =>
+          service.completeSocialSignup('unknown-key', customerDto()),
+        );
+
+        expect(err).toBeInstanceOf(UnauthorizedException);
+        expect(envelopeFor(err).meta.error).toBe(
+          SOCIAL_SIGNUP_EXPIRED_ERROR_CODE,
+        );
+        expect(mockUsersService.createUserInTransaction).not.toHaveBeenCalled();
+        expect(mockUserTokenService.createJWTTokens).not.toHaveBeenCalled();
+      });
+
+      it('a second submit of the same entry is refused — one account, never two', async () => {
+        await service.completeSocialSignup(key, customerDto());
+        const err = await catchError(() =>
+          service.completeSocialSignup(key, customerDto()),
+        );
+
+        expect(envelopeFor(err).meta.error).toBe(
+          SOCIAL_SIGNUP_EXPIRED_ERROR_CODE,
+        );
+        expect(mockUsersService.createUserInTransaction).toHaveBeenCalledTimes(
+          1,
+        );
+      });
+
+      it('refuses with 409 and creates nothing when the address was registered meanwhile', async () => {
+        mockUsersService.isEmailRegistered.mockResolvedValueOnce(true);
+
+        await expect(
+          service.completeSocialSignup(key, customerDto()),
+        ).rejects.toThrow(UserAlreadyExists);
+
+        expect(mockUsersService.isEmailRegistered).toHaveBeenCalledWith(
+          KEY_PROFILE.email,
+        );
+        expect(mockUsersService.createUserInTransaction).not.toHaveBeenCalled();
+        expect(mockUserTokenService.createJWTTokens).not.toHaveBeenCalled();
+      });
+
+      it('keeps the pending entry when creation fails, so the user can fix and resubmit', async () => {
+        mockUsersService.createUserInTransaction.mockRejectedValueOnce(
+          new Error('duplicate key value violates "phone_number"'),
+        );
+
+        await expect(
+          service.completeSocialSignup(key, customerDto()),
+        ).rejects.toThrow('phone_number');
+
+        expect(pendingStore.peek(key)).not.toBeNull();
+        expect(mockUserTokenService.createJWTTokens).not.toHaveBeenCalled();
+        expect(mockEmitter.emit).not.toHaveBeenCalled();
+
+        // …and the retry goes through on the same entry.
+        await service.completeSocialSignup(key, {
+          ...customerDto(),
+          phoneNumber: '+233245559999',
+        });
+        expect(pendingStore.peek(key)).toBeNull();
+      });
+
+      it('never creates an ADMIN, even if one slipped past the DTO (defense in depth, G9)', async () => {
+        await expect(
+          service.completeSocialSignup(key, {
+            ...customerDto(),
+            role: Role.ADMIN as unknown as Role.CUSTOMER,
+          }),
+        ).rejects.toThrow(BadRequestException);
+        expect(mockUsersService.createUserInTransaction).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('cancelSocialSignup', () => {
+      it('discards the entry, and is idempotent', () => {
+        service.cancelSocialSignup(key);
+        expect(pendingStore.peek(key)).toBeNull();
+
+        expect(() => service.cancelSocialSignup(key)).not.toThrow();
+        expect(() => service.cancelSocialSignup(undefined)).not.toThrow();
+      });
     });
   });
 });
