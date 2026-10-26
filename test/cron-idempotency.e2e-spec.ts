@@ -1,7 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, Logger } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
+import { removeTestData, testUserIds } from './helpers/test-data';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { App } from 'supertest/types';
 import { AppModule } from '../src/app.module';
@@ -115,6 +116,12 @@ describe('Scheduler crons — A5/A7/J2 real triggered-twice idempotency (e2e)', 
   });
 
   afterAll(async () => {
+    // Leave the shared dev database holding only its seed data.
+    const dataSource = app.get(DataSource);
+    await removeTestData(dataSource, {
+      userIds: await testUserIds(dataSource, 'cron-'),
+      serviceIds: serviceId ? [serviceId] : [],
+    });
     await app.close();
   });
 

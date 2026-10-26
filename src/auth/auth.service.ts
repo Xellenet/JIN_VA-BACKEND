@@ -20,7 +20,7 @@ import {
 import { VARIABLES } from '@common/constants/variables.constants';
 import { SUCCESS_MESSAGES } from '@common/constants/success-messages.constants';
 import { InvalidCredentialsException } from '@common/exceptions/invalid-credentials.exceptions';
-import { SocialOnlyAccountException } from '@common/exceptions/social-only-account.exception';
+import { AccountBannedException } from '@common/exceptions/account-banned.exception';
 import { AccountPendingDeletionException } from '@common/exceptions/account-pending-deletion.exception';
 import {
   isWithinRecoveryWindow,
@@ -231,12 +231,17 @@ export class AuthService {
     const { hasPassword, isValid } =
       await this.userService.getPasswordCheckResult(password, user.id);
 
+    // QA SEC-14: a Google-only account used to get its own "signs in with
+    // Google" error for any password, which confirmed the email was
+    // registered without proving ownership. It now gets the same answer, in
+    // the same time, as a wrong password; the login page offers Google and
+    // "Forgot password" to everyone.
     if (!hasPassword) {
       this.logger.warn(
-        `Login blocked for social-only account (no usable password): user ${user.id}`,
+        `Login refused for social-only account (no usable password): user ${user.id}`,
       );
-      throw new SocialOnlyAccountException(
-        ERROR_MESSAGES.AUTH.SOCIAL_ONLY_ACCOUNT,
+      throw new InvalidCredentialsException(
+        ERROR_MESSAGES.AUTH.INVALID_CREDENTIALS,
       );
     }
 
@@ -245,6 +250,13 @@ export class AuthService {
       throw new InvalidCredentialsException(
         ERROR_MESSAGES.AUTH.INVALID_CREDENTIALS,
       );
+    }
+
+    // QA AUTH-17: only after the password is proven, so a ban reveals nothing
+    // to someone guessing passwords.
+    if (user.isBanned) {
+      this.logger.warn(`Login blocked for banned account: user ${user.id}`);
+      throw new AccountBannedException();
     }
 
     // S4: block login until the account's email has been verified. Kept as a
@@ -637,7 +649,7 @@ export class AuthService {
       throw new BadRequestException('Passwords do not match');
     }
 
-    this.logger.log(`Resetting password using token ${token}`);
+    this.logger.log('Resetting password with a reset token');
     const user = await this.userTokenService.validateToken(
       token,
       Token.PASSWORD_RESET,
@@ -688,6 +700,12 @@ export class AuthService {
     if (!user) {
       throw new BadRequestException(ERROR_MESSAGES.AUTH.INVALID_REFRESH_TOKEN);
     }
+    // The presented token is already consumed above, so a banned account's
+    // session ends here instead of being renewed for another 7 days.
+    if (user.isBanned) {
+      this.logger.warn(`Refresh refused for banned account: user ${user.id}`);
+      throw new AccountBannedException();
+    }
 
     this.logger.log(`Generating new tokens for user with id: ${user.id}`);
     const { access_token, refresh_token, expires_at } =
@@ -718,6 +736,14 @@ export class AuthService {
     const user = await this.userService.findUserById(userId);
     if (!user) {
       throw new BadRequestException('User not found');
+    }
+
+    // QA AUTH-28: the confirmation was never compared, so a typo in the new
+    // password became the password. Same rule as resetPassword.
+    if (
+      changePasswordDto.newPassword !== changePasswordDto.confirmNewPassword
+    ) {
+      throw new BadRequestException('Passwords do not match');
     }
 
     const isMatch = await this.userService.validatePassword(
@@ -875,6 +901,12 @@ export class AuthService {
     if (user) {
       // G6: an existing account is found by email — the role param (if any)
       // is ignored entirely; it can only ever affect a brand-new account.
+      if (user.isBanned) {
+        this.logger.warn(
+          `Google sign-in refused for banned account: user ${user.id}`,
+        );
+        throw new AccountBannedException();
+      }
       user = await this.updateSocialLoginInfo(user, socialProfile);
     } else {
       // C1.4: the recovery path must not be password-only. A Google-only

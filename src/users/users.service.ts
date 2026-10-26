@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   Logger,
   NotFoundException,
@@ -10,7 +11,8 @@ import { UpdateMeDto } from './dto/update-me.dto';
 import { UserResponseDto } from './dto/user-response.dto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { User } from './entities/user.entity';
-import { EntityManager, In, IsNull, Not, Repository } from 'typeorm';
+import { EntityManager, In, IsNull, Not, Raw, Repository } from 'typeorm';
+import { normalizeEmail } from '@common/utils/email.util';
 import { UserAlreadyExists } from '@common/exceptions/user-already-exists.exception';
 import { ERROR_MESSAGES } from '@common/constants/error-messages.constants';
 import { SUCCESS_MESSAGES } from '@common/constants/success-messages.constants';
@@ -171,6 +173,7 @@ export class UsersService {
       : null;
     const user = usersRepository.create({
       ...createUserDto,
+      email: normalizeEmail(email),
       password: hashedPassword,
       ...(verifiedAt ? { accountVerified: true, verifiedAt } : {}),
     });
@@ -291,10 +294,35 @@ export class UsersService {
 
     return {
       message: SUCCESS_MESSAGES.USER.RETRIEVED,
-      data: plainToInstance(UserResponseDto, user, {
-        excludeExtraneousValues: true,
-      }),
+      data: await this.withOwnNationalId(
+        plainToInstance(UserResponseDto, user, {
+          excludeExtraneousValues: true,
+        }),
+      ),
     };
+  }
+
+  /**
+   * QA CUS-07: adds the caller's own national ID, masked, to their `/users/me`
+   * response. Kept out of `UserResponseDto` so no other view can expose it.
+   */
+  private async withOwnNationalId(
+    data: UserResponseDto,
+  ): Promise<UserResponseDto & { nationalId?: string }> {
+    const nationalId = await this.loadNationalId(data.id);
+    return nationalId
+      ? { ...data, nationalId: maskNationalId(nationalId) }
+      : data;
+  }
+
+  private async loadNationalId(userId: number): Promise<string | null> {
+    const row = await this.usersRepository
+      .createQueryBuilder('u')
+      .select('u.id')
+      .addSelect('u.nationalId')
+      .where('u.id = :userId', { userId })
+      .getOne();
+    return row?.nationalId ?? null;
   }
 
   /**
@@ -320,15 +348,49 @@ export class UsersService {
       throw new NotFoundException(`User with ID ${userId} not found`);
     }
 
-    Object.assign(user, updateMeDto);
-    const saved = await this.usersRepository.save(user);
+    const { nationalId, ...profile } = updateMeDto;
+    const changes: Partial<User> = { ...(profile as Partial<User>) };
+    if (nationalId != null) {
+      // QA CUS-07: set once. A typo is corrected by support, not by the user,
+      // so an ID can't be swapped after it has been relied on.
+      const current = await this.loadNationalId(userId);
+      if (current && current !== nationalId) {
+        throw new BadRequestException(ERROR_MESSAGES.USER.NATIONAL_ID_LOCKED);
+      }
+      if (!current) {
+        const taken = await this.usersRepository
+          .createQueryBuilder('u')
+          .withDeleted()
+          .where('u.nationalId = :nationalId', { nationalId })
+          .andWhere('u.id <> :userId', { userId })
+          .getExists();
+        if (taken) {
+          throw new ConflictException(ERROR_MESSAGES.USER.NATIONAL_ID_IN_USE);
+        }
+        changes.nationalId = nationalId;
+      }
+    }
+
+    // QA RES-09: one UPDATE with every field this request sent, rather than
+    // load-merge-save, so two saves racing from two tabs can't interleave
+    // field by field. The last request wins whole.
+    if (Object.keys(changes).length > 0) {
+      await this.usersRepository.update(userId, changes);
+    }
+    const saved =
+      (await this.usersRepository.findOne({
+        where: { id: userId },
+        relations: ['addresses'],
+      })) ?? user;
     this.logger.log(`User ${userId} updated their own profile`);
 
     return {
       message: SUCCESS_MESSAGES.USER.UPDATED,
-      data: plainToInstance(UserResponseDto, saved, {
-        excludeExtraneousValues: true,
-      }),
+      data: await this.withOwnNationalId(
+        plainToInstance(UserResponseDto, saved, {
+          excludeExtraneousValues: true,
+        }),
+      ),
     };
   }
 
@@ -480,7 +542,7 @@ export class UsersService {
     // log readers an enumeration oracle that the response bodies deliberately
     // are not.
     this.logger.log(`Finding user by email hash ${hashEmailForLog(email)}`);
-    return this.usersRepository.findOne({ where: { email } });
+    return this.usersRepository.findOne({ where: { email: sameEmail(email) } });
   }
 
   /**
@@ -507,7 +569,7 @@ export class UsersService {
       throw new NotFoundException('Email required');
     }
     const existing = await this.usersRepository.findOne({
-      where: { email },
+      where: { email: sameEmail(email) },
       withDeleted: true,
       select: ['id'],
     });
@@ -539,7 +601,11 @@ export class UsersService {
       throw new NotFoundException('Email required');
     }
     return this.usersRepository.findOne({
-      where: { email, deletedAt: Not(IsNull()), purgedAt: IsNull() },
+      where: {
+        email: sameEmail(email),
+        deletedAt: Not(IsNull()),
+        purgedAt: IsNull(),
+      },
       withDeleted: true,
     });
   }
@@ -1143,4 +1209,20 @@ export class UsersService {
       excludeExtraneousValues: true,
     });
   }
+}
+
+/** Shows only the last 4 characters of a national ID, e.g. `•••••••••••89-0`. */
+export function maskNationalId(nationalId: string): string {
+  const visible = nationalId.slice(-4);
+  return '•'.repeat(Math.max(nationalId.length - 4, 0)) + visible;
+}
+
+/**
+ * QA AUTH-04: matches an address whatever its case, so rows stored before
+ * normalisation (and any typed in another case) still resolve.
+ */
+function sameEmail(email: string) {
+  return Raw((column) => `LOWER(${column}) = :normalizedEmail`, {
+    normalizedEmail: normalizeEmail(email),
+  });
 }

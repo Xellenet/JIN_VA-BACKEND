@@ -101,13 +101,11 @@ describe('resolveLegacyMediaPlan (BI2)', () => {
       });
     }
 
-    it('serves exactly the five public folders and nothing else', () => {
+    it('serves exactly the three public folders and nothing else (QA MSG-18)', () => {
       expect(resolveLegacyMediaPlan({}).servedFolders).toEqual([
         'avatars',
         'portfolio',
         'reviews',
-        'messages',
-        'job-attachments',
       ]);
     });
 

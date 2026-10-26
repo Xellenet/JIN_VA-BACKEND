@@ -23,6 +23,7 @@ import {
 import { AdminService } from './admin.service';
 import {
   AdminJobsQueryDto,
+  AdminArtisansQueryDto,
   AdminUsersQueryDto,
   AdminBookingsQueryDto,
   AdminSearchQueryDto,
@@ -265,11 +266,8 @@ export class AdminController {
 
   @Get('artisans')
   @ApiOperation({ summary: 'List all artisan profiles' })
-  listArtisans(
-    @Query('page', new ParseIntPipe({ optional: true })) page?: number,
-    @Query('limit', new ParseIntPipe({ optional: true })) limit?: number,
-  ) {
-    return this.adminService.listArtisans(page, limit);
+  listArtisans(@Query() query: AdminArtisansQueryDto) {
+    return this.adminService.listArtisans(query);
   }
 
   // ─── Verifications ────────────────────────────────────────────────────────────

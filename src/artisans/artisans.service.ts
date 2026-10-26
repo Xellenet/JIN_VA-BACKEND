@@ -21,7 +21,7 @@ import {
 import { UpdateArtisanProfileDto } from '@users/dto/update-artisan-profile.dto';
 import { ArtisanProfileResponseDto } from '@users/dto/artisan-profile-response.dto';
 import { SUCCESS_MESSAGES } from '@common/constants/success-messages.constants';
-import { Status } from '@common/types/enums';
+import { Role, Status } from '@common/types/enums';
 type Pagination = {
   total: number;
   page: number;
@@ -139,7 +139,10 @@ export class ArtisansService {
    * @throws {NotFoundException} When no artisan profile with the given ID
    *   exists, or when its owning account is soft-deleted or purged.
    */
-  async findById(artisanProfileId: number): Promise<PublicItem> {
+  async findById(
+    artisanProfileId: number,
+    viewer?: { id: number; role: Role },
+  ): Promise<PublicItem> {
     const profile = await this.artisanProfileRepository.findOne({
       where: { id: artisanProfileId },
       relations: ['user', 'services'],
@@ -156,7 +159,18 @@ export class ArtisansService {
     // or shared artisan link broke rather than saying "not found"), and a
     // 500-vs-404 difference is itself an oracle for "this artisan deleted
     // their account". Nonexistent, soft-deleted and purged are indistinguishable.
-    if (!profile || !profile.user) {
+    // QA SRCH-15: an artisan hidden from search (suspended, banned or with an
+    // incomplete profile) also gets the not-found answer by direct link, so
+    // they can't be booked from a saved URL. They and admins still see it.
+    const isOwnerOrAdmin =
+      viewer?.role === Role.ADMIN ||
+      (profile?.user != null && viewer?.id === profile.user.id);
+    const hidden =
+      profile?.user != null &&
+      (profile.user.isBanned ||
+        profile.user.isSuspended ||
+        !profile.isProfileComplete);
+    if (!profile || !profile.user || (hidden && !isOwnerOrAdmin)) {
       throw new NotFoundException(
         `Artisan profile with id ${artisanProfileId} not found.`,
       );
@@ -513,7 +527,12 @@ export class ArtisansService {
         break;
       case ArtisanSortBy.RATING:
       default:
-        qb.orderBy('ap.weightedRating', 'DESC');
+        // QA SRCH-09: ties (most often between artisans nobody has reviewed,
+        // all at 0) used to come back in no particular order; break them by
+        // review count, then oldest profile, so the list is stable.
+        qb.orderBy('ap.weightedRating', 'DESC')
+          .addOrderBy('ap.totalReviews', 'DESC')
+          .addOrderBy('ap.id', 'ASC');
         break;
     }
   }

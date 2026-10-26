@@ -5,8 +5,10 @@ import {
   IsIn,
   IsOptional,
   IsString,
+  Matches,
   MaxLength,
 } from 'class-validator';
+import { Transform } from 'class-transformer';
 import { VALIDATION_MESSAGES } from '@common/constants/validation-messages.constants';
 import {
   IsSupportedPhoneNumber,
@@ -85,4 +87,20 @@ export class UpdateMeDto {
   @IsOptional()
   @IsString()
   profilePicture?: string;
+
+  @ApiPropertyOptional({
+    example: 'GHA-123456789-0',
+    description:
+      'National ID (e.g. Ghana Card number). Can be set once; changing it needs support.',
+  })
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim().toUpperCase() : value,
+  )
+  @IsString()
+  @Matches(/^[A-Z0-9][A-Z0-9-]{4,29}$/, {
+    message:
+      'nationalId must be 5 to 30 letters, numbers or dashes, like GHA-123456789-0',
+  })
+  nationalId?: string;
 }

@@ -19,18 +19,17 @@ import { BookingStatus, Status } from '@common/types/enums';
  * is exactly why this guard exists as its own spec rather than as an assertion
  * buried in a broader confirm() test.
  *
- * Note for whoever picks up the payments follow-up: this proves the *link* is
- * written. It does not (and cannot) prove a payment exists on the other end —
- * `confirm()` deliberately does not call `PaymentsService.holdPayment`, so
- * booking-derived jobs hold no money yet. See `api-contract.md` under DR3.
+ * QA JOB-22: `confirm()` now also creates the job's payment, inside the same
+ * transaction, at the booking's agreed price or the price the artisan sets
+ * while confirming.
  */
 describe('BookingsService — DR3: confirm() links the Job to its Booking', () => {
-  function buildService() {
+  function buildService({ agreedPrice = 150 as number | null } = {}) {
     const bookingRow = {
       id: 77,
       status: BookingStatus.PENDING,
       currency: 'GHS',
-      agreedPrice: 150,
+      agreedPrice,
       notes: 'Leak under the kitchen sink.',
       attachmentUrls: [],
       customerId: 42,
@@ -83,6 +82,9 @@ describe('BookingsService — DR3: confirm() links the Job to its Booking', () =
       ),
     };
     const eventEmitter = { emit: jest.fn() };
+    const paymentsService = {
+      holdPayment: jest.fn(() => Promise.resolve('jinva-200-42-1')),
+    };
 
     const service = new BookingsService(
       bookingRepo as never,
@@ -93,9 +95,19 @@ describe('BookingsService — DR3: confirm() links the Job to its Booking', () =
       dataSource as never,
       {} as never,
       eventEmitter as never,
+      paymentsService as never,
+      {} as never,
     );
 
-    return { service, createdJobs, bookingRow, jobRepo };
+    return {
+      service,
+      createdJobs,
+      bookingRow,
+      jobRepo,
+      bookingRepo,
+      paymentsService,
+      manager,
+    };
   }
 
   it('writes the booking relation onto the job it creates', async () => {
@@ -130,5 +142,64 @@ describe('BookingsService — DR3: confirm() links the Job to its Booking', () =
     const result = await service.confirm(20, 77, {});
 
     expect(result.data).toEqual({ jobId: 200 });
+  });
+
+  describe('payment (QA JOB-22)', () => {
+    it('creates the payment at the agreed price, in the same transaction', async () => {
+      const { service, paymentsService, manager, jobRepo } = buildService();
+
+      await service.confirm(20, 77, {});
+
+      expect(paymentsService.holdPayment).toHaveBeenCalledWith(
+        200,
+        42,
+        20,
+        150,
+        manager,
+      );
+      expect(jobRepo.save).toHaveBeenLastCalledWith(
+        expect.objectContaining({ paymentIntentId: 'jinva-200-42-1' }),
+      );
+    });
+
+    it("uses the artisan's price when the booking has none, and records it", async () => {
+      const { service, paymentsService, createdJobs, bookingRow } =
+        buildService({ agreedPrice: null });
+
+      await service.confirm(20, 77, { price: 220 });
+
+      expect(paymentsService.holdPayment).toHaveBeenCalledWith(
+        200,
+        42,
+        20,
+        220,
+        expect.anything(),
+      );
+      expect(createdJobs[0]).toEqual(
+        expect.objectContaining({ budgetMin: 220, budgetMax: 220 }),
+      );
+      expect(bookingRow.agreedPrice).toBe(220);
+    });
+
+    it('refuses to confirm a booking with no price, changing nothing', async () => {
+      const { service, paymentsService, bookingRepo } = buildService({
+        agreedPrice: null,
+      });
+
+      await expect(service.confirm(20, 77, {})).rejects.toThrow(
+        /Set your price/,
+      );
+      expect(bookingRepo.save).not.toHaveBeenCalled();
+      expect(paymentsService.holdPayment).not.toHaveBeenCalled();
+    });
+
+    it("won't let the artisan change a price the customer already agreed", async () => {
+      const { service, bookingRepo } = buildService();
+
+      await expect(service.confirm(20, 77, { price: 300 })).rejects.toThrow(
+        /already has an agreed price of GHS 150.00/,
+      );
+      expect(bookingRepo.save).not.toHaveBeenCalled();
+    });
   });
 });

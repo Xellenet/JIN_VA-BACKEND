@@ -8,9 +8,9 @@ import { LocalStorageProvider } from './providers/local-storage.provider';
 import { StorageProviderFactory } from './providers/storage-provider.factory';
 import type { PrivateMediaObject } from './providers/storage-provider.interface';
 import {
-  isPrivateUploadFolder,
+  isKycUploadFolder,
   isSafeMediaFilename,
-  PRIVATE_UPLOAD_FOLDERS,
+  KYC_UPLOAD_FOLDERS,
 } from './upload-folders';
 
 /**
@@ -54,9 +54,11 @@ export class KycMediaService {
     filename: string,
     adminUserId: number,
   ): Promise<PrivateMediaObject> {
-    if (!isPrivateUploadFolder(folder)) {
+    // Only the KYC folders: message and job photos are private too (QA
+    // MSG-18), but they have their own per-person access rules.
+    if (!isKycUploadFolder(folder)) {
       throw new BadRequestException(
-        `Unknown KYC media folder. Expected one of: ${PRIVATE_UPLOAD_FOLDERS.join(', ')}.`,
+        `Unknown KYC media folder. Expected one of: ${KYC_UPLOAD_FOLDERS.join(', ')}.`,
       );
     }
     if (!isSafeMediaFilename(filename)) {
@@ -115,7 +117,7 @@ export class KycMediaService {
     const filename = segments.at(-1) ?? '';
     const folder = segments.at(-2) ?? '';
 
-    if (!isPrivateUploadFolder(folder) || !isSafeMediaFilename(filename)) {
+    if (!isKycUploadFolder(folder) || !isSafeMediaFilename(filename)) {
       this.logger.warn(
         `Not a recognisable KYC media reference; nothing deleted for it.`,
       );

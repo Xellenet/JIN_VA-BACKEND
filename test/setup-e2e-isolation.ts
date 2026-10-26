@@ -23,6 +23,8 @@ import { SmtpMailProvider } from '../src/mail/providers/smtp-mail.provider';
 import { PaystackService } from '../src/payments/paystack.service';
 import { FcmPushProvider } from '../src/push-notifications/providers/fcm-push.provider';
 import { S3StorageProvider } from '../src/uploads/providers/s3-storage.provider';
+import { config as loadEnv } from 'dotenv';
+import { DataSource } from 'typeorm';
 
 process.env.STORAGE_PROVIDER = 'local';
 process.env.STORAGE_PUBLIC_DELIVERY = 'direct';
@@ -81,3 +83,45 @@ for (const name of [
 ]) {
   patch(PaystackService.prototype, name, refuse(`Paystack ${name}`));
 }
+
+/*
+ * Keep the shared dev database at its seed data. A suite's own users take their
+ * rows with them (everything cascades from `users`), but notifications the
+ * suite caused for SEED accounts (e.g. every admin's "dispute filed" alert)
+ * would otherwise pile up. Remove whatever notifications appeared while this
+ * file ran. Caveat: this also removes notifications created by someone using
+ * the app against the same database during the run.
+ */
+loadEnv({ quiet: true });
+let suiteStartedAt: string | undefined;
+const withDb = async <T>(fn: (db: DataSource) => Promise<T>): Promise<T> => {
+  const db = new DataSource({
+    type: 'postgres',
+    host: process.env.DB_HOST,
+    port: Number(process.env.DB_PORT),
+    username: process.env.DB_USER,
+    password: process.env.DB_PASS,
+    database: process.env.DB_NAME,
+  });
+  await db.initialize();
+  try {
+    return await fn(db);
+  } finally {
+    await db.destroy();
+  }
+};
+
+beforeAll(async () => {
+  const rows: Array<{ now: string }> = await withDb((db) =>
+    db.query('SELECT now()::text AS now'),
+  );
+  suiteStartedAt = rows[0].now;
+});
+
+afterAll(async () => {
+  if (!suiteStartedAt) return;
+  const since = suiteStartedAt;
+  await withDb((db) =>
+    db.query('DELETE FROM notifications WHERE created_at >= $1', [since]),
+  );
+});

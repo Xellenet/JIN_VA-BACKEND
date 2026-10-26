@@ -12,17 +12,22 @@ import {
   IsPositive,
   IsString,
   MaxLength,
+  MinLength,
   Min,
 } from 'class-validator';
 import { IsAttachmentUrl } from '@common/validators/is-attachment-url.decorator';
+import { TrimText } from '@common/validators/trim-text.decorator';
 
 export class CreateJobDto {
   @ApiProperty({
     example: 'Leaky faucet repair',
     description: 'Short job title (max 150 chars)',
   })
+  // QA JOB-02: the same minimums the post-a-job form shows.
+  @TrimText()
   @IsString()
   @IsNotEmpty()
+  @MinLength(5, { message: 'Title must be at least 5 characters.' })
   @MaxLength(150)
   title!: string;
 
@@ -32,7 +37,9 @@ export class CreateJobDto {
     description: 'Full description of work required (max 2000 chars)',
   })
   @IsOptional()
+  @TrimText()
   @IsString()
+  @MinLength(10, { message: 'Description must be at least 10 characters.' })
   @MaxLength(2000)
   description?: string;
 

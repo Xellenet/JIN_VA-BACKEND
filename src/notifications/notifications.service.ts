@@ -153,6 +153,24 @@ const ADMIN_PREF_KEY: Partial<
   [NotificationType.ARTISAN_REGISTERED]: 'artisanRegistered',
 };
 
+/**
+ * The preference that gates a notification type for a recipient's role, or
+ * undefined when the type is always delivered. QA NOT-09: email reads the
+ * same rules as in-app, through this.
+ */
+export function preferenceKeyFor(
+  role: Role,
+  type: NotificationType,
+): keyof NotificationPreferences | undefined {
+  const map =
+    role === Role.ARTISAN
+      ? ARTISAN_PREF_KEY
+      : role === Role.ADMIN
+        ? ADMIN_PREF_KEY
+        : CUSTOMER_PREF_KEY;
+  return map[type];
+}
+
 // Fields each role is allowed to update — prevents artisans from setting customer flags
 const CUSTOMER_UPDATABLE = new Set<keyof NotificationPreferences>([
   'bookingConfirmations',
@@ -451,7 +469,7 @@ export class NotificationsService {
       payload.recipientUserId,
       NotificationType.BOOKING_REMINDER,
       'Upcoming Appointment Reminder',
-      `Reminder: you have an appointment on ${payload.scheduledDate} at ${payload.startTime}, in about ${hours}.`,
+      `Reminder: you have an appointment on ${payload.scheduledDate} at ${payload.startTime.slice(0, 5)}, in about ${hours}.`,
       { bookingId: payload.bookingId, milestone: payload.milestone },
     );
   }
@@ -464,7 +482,7 @@ export class NotificationsService {
       payload.artisanUserId,
       NotificationType.ARTISAN_VERIFICATION_REJECTED,
       'Verification Submission Rejected',
-      `Your identity verification was not approved. Reason: ${payload.reason}. Please resubmit with correct documents.`,
+      `Your identity verification was not approved. Reason: ${asSentence(payload.reason)} Please resubmit with correct documents.`,
     );
   }
 
@@ -485,7 +503,7 @@ export class NotificationsService {
       payload.artisanUserId,
       NotificationType.PORTFOLIO_REJECTED,
       'Portfolio Item Rejected',
-      `Your portfolio item was not approved. Reason: ${payload.reason}. You can resubmit it from your portfolio management view.`,
+      `Your portfolio item was not approved. Reason: ${asSentence(payload.reason)} You can resubmit it from your portfolio management view.`,
       { portfolioItemId: payload.portfolioItemId },
     );
   }
@@ -1026,4 +1044,13 @@ export class NotificationsService {
       );
     }
   }
+}
+
+/**
+ * QA NOT-07: an admin's reason usually already ends with a full stop, and the
+ * template added another ("too small.. You can resubmit").
+ */
+export function asSentence(text: string): string {
+  const trimmed = text.trim();
+  return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
 }

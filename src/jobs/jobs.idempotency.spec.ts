@@ -51,6 +51,8 @@ describe('JobsService — J2 auto-complete idempotency', () => {
         if (entity?.name === 'JobStatusHistory') return historyRepoInManager;
         return jobRepoInManager;
       }),
+      // Linked-booking sync (QA BK-23); this job has no booking.
+      query: jest.fn(() => Promise.resolve([])),
     };
     const dataSource = {
       transaction: jest.fn((work: (m: typeof manager) => Promise<unknown>) =>

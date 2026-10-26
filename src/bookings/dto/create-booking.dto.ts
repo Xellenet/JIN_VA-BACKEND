@@ -14,6 +14,7 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
+import { HH_MM_PATTERN } from '@common/constants/time.constants';
 import { IsAttachmentUrl } from '@common/validators/is-attachment-url.decorator';
 
 export class CreateBookingDto {
@@ -59,7 +60,7 @@ export class CreateBookingDto {
       'Start time (HH:MM 24-hour), UTC. The frontend must convert the ' +
       "customer's local selection to UTC before sending — never a naive local-time string.",
   })
-  @Matches(/^\d{2}:\d{2}$/, { message: 'startTime must be HH:MM' })
+  @Matches(HH_MM_PATTERN, { message: 'startTime must be HH:MM' })
   startTime!: string;
 
   @ApiPropertyOptional({
@@ -69,7 +70,7 @@ export class CreateBookingDto {
       "from the service's estimatedDurationMins (A2).",
   })
   @IsOptional()
-  @Matches(/^\d{2}:\d{2}$/, { message: 'endTime must be HH:MM' })
+  @Matches(HH_MM_PATTERN, { message: 'endTime must be HH:MM' })
   endTime?: string;
 
   @ApiPropertyOptional({

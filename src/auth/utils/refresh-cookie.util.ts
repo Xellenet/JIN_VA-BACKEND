@@ -30,11 +30,37 @@ function baseCookieOptions() {
 export function setRefreshTokenCookie(
   res: Response,
   refreshToken: string,
+  persistent = true,
 ): void {
   res.cookie(VARIABLES.REFRESH_TOKEN_COOKIE_NAME, refreshToken, {
     ...baseCookieOptions(),
-    maxAge: REFRESH_TOKEN_MAX_AGE_MS,
+    // QA AUTH-31: without maxAge it is a session cookie, gone when the
+    // browser closes ("Remember me" unticked).
+    ...(persistent ? { maxAge: REFRESH_TOKEN_MAX_AGE_MS } : {}),
   });
+}
+
+/**
+ * QA AUTH-31: marks a sign-in made with "Remember me" unticked, so a later
+ * token refresh re-issues browser-session cookies rather than persistent
+ * ones. Itself a session cookie, carrying no identity.
+ */
+const SESSION_ONLY_COOKIE_NAME = 'jinva_session_only';
+
+export function setSessionOnlyMarker(
+  res: Response,
+  sessionOnly: boolean,
+): void {
+  res.cookie(SESSION_ONLY_COOKIE_NAME, sessionOnly ? '1' : '', {
+    ...baseCookieOptions(),
+    ...(sessionOnly ? {} : { maxAge: 0, expires: new Date(0) }),
+  });
+}
+
+export function isSessionOnly(req: {
+  cookies?: Record<string, string>;
+}): boolean {
+  return req.cookies?.[SESSION_ONLY_COOKIE_NAME] === '1';
 }
 
 /**

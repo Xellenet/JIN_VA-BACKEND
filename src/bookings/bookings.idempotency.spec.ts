@@ -52,6 +52,8 @@ describe('BookingsService — A5 expiry idempotency', () => {
       {} as any,
       {} as any,
       eventEmitter as any,
+      {} as any,
+      {} as any,
     );
     return { service, eventEmitter };
   }
@@ -128,6 +130,8 @@ describe('BookingsService — A7 reminder idempotency', () => {
       {} as any,
       {} as any,
       eventEmitter as any,
+      {} as any,
+      {} as any,
     );
     return { service, eventEmitter, booking };
   }

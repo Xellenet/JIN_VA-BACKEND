@@ -25,6 +25,7 @@ import {
   collapseWhitespace,
   normaliseRegion,
 } from './utils/region-normalise.util';
+import type { ReverseLocationResponseDto } from './dto/reverse-location.dto';
 
 /** The subset of a Photon GeoJSON feature's `properties` we read. */
 interface PhotonProperties {
@@ -193,6 +194,69 @@ export class LocationsService {
     const suggestions = await pending;
     if (suggestions === null) return { suggestions: [], available: false };
     return { suggestions, available: true };
+  }
+
+  /**
+   * QA JOB-04: "Use my location" on Post a Job sent the customer's exact
+   * coordinates from the browser straight to a third-party geocoder. The
+   * lookup now goes through here, and only the point rounded to 3 decimal
+   * places (about 100 m) leaves JinVa. Never throws for upstream reasons.
+   */
+  async reverse(lat: number, lon: number): Promise<ReverseLocationResponseDto> {
+    if (Date.now() < this.upstreamUnavailableUntil) {
+      return { label: null, available: false };
+    }
+    const params = new URLSearchParams({
+      lat: lat.toFixed(3),
+      lon: lon.toFixed(3),
+      lang: PHOTON_LANG,
+      limit: '1',
+    });
+    const url = `${this.endpoint.replace(/api\/$/, 'reverse')}?${params.toString()}`;
+    try {
+      const response = await firstValueFrom(
+        this.http.get<unknown>(url, {
+          headers: {
+            'User-Agent': PHOTON_USER_AGENT,
+            Accept: 'application/json',
+          },
+          timeout: PHOTON_TIMEOUT_MS,
+          signal: AbortSignal.timeout(PHOTON_TIMEOUT_MS),
+          maxRedirects: 0,
+          maxContentLength: PHOTON_MAX_RESPONSE_BYTES,
+          responseType: 'json',
+          withCredentials: false,
+        }),
+      );
+      return {
+        label: LocationsService.reverseLabel(response.data),
+        available: true,
+      };
+    } catch (error: unknown) {
+      this.recordFailure(error);
+      return { label: null, available: false };
+    }
+  }
+
+  /** "Street, Area, Town, Region" from Photon's first feature, without repeats. */
+  static reverseLabel(body: unknown): string | null {
+    const features = (body as { features?: unknown } | null)?.features;
+    if (!Array.isArray(features) || features.length === 0) return null;
+    const p =
+      (features[0] as { properties?: Record<string, unknown> }).properties ??
+      {};
+    const text = (k: string) => {
+      const value = p[k];
+      return typeof value === 'string' ? value.trim() : '';
+    };
+    const parts = [
+      text('street') || text('name'),
+      text('district') || text('locality'),
+      text('city'),
+      text('state'),
+    ].filter(Boolean);
+    const unique = parts.filter((v, i) => parts.indexOf(v) === i);
+    return unique.length ? unique.join(', ') : null;
   }
 
   /** Resolves to `null` on any upstream failure; never rejects. */

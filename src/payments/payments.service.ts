@@ -3,11 +3,12 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { DataSource, In, Repository } from 'typeorm';
+import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import { Payment } from './entities/payment.entity';
 import { PaystackService } from './paystack.service';
 import { Job } from '@jobs/entities/job.entity';
@@ -254,14 +255,22 @@ export class PaymentsService {
    * calls this *before* the job's `acceptedArtisan` relation is saved — see
    * qa-report.md BLOCKER-1. Re-deriving it from a fresh DB read of the job
    * would always see the pre-acceptance state and always fail.
+   *
+   * QA JOB-22: `BookingsService.confirm` passes its transaction's `manager`,
+   * so a booking's job and its payment are created together or not at all.
    */
   async holdPayment(
     jobId: number,
     customerId: number,
     acceptedArtisanId: number,
     amount?: number,
+    manager?: EntityManager,
   ): Promise<string> {
-    const job = await this.jobRepo.findOne({ where: { id: jobId } });
+    const jobRepo = manager?.getRepository(Job) ?? this.jobRepo;
+    const profileRepo =
+      manager?.getRepository(ArtisanProfile) ?? this.profileRepo;
+    const paymentRepo = manager?.getRepository(Payment) ?? this.repo;
+    const job = await jobRepo.findOne({ where: { id: jobId } });
     if (!job) throw new NotFoundException('Job not found.');
 
     if (!acceptedArtisanId) {
@@ -280,13 +289,21 @@ export class PaymentsService {
       );
     }
 
-    const profile = await this.profileRepo.findOne({
+    const profile = await profileRepo.findOne({
       where: { user: { id: acceptedArtisanId } },
     });
     if (!profile)
       throw new NotFoundException('Artisan profile not found for this job.');
 
     const agreedAmount = +(amount ?? job.budgetMax ?? 0);
+    // QA JOB-08: never create a payment nobody can pay. Runs before the
+    // accept flow changes anything, so the application stays acceptable once
+    // the artisan sends a real quote.
+    if (!(agreedAmount > 0)) {
+      throw new BadRequestException(
+        'This application has no price yet. Ask the artisan to send a quote before accepting.',
+      );
+    }
     const platformFee = +(
       (agreedAmount * this.platformFeePercent) /
       100
@@ -295,8 +312,8 @@ export class PaymentsService {
 
     const reference = `jinva-${jobId}-${customerId}-${Date.now()}`;
 
-    await this.repo.save(
-      this.repo.create({
+    await paymentRepo.save(
+      paymentRepo.create({
         jobId,
         customerId,
         artisanProfileId: profile.id,
@@ -454,6 +471,12 @@ export class PaymentsService {
    * post-write state (no longer HELD/PENDING) and safely no-ops instead of
    * also refunding or also transferring.
    */
+  /** QA JOB-11: whether the customer's money for this job is held in escrow. */
+  async isPaymentSecured(reference: string): Promise<boolean> {
+    const payment = await this.repo.findOne({ where: { reference } });
+    return payment?.status === PaymentStatus.HELD;
+  }
+
   async cancelPayment(reference: string, _jobId: number): Promise<void> {
     await this.dataSource.transaction(async (manager) => {
       const paymentRepo = manager.getRepository(Payment);
@@ -464,7 +487,18 @@ export class PaymentsService {
       if (!payment) return;
 
       if (payment.status === PaymentStatus.HELD) {
-        await this.paystack.createRefund(payment.reference, payment.amount);
+        try {
+          await this.paystack.createRefund(payment.reference, payment.amount);
+        } catch (err) {
+          // QA JOB-18: the caller cancels the job only after this succeeds, so
+          // a refused refund leaves both the job and the payment untouched.
+          this.logger.error(
+            `Refund for payment ${payment.id} failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          throw new ServiceUnavailableException(
+            "We couldn't refund your payment right now, so the job has not been cancelled. Please try again in a few minutes.",
+          );
+        }
         payment.status = PaymentStatus.REFUNDED;
         payment.refundedAmount = payment.amount;
       } else if (payment.status === PaymentStatus.PENDING) {
@@ -634,12 +668,17 @@ export class PaymentsService {
     const data = payments.map((p) => ({
       id: p.id,
       reference: p.reference,
+      // `jobId` sits beside `job` for the job and pay pages, which look the
+      // payment up by job (QA PAY-01: they matched on a field the API never sent).
+      jobId: p.job?.id ?? p.jobId,
       job: { id: p.job?.id ?? p.jobId, title: p.job?.title ?? null },
       amount: p.amount,
       currency: p.currency,
       status: p.status,
       refundedAmount: p.refundedAmount ?? 0,
       paidAt: p.paidAt ?? null,
+      // QA PAY-20: the customer's "Paid on" line needs when the payout landed.
+      releasedAt: p.releasedAt ?? null,
       date: p.createdAt,
     }));
 
@@ -735,6 +774,9 @@ export class PaymentsService {
       artisanAmount: p.artisanAmount,
       status: p.status,
       date: p.createdAt,
+      // QA PAY-20: when the customer paid and when it reached the artisan.
+      paidAt: p.paidAt ?? null,
+      releasedAt: p.releasedAt ?? null,
     }));
 
     return { message: 'Earnings history retrieved.', data };
@@ -742,18 +784,70 @@ export class PaymentsService {
 
   // ─── Admin-facing ─────────────────────────────────────────────────────────────
 
-  async getAllPayments(page = 1, limit = 20) {
+  /**
+   * QA PAY-21: whole-ledger totals for the Transactions page, whose tiles
+   * were sums over the loaded page only.
+   */
+  async getAdminSummary() {
+    const [row]: Array<Record<string, string>> = await this.repo.query(
+      `SELECT
+         COALESCE(SUM(amount) FILTER (WHERE status = ANY($1)), 0) AS revenue,
+         COALESCE(SUM(platform_fee) FILTER (WHERE status = ANY($1)), 0) AS fees,
+         COALESCE(SUM(artisan_amount) FILTER (WHERE status = $2), 0) AS payouts,
+         COUNT(*) FILTER (WHERE status = ANY($3)) AS needs_review,
+         COUNT(*) AS total
+       FROM payments`,
+      [
+        [PaymentStatus.HELD, PaymentStatus.RELEASED],
+        PaymentStatus.RELEASED,
+        [PaymentStatus.PENDING_TRANSFER, PaymentStatus.TRANSFER_FAILED],
+      ],
+    );
+    return {
+      message: 'Payment summary retrieved.',
+      data: {
+        totalRevenue: Number(row.revenue),
+        totalFees: Number(row.fees),
+        totalPayouts: Number(row.payouts),
+        needsReview: Number(row.needs_review),
+        totalPayments: Number(row.total),
+      },
+    };
+  }
+
+  async getAllPayments(
+    page = 1,
+    limit = 20,
+    filters: { search?: string; status?: PaymentStatus } = {},
+  ) {
     // security-report.md finding #8: clamp regardless of what's requested —
     // an admin session (or a compromised admin token) could otherwise force
     // an unbounded `findAndCount`.
     const safePage = Math.max(1, page || 1);
     const safeLimit = Math.min(Math.max(1, limit || 20), MAX_ADMIN_PAGE_LIMIT);
-    const [records, total] = await this.repo.findAndCount({
-      relations: ['job', 'customer'],
-      order: { createdAt: 'DESC' },
-      skip: (safePage - 1) * safeLimit,
-      take: safeLimit,
-    });
+    // QA PAY-21: search and status now cover the whole ledger, not just the
+    // page the admin happens to have loaded.
+    const qb = this.repo
+      .createQueryBuilder('p')
+      .leftJoinAndSelect('p.job', 'job')
+      .leftJoinAndSelect('p.customer', 'customer')
+      .orderBy('p.createdAt', 'DESC')
+      .skip((safePage - 1) * safeLimit)
+      .take(safeLimit);
+    if (filters.status)
+      qb.andWhere('p.status = :status', { status: filters.status });
+    const term = filters.search?.trim().toLowerCase();
+    if (term) {
+      qb.andWhere(
+        `(LOWER(p.reference) LIKE :like
+          OR LOWER(customer.firstname || ' ' || customer.lastname) LIKE :like
+          OR LOWER(customer.email) LIKE :like
+          OR LOWER(COALESCE(job.title, '')) LIKE :like
+          OR CAST(p.jobId AS text) = :exact)`,
+        { like: `%${term}%`, exact: term.replace(/^#/, '') },
+      );
+    }
+    const [records, total] = await qb.getManyAndCount();
     return {
       message: 'Payments retrieved.',
       data: records,

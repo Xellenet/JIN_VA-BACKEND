@@ -25,6 +25,7 @@ import {
   buildPrivateMediaReference,
   buildS3ObjectKey,
   isPrivateUploadFolder,
+  type SharedPrivateUploadFolder,
 } from '../upload-folders';
 import { LEGACY_MEDIA_PREFIX } from '../legacy-media.config';
 
@@ -230,18 +231,38 @@ export class S3StorageProvider implements IStorageProvider {
     return this.readObject(folder, filename, range);
   }
 
+  /**
+   * QA MSG-18: a message or job photo uploaded before those folders became
+   * private still sits at its old public key in the main bucket. The private
+   * media endpoint reads it from there, behind its own access check, so old
+   * conversations keep their images.
+   */
+  async readLegacyShared(
+    folder: SharedPrivateUploadFolder,
+    filename: string,
+  ): Promise<PrivateMediaObject | null> {
+    return this.readObject(folder, filename, undefined, 'legacy-public');
+  }
+
   private async readObject(
     folder: UploadFolder,
     filename: string,
     range?: string,
+    location: 'current' | 'legacy-public' = 'current',
   ): Promise<PublicMediaObject | null> {
     const config = this.requireConfiguration();
-    const key = buildS3ObjectKey(folder, filename);
+    const key =
+      location === 'legacy-public'
+        ? `${folder}/${filename}`
+        : buildS3ObjectKey(folder, filename);
 
     try {
       const output = await this.getClient(config).send(
         new GetObjectCommand({
-          Bucket: bucketFor(config, folder),
+          Bucket:
+            location === 'legacy-public'
+              ? config.bucket
+              : bucketFor(config, folder),
           Key: key,
           ...(range ? { Range: range } : {}),
         }),

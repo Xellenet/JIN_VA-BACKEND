@@ -78,8 +78,8 @@ export class JobsController {
   }
 
   /**
-   * Returns a paginated, filtered list of all non-deleted jobs.
-   * Accessible to any authenticated user (artisans use this to discover work).
+   * Returns a paginated, filtered list of the jobs the caller may see:
+   * admins all, customers their own, artisans open jobs plus their own.
    *
    * @param query - Optional `status`, `serviceId`, `location` filters + `page`/`limit`.
    */
@@ -92,8 +92,8 @@ export class JobsController {
     type: [JobResponseDto],
   })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT' })
-  findAll(@Query() query: GetJobsQueryDto) {
-    return this.jobsService.findAll(query);
+  findAll(@Query() query: GetJobsQueryDto, @Req() req: AuthenticatedRequest) {
+    return this.jobsService.findAll(query, req.user);
   }
 
   /**
@@ -134,8 +134,11 @@ export class JobsController {
   })
   @ApiNotFoundResponse({ description: 'No job found with the given ID' })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT' })
-  findOne(@Param('id', ParseIntPipe) id: number) {
-    return this.jobsService.findOne(id);
+  findOne(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    return this.jobsService.findOne(id, req.user);
   }
 
   /**

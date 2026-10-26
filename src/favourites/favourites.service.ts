@@ -149,6 +149,12 @@ export class FavouritesService {
       .leftJoinAndSelect('artisan.services', 'services')
       .where('fav.customer = :customerId', { customerId })
       .andWhere('user.deletedAt IS NULL')
+      // QA FAV-07: an artisan hidden from search (suspended, banned or with an
+      // unfinished profile) can't be booked, so they aren't offered here
+      // either. The favourite is kept and reappears once they're visible.
+      .andWhere('user.isSuspended = false')
+      .andWhere('user.isBanned = false')
+      .andWhere('artisan.isProfileComplete = true')
       .orderBy('fav.createdAt', 'DESC')
       .skip(skip)
       .take(limit)

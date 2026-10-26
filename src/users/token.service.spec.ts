@@ -13,10 +13,14 @@ describe('UserTokenService', () => {
   const mockTokenRepo = {
     findOne: jest.fn(),
     delete: jest.fn(),
+    create: jest.fn((x: unknown) => x),
+    save: jest.fn((x: unknown) => Promise.resolve(x)),
   };
 
   const mockJwtService = {
     verify: jest.fn(),
+    sign: jest.fn(() => 'signed.jwt.token'),
+    decode: jest.fn(() => ({ exp: Math.floor(Date.now() / 1000) + 900 })),
   };
 
   beforeEach(async () => {
@@ -34,6 +38,88 @@ describe('UserTokenService', () => {
 
   it('should be defined', () => {
     expect(service).toBeDefined();
+  });
+
+  describe('missing or empty tokens (QA AUTH-12 / AUTH-24)', () => {
+    // TypeORM drops undefined from a where/delete criteria, so these must be
+    // refused before any query runs, or they match another user's token.
+    const unusable = [
+      undefined,
+      null,
+      '',
+      '   ',
+      42,
+      {},
+    ] as unknown as string[];
+
+    it.each(unusable)(
+      'validateToken(%p) is rejected without touching the DB',
+      async (token) => {
+        await expect(
+          service.validateToken(token, Token.PASSWORD_RESET),
+        ).rejects.toThrow('Invalid or expired token');
+        expect(mockTokenRepo.findOne).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(unusable)('revokeToken(%p) deletes nothing', async (token) => {
+      await service.revokeToken(token);
+      expect(mockTokenRepo.delete).not.toHaveBeenCalled();
+    });
+
+    it.each(unusable)(
+      'consumeRefreshToken(%p) returns null without a lookup',
+      async (token) => {
+        await expect(service.consumeRefreshToken(token)).resolves.toBeNull();
+        expect(mockTokenRepo.findOne).not.toHaveBeenCalled();
+      },
+    );
+
+    it('still validates a real token', async () => {
+      mockTokenRepo.findOne.mockResolvedValueOnce({
+        token: 'abc',
+        type: Token.PASSWORD_RESET,
+        expiresAt: new Date(Date.now() + 60_000),
+        user: mockUser,
+      });
+      await expect(
+        service.validateToken('abc', Token.PASSWORD_RESET),
+      ).resolves.toEqual(mockUser);
+      expect(mockTokenRepo.findOne).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { token: 'abc', type: Token.PASSWORD_RESET },
+        }),
+      );
+    });
+  });
+
+  describe('createJWTTokens — token type (QA SEC-05/06/08)', () => {
+    it('signs a typed access token and a typed, unique refresh token', async () => {
+      await service.createJWTTokens(mockUser as never);
+      const [accessCall, refreshCall] = mockJwtService.sign.mock
+        .calls as unknown as Array<[Record<string, unknown>, unknown]>;
+      expect(accessCall[0]).toMatchObject({ sub: 1, typ: 'access' });
+      expect(refreshCall[0]).toMatchObject({ sub: 1, typ: 'refresh' });
+      expect(typeof refreshCall[0].jti).toBe('string');
+    });
+  });
+
+  describe('consumeRefreshToken — token type', () => {
+    it('refuses an access token presented as a refresh token', async () => {
+      mockTokenRepo.findOne.mockResolvedValueOnce({
+        id: 'row-x',
+        token: 'access-jwt',
+        type: Token.REFRESH,
+        expiresAt: new Date(Date.now() + 60_000),
+        user: mockUser,
+      });
+      mockTokenRepo.delete.mockResolvedValueOnce({ affected: 1 });
+      mockJwtService.verify.mockReturnValueOnce({ sub: 1, typ: 'access' });
+
+      await expect(
+        service.consumeRefreshToken('access-jwt'),
+      ).resolves.toBeNull();
+    });
   });
 
   describe('consumeRefreshToken (S5)', () => {

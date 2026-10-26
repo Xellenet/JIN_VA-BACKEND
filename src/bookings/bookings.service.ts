@@ -13,6 +13,9 @@ import { DataSource, LessThan, Repository } from 'typeorm';
 import { Booking } from './entities/booking.entity';
 import { CreateBookingDto } from './dto/create-booking.dto';
 import { RespondBookingDto } from './dto/respond-booking.dto';
+import { ConfirmBookingDto } from './dto/confirm-booking.dto';
+import { PaymentsService } from '../payments/payments.service';
+import { JobsService } from '@jobs/jobs.service';
 import { GetBookingsQueryDto } from './dto/get-bookings-query.dto';
 import { BookingResponseDto } from './dto/booking-response.dto';
 import { ArtisanProfile } from '@users/entities/artisan-profile.entity';
@@ -23,7 +26,13 @@ import { AvailabilityService } from '../availability/availability.service';
 import { Job } from '@jobs/entities/job.entity';
 import { JobStatusHistory } from '@jobs/entities/job-status-history.entity';
 import { JobAttachment } from '@jobs/entities/job-attachment.entity';
-import { BookingStatus, NoShowParty, Role, Status } from '@common/types/enums';
+import {
+  AvailabilityStatus,
+  BookingStatus,
+  NoShowParty,
+  Role,
+  Status,
+} from '@common/types/enums';
 import { VARIABLES } from '@common/constants/variables.constants';
 import { APP_EVENTS } from '@common/events/app.events';
 import type {
@@ -76,6 +85,8 @@ export class BookingsService {
     private readonly dataSource: DataSource,
     private readonly availabilityService: AvailabilityService,
     private readonly eventEmitter: EventEmitter2,
+    private readonly paymentsService: PaymentsService,
+    private readonly jobsService: JobsService,
   ) {}
 
   // ─── R1/A4/A9: atomic, concurrency-safe create ───────────────────────────────
@@ -99,9 +110,13 @@ export class BookingsService {
   async create(customerId: number, dto: CreateBookingDto) {
     const profile = await this.profileRepo.findOne({
       where: { id: dto.artisanProfileId },
-      relations: ['user'],
+      relations: ['user', 'services'],
     });
     if (!profile) throw new NotFoundException('Artisan profile not found.');
+    // QA BK-10 / ADM-06: only an artisan who appears in search can be booked.
+    // Suspended, incomplete, busy or unavailable artisans used to be
+    // bookable through a direct link.
+    this.assertBookable(profile);
 
     const service = await this.serviceRepo.findOne({
       where: { id: dto.serviceId },
@@ -110,6 +125,12 @@ export class BookingsService {
       throw new NotFoundException(
         `Service with id ${dto.serviceId} not found.`,
       );
+    // QA BK-08: the booked service must be one this artisan offers.
+    if (!(profile.services ?? []).some((s) => s.id === service.id)) {
+      throw new BadRequestException(
+        "This artisan doesn't offer that service. Choose one listed on their profile.",
+      );
+    }
 
     let slot: ArtisanAvailability | undefined;
     if (dto.availabilitySlotId) {
@@ -181,8 +202,12 @@ export class BookingsService {
       dto.artisanProfileId,
       dto.scheduledDate,
     );
+    // 'HH:MM' vs the windows' 'HH:MM:SS': compared as strings, a start
+    // exactly on a window's opening ('06:00' < '06:00:00') was refused.
+    const start = toClockTime(dto.startTime);
+    const end = toClockTime(endTime);
     const fits = bookable.some(
-      (w) => dto.startTime >= w.startTime && endTime <= w.endTime,
+      (w) => start >= toClockTime(w.startTime) && end <= toClockTime(w.endTime),
     );
     if (!fits) {
       throw new BadRequestException(
@@ -213,7 +238,7 @@ export class BookingsService {
         relations: ['user'],
       });
       lockedProfile.user = profileWithUser!.user;
-      if (lockedProfile.user.isBanned) {
+      if (lockedProfile.user.isBanned || lockedProfile.user.isSuspended) {
         // Re-checked here (not just at page-load time) per R1's edge case:
         // an artisan suspended between page load and submit must not be
         // bookable.
@@ -331,7 +356,7 @@ export class BookingsService {
   async confirm(
     artisanUserId: number,
     bookingId: number,
-    dto: RespondBookingDto,
+    dto: ConfirmBookingDto,
   ) {
     const { booking, job } = await this.dataSource.transaction(
       async (manager) => {
@@ -371,7 +396,33 @@ export class BookingsService {
           );
         }
 
+        // QA JOB-22: the confirmed price becomes the customer's payment, so a
+        // booking can't be confirmed without one. A price the customer
+        // already agreed to stands; the artisan sets one only when it's
+        // missing.
+        const agreed =
+          bookingRow.agreedPrice != null && Number(bookingRow.agreedPrice) > 0
+            ? Number(bookingRow.agreedPrice)
+            : undefined;
+        if (agreed != null && dto.price != null && dto.price !== agreed) {
+          throw new BadRequestException(
+            `This booking already has an agreed price of GHS ${agreed.toFixed(2)}.`,
+          );
+        }
+        const catalogPrice =
+          bookingRow.service?.price != null &&
+          Number(bookingRow.service.price) > 0
+            ? Number(bookingRow.service.price)
+            : undefined;
+        const price = agreed ?? dto.price ?? catalogPrice;
+        if (price == null) {
+          throw new BadRequestException(
+            'Set your price for this booking before confirming. The customer pays it before work starts.',
+          );
+        }
+
         bookingRow.status = BookingStatus.CONFIRMED;
+        bookingRow.agreedPrice = price;
         bookingRow.artisanNotes = dto.artisanNotes;
         await bookingRepo.save(bookingRow);
 
@@ -391,8 +442,8 @@ export class BookingsService {
             );
           }
           const location =
-            bookingRow.artisanProfile.location ??
-            bookingRow.artisanProfile.businessName ??
+            bookingRow.artisanProfile.location?.trim() ||
+            bookingRow.artisanProfile.businessName?.trim() ||
             'Not specified';
 
           jobRow = jobRepo.create({
@@ -401,11 +452,11 @@ export class BookingsService {
             title: `${bookingRow.service.name} — booking #${bookingRow.id}`,
             description:
               bookingRow.notes ??
-              `Direct booking with ${bookingRow.artisanProfile.businessName ?? 'artisan'}.`,
+              `Direct booking with ${bookingRow.artisanProfile.businessName?.trim() || 'artisan'}.`,
             location,
             currency: bookingRow.currency,
-            budgetMin: bookingRow.agreedPrice,
-            budgetMax: bookingRow.agreedPrice,
+            budgetMin: price,
+            budgetMax: price,
             status: Status.PENDING,
             acceptedArtisan: bookingRow.artisanProfile.user,
             booking: bookingRow,
@@ -421,6 +472,15 @@ export class BookingsService {
               reason: `Created from confirmed booking #${bookingRow.id}`,
             }),
           );
+
+          jobRow.paymentIntentId = await this.paymentsService.holdPayment(
+            jobRow.id,
+            bookingRow.customerId,
+            bookingRow.artisanProfile.user.id,
+            price,
+            manager,
+          );
+          jobRow = await jobRepo.save(jobRow);
 
           for (const url of bookingRow.attachmentUrls ?? []) {
             await attachmentRepo.save(
@@ -440,7 +500,7 @@ export class BookingsService {
     this.eventEmitter.emit(APP_EVENTS.BOOKING_CONFIRMED, {
       customerId: booking.customerId,
       artisanName:
-        booking.artisanProfile.businessName ??
+        booking.artisanProfile.businessName?.trim() ||
         `${booking.artisanProfile.user.firstname} ${booking.artisanProfile.user.lastname}`,
       scheduledDate: booking.scheduledDate,
       bookingId: booking.id,
@@ -472,7 +532,7 @@ export class BookingsService {
     this.eventEmitter.emit(APP_EVENTS.BOOKING_DECLINED, {
       customerId: booking.customerId,
       artisanName:
-        booking.artisanProfile.businessName ??
+        booking.artisanProfile.businessName?.trim() ||
         `${booking.artisanProfile.user.firstname} ${booking.artisanProfile.user.lastname}`,
       scheduledDate: booking.scheduledDate,
       bookingId: booking.id,
@@ -522,6 +582,15 @@ export class BookingsService {
 
     const wasConfirmed = booking.status === BookingStatus.CONFIRMED;
 
+    // QA JOB-22: a confirmed booking's job carries a payment. Void or refund
+    // it first, so a refused refund leaves the booking as it was (JOB-18).
+    if (linkedJob?.paymentIntentId) {
+      await this.paymentsService.cancelPayment(
+        linkedJob.paymentIntentId,
+        linkedJob.id,
+      );
+    }
+
     await this.dataSource.transaction(async (manager) => {
       const bookingRepo = manager.getRepository(Booking);
       const jobRepo = manager.getRepository(Job);
@@ -569,8 +638,51 @@ export class BookingsService {
         'Only CONFIRMED bookings can be marked as completed.',
       );
     }
-    booking.status = BookingStatus.COMPLETED;
-    await this.repo.save(booking);
+
+    // QA BK-23: completing a booking used to leave its job PENDING. The two
+    // now finish together.
+    const linkedJob = await this.jobRepo.findOne({
+      // Job.bookingId is a @RelationId (virtual, not a real column).
+      where: { booking: { id: booking.id } },
+    });
+    if (linkedJob?.paymentIntentId) {
+      // A paid job: finishing it releases the artisan's money, so it follows
+      // the job's own rules (started, and the artisan asked to complete).
+      // That flow also completes this booking and notifies the artisan.
+      if (
+        linkedJob.status !== Status.IN_PROGRESS ||
+        !linkedJob.completionRequestedAt
+      ) {
+        throw new BadRequestException(
+          'The artisan needs to start the job and mark it finished before you can complete this booking. You can follow it on the linked job.',
+        );
+      }
+      await this.jobsService.confirmCompletion(linkedJob.id, customerId);
+      return { message: 'Booking marked as completed.' };
+    }
+
+    await this.dataSource.transaction(async (manager) => {
+      booking.status = BookingStatus.COMPLETED;
+      await manager.getRepository(Booking).save(booking);
+      if (
+        linkedJob &&
+        linkedJob.status !== Status.COMPLETED &&
+        linkedJob.status !== Status.CANCELLED
+      ) {
+        const fromStatus = linkedJob.status;
+        linkedJob.status = Status.COMPLETED;
+        await manager.getRepository(Job).save(linkedJob);
+        await manager.getRepository(JobStatusHistory).save(
+          manager.getRepository(JobStatusHistory).create({
+            jobId: linkedJob.id,
+            fromStatus,
+            toStatus: Status.COMPLETED,
+            changedBy: String(customerId),
+            reason: 'Linked booking was marked completed by the customer',
+          }),
+        );
+      }
+    });
 
     this.eventEmitter.emit(APP_EVENTS.BOOKING_COMPLETED, {
       artisanUserId: booking.artisanProfile.user.id,
@@ -631,8 +743,8 @@ export class BookingsService {
 
     const flaggedByName = isCustomer
       ? `${booking.customer.firstname} ${booking.customer.lastname}`
-      : (booking.artisanProfile.businessName ??
-        `${booking.artisanProfile.user.firstname} ${booking.artisanProfile.user.lastname}`);
+      : booking.artisanProfile.businessName?.trim() ||
+        `${booking.artisanProfile.user.firstname} ${booking.artisanProfile.user.lastname}`;
     const recipientUserId = isCustomer
       ? booking.artisanProfile.user.id
       : booking.customerId;
@@ -858,8 +970,34 @@ export class BookingsService {
   }
 
   /** "HH:MM" + UTC calendar date → a real UTC Date instant (NFR (c)). */
+  /**
+   * QA BK-24: times read back from Postgres are 'HH:MM:SS', which used to
+   * build '…T14:00:00:00.000Z', an Invalid Date. Every "has it ended?" check
+   * then passed, so a future appointment could be flagged as a no-show.
+   */
   private toUtcInstant(scheduledDate: string, time: string): Date {
-    return new Date(`${scheduledDate}T${time}:00.000Z`);
+    return new Date(`${scheduledDate}T${toClockTime(time)}.000Z`);
+  }
+
+  private assertBookable(profile: ArtisanProfile): void {
+    const user = profile.user;
+    if (!user || user.isBanned || user.isSuspended || user.deletedAt) {
+      throw new BadRequestException(
+        'This artisan is not currently accepting bookings.',
+      );
+    }
+    if (!profile.isProfileComplete) {
+      throw new BadRequestException(
+        "This artisan hasn't finished setting up their profile, so they can't take bookings yet.",
+      );
+    }
+    if (profile.availabilityStatus !== String(AvailabilityStatus.AVAILABLE)) {
+      throw new BadRequestException(
+        profile.availabilityStatus === String(AvailabilityStatus.BUSY)
+          ? 'This artisan is busy right now and not taking new bookings. Try again later.'
+          : 'This artisan is unavailable right now and not taking bookings.',
+      );
+    }
   }
 
   private addMinutes(time: string, minutes: number): string {
@@ -875,4 +1013,9 @@ export class BookingsService {
     const ext = url.slice(url.lastIndexOf('.')).toLowerCase();
     return MIME_BY_EXT[ext] ?? 'image/jpeg';
   }
+}
+
+/** 'HH:MM' or 'HH:MM:SS' → 'HH:MM:SS', so clock times compare correctly. */
+export function toClockTime(time: string): string {
+  return time.length === 5 ? `${time}:00` : time;
 }

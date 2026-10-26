@@ -29,7 +29,10 @@ type AvailabilityItem = {
   message: string;
   data: ArtisanAvailabilityResponseDto;
 };
-type BlockItem = { message: string; data: BlockedSlotResponseDto };
+type BlockItem = {
+  message: string;
+  data: BlockedSlotResponseDto & { conflictingBookingIds?: number[] };
+};
 type BlockList = { message: string; data: BlockedSlotResponseDto[] };
 
 /** Bookings in these statuses occupy a slot for concurrency/availability purposes (A4/R1a). */
@@ -172,9 +175,12 @@ export class AvailabilityService {
     // PENDING/CONFIRMED booking that falls inside it — we surface which
     // bookings now conflict so the artisan can decide (decline/cancel) via
     // the existing endpoints, rather than silently orphaning them.
+    // QA AV-04: `artisanProfileId` is a @RelationId, not a column, so
+    // filtering on it threw after the block was already saved, a 500 for a
+    // change that had in fact worked. Filter through the relation instead.
     const conflicting = await this.bookingRepo.find({
       where: {
-        artisanProfileId: profile.id,
+        artisanProfile: { id: profile.id },
         status: In(OCCUPYING_BOOKING_STATUSES),
       },
     });
@@ -192,9 +198,18 @@ export class AvailabilityService {
     this.logger.log(
       `Artisan ${profile.id} added block ${block.id}: ${dto.startDate}–${dto.endDate}`,
     );
+    // QA AV-06: tell the artisan, not just the log, that bookings fall in the
+    // blocked dates. They aren't cancelled automatically.
+    const n = overlapping.length;
     return {
-      message: 'Blocked date range added.',
-      data: this.toBlockDto(block),
+      message:
+        n === 0
+          ? 'Blocked date range added.'
+          : `Blocked date range added. You still have ${n} booking${n === 1 ? '' : 's'} in these dates; decline or cancel ${n === 1 ? 'it' : 'them'} if you can't attend.`,
+      data: {
+        ...this.toBlockDto(block),
+        conflictingBookingIds: overlapping.map((b) => b.id),
+      },
     };
   }
 
@@ -435,7 +450,7 @@ export class AvailabilityService {
     const overlapping = await qb.getOne();
     if (overlapping) {
       throw new BadRequestException(
-        `This slot overlaps with an existing slot (${overlapping.startTime}–${overlapping.endTime}) on the same day.`,
+        `This slot overlaps with an existing slot (${overlapping.startTime.slice(0, 5)}–${overlapping.endTime.slice(0, 5)}) on the same day.`,
       );
     }
   }

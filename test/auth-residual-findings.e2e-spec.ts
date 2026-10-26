@@ -473,8 +473,10 @@ describe('auth-residual-findings (backend items 1, 2, 3, 6, 9)', () => {
     it('clears both cookies on a successful deletion, body unchanged', async () => {
       const u = await makeUser('cookies', Role.CUSTOMER);
       const loggedIn = await login(u.email, PASSWORD);
+      // Login also clears the "Remember me" session-only marker (QA AUTH-31).
       expect(Object.keys(setCookies(loggedIn)).sort()).toEqual([
         VARIABLES.AUTH_SESSION_COOKIE_NAME,
+        'jinva_session_only',
         VARIABLES.REFRESH_TOKEN_COOKIE_NAME,
       ]);
 

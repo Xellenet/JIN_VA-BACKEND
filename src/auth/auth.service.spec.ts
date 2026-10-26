@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { AccountBannedException } from '@common/exceptions/account-banned.exception';
 import { AuthService, SOCIAL_SIGNUP_EXPIRED_ERROR_CODE } from './auth.service';
 import {
   BadRequestException,
@@ -357,7 +358,7 @@ describe('AuthService', () => {
       expect(refreshToken).toEqual('refresh-token');
     });
 
-    it('should throw SocialOnlyAccountException before ever calling bcrypt.compare, for a Google-only account (G10)', async () => {
+    it('answers a Google-only account like a wrong password, never calling bcrypt.compare on a null hash (G10, QA SEC-14)', async () => {
       const dto: LoginDto = { email: 'social@example.com', password: 'pass' };
       mockUsersService.findUserByEmail.mockResolvedValueOnce({
         ...mockUser,
@@ -370,7 +371,7 @@ describe('AuthService', () => {
       });
 
       await expect(service.loginUser(dto)).rejects.toThrow(
-        SocialOnlyAccountException,
+        InvalidCredentialsException,
       );
       // G10 efficiency fix: loginUser() now does a single combined check
       // (getPasswordCheckResult) instead of separate
@@ -683,6 +684,69 @@ describe('AuthService', () => {
         mockUsersService.getSoftDeletedPasswordCheckResult,
       ).not.toHaveBeenCalled();
       expect(mockUsersService.restoreAccountById).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('change password (QA AUTH-28)', () => {
+    it('refuses a confirmation that does not match, changing nothing', async () => {
+      mockUsersService.findUserById.mockResolvedValueOnce({ ...mockUser });
+
+      await expect(
+        service.changePassword(
+          {
+            currentPassword: 'CorrectHorse1!',
+            newPassword: 'NewHorse1!',
+            confirmNewPassword: 'NewHorse2!',
+          } as never,
+          mockUser.id,
+        ),
+      ).rejects.toThrow('Passwords do not match');
+      expect(mockUsersService.updateUserData).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('banned accounts (QA AUTH-17)', () => {
+    it('login refuses a banned account once its password is proven', async () => {
+      mockUsersService.findUserByEmail.mockResolvedValueOnce({
+        ...mockUser,
+        isBanned: true,
+      });
+      mockUsersService.getPasswordCheckResult.mockResolvedValueOnce({
+        hasPassword: true,
+        isValid: true,
+      });
+
+      await expect(
+        service.loginUser({ email: 'test@example.com', password: 'pass' }),
+      ).rejects.toThrow(AccountBannedException);
+      expect(mockUserTokenService.createJWTTokens).not.toHaveBeenCalled();
+    });
+
+    it('login still answers a wrong password with invalid credentials, revealing nothing about the ban', async () => {
+      mockUsersService.findUserByEmail.mockResolvedValueOnce({
+        ...mockUser,
+        isBanned: true,
+      });
+      mockUsersService.getPasswordCheckResult.mockResolvedValueOnce({
+        hasPassword: true,
+        isValid: false,
+      });
+
+      await expect(
+        service.loginUser({ email: 'test@example.com', password: 'nope' }),
+      ).rejects.toThrow(InvalidCredentialsException);
+    });
+
+    it('refresh refuses a banned account and issues no new tokens', async () => {
+      mockUserTokenService.consumeRefreshToken.mockResolvedValueOnce({
+        ...mockUser,
+        isBanned: true,
+      });
+
+      await expect(service.refreshTokens('valid-token')).rejects.toThrow(
+        AccountBannedException,
+      );
+      expect(mockUserTokenService.createJWTTokens).not.toHaveBeenCalled();
     });
   });
 
@@ -1641,7 +1705,13 @@ describe('AuthService', () => {
     });
 
     it('POST /auth/login carries only declared profile fields', async () => {
-      mockUsersService.findUserByEmail.mockResolvedValueOnce(rowWithSecrets());
+      // A banned account can no longer log in at all (QA AUTH-17), so this
+      // serialisation check uses an unbanned row; the ban columns are still
+      // populated, and must still not appear in the response.
+      mockUsersService.findUserByEmail.mockResolvedValueOnce({
+        ...rowWithSecrets(),
+        isBanned: false,
+      });
       mockUserTokenService.createJWTTokens.mockResolvedValueOnce({
         access_token: 'access-token',
         refresh_token: 'refresh-token',

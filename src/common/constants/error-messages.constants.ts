@@ -11,6 +11,11 @@ function joinClauses(clauses: string[]): string {
 export const ERROR_MESSAGES = {
   USER: {
     EMAIL_REQUIRED: 'Email is required',
+    /** QA CUS-07: a national ID is set once. */
+    NATIONAL_ID_LOCKED:
+      "Your national ID is already saved and can't be changed here. Contact support if it needs correcting.",
+    NATIONAL_ID_IN_USE:
+      'This national ID is already linked to another JinVa account.',
     NOT_FOUND_WITH_EMAIL: (email: string) =>
       `User with email ${email} not found`,
     NOT_FOUND_WITH_ID: (id: string) => `User with id ${id} not found`,
@@ -74,6 +79,9 @@ export const ERROR_MESSAGES = {
      * C1.4: the distinguishable pending-deletion login rejection. Only ever
      * returned *after* the submitted password has been verified.
      */
+    /** QA AUTH-17: a banned account, refused at login, refresh and on every request. */
+    ACCOUNT_BANNED:
+      'This account has been banned. Contact support if you think this is a mistake.',
     ACCOUNT_PENDING_DELETION:
       'This account is scheduled for deletion. You can still restore it before the recovery window closes.',
     /**

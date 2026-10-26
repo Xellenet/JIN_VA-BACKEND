@@ -109,7 +109,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       errorName = 'Error';
     }
 
-    this.logger.error(`${request.method} ${request.url}`, {
+    this.logger.error(`${request.method} ${redactQuerySecrets(request.url)}`, {
       status,
       message,
       stack: exception instanceof Error ? exception.stack : '',
@@ -156,4 +156,12 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
     response.status(status).json(errorResponse);
   }
+}
+
+/**
+ * One-time tokens travel in some query strings (e.g. `/auth/reset-password?token=`);
+ * a failed request must not copy them into the server log.
+ */
+export function redactQuerySecrets(url: string): string {
+  return url.replace(/([?&](?:token|code|state)=)[^&#]*/gi, '$1[redacted]');
 }

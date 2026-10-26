@@ -1,4 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { unlink } from 'node:fs/promises';
+import { join } from 'node:path';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
@@ -56,6 +58,9 @@ import {
  * touched by this file. Every fixture created here is removed in `afterAll`.
  */
 jest.setTimeout(120000);
+
+/** Files this suite uploads, removed in `afterAll`. */
+const uploadedFiles: string[] = [];
 
 interface Envelope<T> {
   data: T;
@@ -278,6 +283,11 @@ describe('Messaging & Notifications — full lifecycle (e2e)', () => {
         /* row already gone / FK ordering */
       }
     };
+
+    // The test images uploaded above land on local disk; don't leave them.
+    for (const url of uploadedFiles) {
+      await ignore(() => unlink(join(process.cwd(), url.replace(/^\//, ''))));
+    }
 
     await ignore(() =>
       notificationRepo
@@ -545,6 +555,7 @@ describe('Messaging & Notifications — full lifecycle (e2e)', () => {
       });
     expect(res.status).toBe(200);
     const body = envelope<{ url: string; folder: string; bytes: number }>(res);
+    uploadedFiles.push(body.url);
     expect(body.url).toContain('/uploads/messages/');
     expect(body.folder).toBe('messages');
   });
@@ -596,6 +607,7 @@ describe('Messaging & Notifications — full lifecycle (e2e)', () => {
       });
     expect(upload.status).toBe(200);
     const url = envelope<{ url: string }>(upload).url;
+    uploadedFiles.push(url);
 
     const res = await send(customer1Token, {
       recipientId: artisanUser.id,

@@ -1,8 +1,4 @@
-import {
-  Injectable,
-  InternalServerErrorException,
-  Logger,
-} from '@nestjs/common';
+import { Injectable, BadGatewayException, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
 
@@ -41,8 +37,10 @@ export class PaystackService {
     const json = (await res.json()) as PaystackResponse<T>;
     if (!json.status) {
       this.logger.error(`Paystack POST ${path} failed: ${json.message}`);
-      throw new InternalServerErrorException(
-        `Payment provider error: ${json.message}`,
+      // QA PAY-13: a refusal by Paystack is an upstream failure (502), not a
+      // bug in JinVa (500); the message says what Paystack said.
+      throw new BadGatewayException(
+        `The payment provider couldn't complete this: ${json.message}`,
       );
     }
     return json.data;
@@ -55,8 +53,10 @@ export class PaystackService {
     const json = (await res.json()) as PaystackResponse<T>;
     if (!json.status) {
       this.logger.error(`Paystack GET ${path} failed: ${json.message}`);
-      throw new InternalServerErrorException(
-        `Payment provider error: ${json.message}`,
+      // QA PAY-13: a refusal by Paystack is an upstream failure (502), not a
+      // bug in JinVa (500); the message says what Paystack said.
+      throw new BadGatewayException(
+        `The payment provider couldn't complete this: ${json.message}`,
       );
     }
     return json.data;

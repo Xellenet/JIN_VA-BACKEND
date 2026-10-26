@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsInt, IsString, Matches, Max, Min } from 'class-validator';
+import { HH_MM_PATTERN } from '@common/constants/time.constants';
 
 export class CreateAvailabilitySlotDto {
   @ApiProperty({
@@ -18,7 +19,7 @@ export class CreateAvailabilitySlotDto {
     example: '09:00',
   })
   @IsString()
-  @Matches(/^\d{2}:\d{2}$/, {
+  @Matches(HH_MM_PATTERN, {
     message: 'startTime must be in HH:MM format (e.g. 09:00)',
   })
   startTime!: string;
@@ -28,7 +29,7 @@ export class CreateAvailabilitySlotDto {
     example: '17:00',
   })
   @IsString()
-  @Matches(/^\d{2}:\d{2}$/, {
+  @Matches(HH_MM_PATTERN, {
     message: 'endTime must be in HH:MM format (e.g. 17:00)',
   })
   endTime!: string;
