@@ -79,6 +79,20 @@ export class AdminUsersQueryDto {
   @IsDateString()
   joinedTo?: string;
 
+  /**
+   * QA ADM-03: the Clients and Artisans pages searched only the 100 rows they
+   * had loaded. Matches name, email, or the digits of a phone number.
+   */
+  @ApiPropertyOptional({
+    example: 'mensah',
+    description:
+      'Name, email or phone digits (case-insensitive, partial match).',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  search?: string;
+
   @ApiPropertyOptional({ example: 1 })
   @IsOptional()
   @Type(() => Number)
@@ -96,6 +110,39 @@ export class AdminUsersQueryDto {
 }
 
 /** A6: minimal admin read path — bookings are a wholly new-to-production entity. */
+/** QA ADM-03 / ADM-06: the Artisans page pages, searches and filters on the server. */
+export class AdminArtisansQueryDto {
+  @ApiPropertyOptional({
+    example: 'plumb',
+    description:
+      'Name, email, business name or service (case-insensitive, partial match).',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  search?: string;
+
+  @ApiPropertyOptional({ enum: AdminUserStatus })
+  @IsOptional()
+  @IsEnum(AdminUserStatus)
+  status?: AdminUserStatus;
+
+  @ApiPropertyOptional({ example: 1 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number = 1;
+
+  @ApiPropertyOptional({ example: 20 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  limit?: number = 20;
+}
+
 export class AdminBookingsQueryDto {
   @ApiPropertyOptional({ enum: BookingStatus })
   @IsOptional()

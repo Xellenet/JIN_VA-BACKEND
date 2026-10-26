@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { UploadsController } from './uploads.controller';
 import { UploadsService } from './uploads.service';
 import { KycMediaService } from './kyc-media.service';
+import { SharedMediaService } from './shared-media.service';
 import { LocalStorageProvider } from './providers/local-storage.provider';
 import { S3StorageProvider } from './providers/s3-storage.provider';
 import { StorageProviderFactory } from './providers/storage-provider.factory';
@@ -11,6 +12,7 @@ import { StorageProviderFactory } from './providers/storage-provider.factory';
   providers: [
     UploadsService,
     KycMediaService,
+    SharedMediaService,
     LocalStorageProvider,
     S3StorageProvider,
     StorageProviderFactory,

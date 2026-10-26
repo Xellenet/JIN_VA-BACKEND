@@ -10,6 +10,8 @@ import { AvailabilityModule } from '../availability/availability.module';
 import { Job } from '@jobs/entities/job.entity';
 import { JobStatusHistory } from '@jobs/entities/job-status-history.entity';
 import { JobAttachment } from '@jobs/entities/job-attachment.entity';
+import { PaymentsModule } from '../payments/payments.module';
+import { JobsModule } from '@jobs/jobs.module';
 
 @Module({
   imports: [
@@ -23,6 +25,8 @@ import { JobAttachment } from '@jobs/entities/job-attachment.entity';
       JobAttachment,
     ]),
     AvailabilityModule,
+    PaymentsModule,
+    JobsModule,
   ],
   controllers: [BookingsController],
   providers: [BookingsService],

@@ -1,4 +1,5 @@
 import { NotFoundException } from '@nestjs/common';
+import { Role } from '@common/types/enums';
 import type { Repository } from 'typeorm';
 import type { ArtisanProfile } from '@users/entities/artisan-profile.entity';
 import type { User } from '@users/entities/user.entity';
@@ -126,16 +127,44 @@ describe('ArtisansService.findById (C1.6)', () => {
     expect(deleted).toBe(missing);
   });
 
+  const live = (overrides: Record<string, unknown> = {}) => ({
+    id: 472,
+    isProfileComplete: true,
+    user: { id: 90, isBanned: false, isSuspended: false },
+    services: [],
+    ...overrides,
+  });
+
   it('still returns the profile when the owner is live', async () => {
-    const service = buildService({
-      id: 472,
-      user: { id: 90 },
-      services: [],
-    });
+    const service = buildService(live());
 
     const result = await service.findById(472);
 
     expect(result.data).toBeDefined();
     expect(jobsCount).toHaveBeenCalledTimes(1);
+  });
+
+  describe('artisans hidden from search (QA SRCH-15)', () => {
+    it.each([
+      ['suspended', { user: { id: 90, isBanned: false, isSuspended: true } }],
+      ['banned', { user: { id: 90, isBanned: true, isSuspended: false } }],
+      ['incomplete', { isProfileComplete: false }],
+    ])('answers not-found for a %s artisan', async (_label, overrides) => {
+      const service = buildService(live(overrides));
+      await expect(service.findById(472)).rejects.toThrow(NotFoundException);
+      await expect(
+        service.findById(472, { id: 55, role: Role.CUSTOMER }),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('still shows the artisan their own hidden profile, and admins', async () => {
+      const hidden = live({ isProfileComplete: false });
+      await expect(
+        buildService(hidden).findById(472, { id: 90, role: Role.ARTISAN }),
+      ).resolves.toBeDefined();
+      await expect(
+        buildService(hidden).findById(472, { id: 1, role: Role.ADMIN }),
+      ).resolves.toBeDefined();
+    });
   });
 });

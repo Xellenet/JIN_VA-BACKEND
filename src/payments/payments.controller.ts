@@ -9,13 +9,19 @@ import {
   Query,
   Req,
   UseGuards,
+  ParseEnumPipe,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiQuery,
+  ApiTags,
+} from '@nestjs/swagger';
 import { PaymentsService } from './payments.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '@common/decorators/roles.decorator';
-import { Role } from '@common/types/enums';
+import { PaymentStatus, Role } from '@common/types/enums';
 import { InitializePaymentDto } from './dto/initialize-payment.dto';
 import { SetupPayoutMethodDto } from './dto/setup-payout-method.dto';
 import { AdminRefundDto } from './dto/admin-refund.dto';
@@ -134,12 +140,34 @@ export class PaymentsController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Admin: full payment log with pagination' })
+  @ApiOperation({
+    summary:
+      'Admin: full payment log with pagination, searchable by reference, customer, job title or job id, and filterable by status',
+  })
+  @ApiQuery({ name: 'search', required: false })
+  @ApiQuery({ name: 'status', required: false, enum: PaymentStatus })
   adminList(
     @Query('page', new ParseIntPipe({ optional: true })) page?: number,
     @Query('limit', new ParseIntPipe({ optional: true })) limit?: number,
+    @Query('search') search?: string,
+    @Query('status', new ParseEnumPipe(PaymentStatus, { optional: true }))
+    status?: PaymentStatus,
   ) {
-    return this.paymentsService.getAllPayments(page, limit);
+    return this.paymentsService.getAllPayments(page, limit, {
+      search: search?.slice(0, 100),
+      status,
+    });
+  }
+
+  @Get('admin/summary')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Admin: whole-ledger totals for the Transactions page',
+  })
+  adminSummary() {
+    return this.paymentsService.getAdminSummary();
   }
 
   @Post('admin/refund/:paymentId')

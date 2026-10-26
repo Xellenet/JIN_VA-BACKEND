@@ -18,7 +18,7 @@ export class ServiceEntity {
   description?: string;
 
   @Column({ type: 'decimal', precision: 10, scale: 2, nullable: true })
-  price?: number;
+  price?: number | null;
 
   /**
    * A2: how long this service typically takes, in minutes. Used to derive a

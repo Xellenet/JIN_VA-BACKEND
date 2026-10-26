@@ -10,6 +10,7 @@ import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { plainToInstance } from 'class-transformer';
 import {
+  Brackets,
   DataSource,
   EntityManager,
   LessThanOrEqual,
@@ -31,7 +32,12 @@ import { CreateApplicationDto } from './dto/create-application.dto';
 import { ApplicationResponseDto } from './dto/application-response.dto';
 import { ServiceEntity } from '@services/entities/service.entity';
 import { User } from '@users/entities/user.entity';
-import { ApplicationStatus, Role, Status } from '@common/types/enums';
+import {
+  ApplicationStatus,
+  BookingStatus,
+  Role,
+  Status,
+} from '@common/types/enums';
 import { VARIABLES } from '@common/constants/variables.constants';
 import { SUCCESS_MESSAGES } from '@common/constants/success-messages.constants';
 import { PaymentsService } from '../payments/payments.service';
@@ -74,6 +80,12 @@ type JobList = {
 type JobItem = { message: string; data: JobResponseDto };
 type AppItem = { message: string; data: ApplicationResponseDto };
 type AppList = { message: string; data: ApplicationResponseDto[] };
+
+/** The authenticated caller, as far as job visibility is concerned. */
+export interface JobViewer {
+  id: number;
+  role: Role;
+}
 
 @Injectable()
 export class JobsService {
@@ -240,14 +252,18 @@ export class JobsService {
   // ─── Read ────────────────────────────────────────────────────────────────────
 
   /**
-   * Returns a paginated, filtered list of all non-deleted jobs.
+   * Returns a paginated, filtered list of the non-deleted jobs the caller may
+   * see (see {@link canViewJob}): admins see every job, customers their own,
+   * artisans open jobs plus the ones they applied to or were accepted on.
    *
-   * @param query - Optional `status`, `serviceId`, `location` filters + `page`/`limit`.
+   * @param query  - Optional `status`, `serviceId`, `location` filters + `page`/`limit`.
+   * @param viewer - The authenticated caller.
    */
-  async findAll(query: GetJobsQueryDto): Promise<JobList> {
+  async findAll(query: GetJobsQueryDto, viewer: JobViewer): Promise<JobList> {
     const { page = 1, limit = 10 } = query;
 
     const qb = this.buildJobsQb();
+    this.applyViewerScope(qb, viewer);
     this.applyJobFilters(qb, query);
 
     const total = await qb.getCount();
@@ -303,11 +319,57 @@ export class JobsService {
    * @param id - The job ID.
    * @throws {NotFoundException} When no non-deleted job with the given ID exists.
    */
-  async findOne(id: number): Promise<JobItem> {
+  async findOne(id: number, viewer: JobViewer): Promise<JobItem> {
+    const job = await this.loadJobOrFail(id);
+    // QA SEC-02: any logged-in user could read any job (customer name,
+    // location, price, notes, attachments) by walking sequential ids. Answer
+    // "not found" rather than 403 so ids reveal nothing.
+    if (!(await this.canViewJob(job, viewer))) {
+      throw new NotFoundException(`Job with id ${id} not found.`);
+    }
     return {
       message: SUCCESS_MESSAGES.JOB.RETRIEVED,
       data: await this.loadJobDto(id, true),
     };
+  }
+
+  /**
+   * Who may read a job: admins; its customer; its accepted artisan; artisans
+   * who applied to it; and any artisan while it is OPEN (the job board).
+   * `SharedMediaService.canViewJobMedia` applies the same rule to job photos;
+   * change both together.
+   */
+  private async canViewJob(job: Job, viewer: JobViewer): Promise<boolean> {
+    if (viewer.role === Role.ADMIN) return true;
+    if (job.customer?.id === viewer.id) return true;
+    if (viewer.role !== Role.ARTISAN) return false;
+    if (job.status === Status.OPEN) return true;
+    if (job.acceptedArtisan?.id === viewer.id) return true;
+    return this.applicationsRepository.exists({
+      where: { job: { id: job.id }, artisan: { id: viewer.id } },
+    });
+  }
+
+  /** The list-endpoint form of {@link canViewJob}. */
+  private applyViewerScope(
+    qb: ReturnType<typeof this.buildJobsQb>,
+    viewer: JobViewer,
+  ) {
+    if (viewer.role === Role.ADMIN) return;
+    if (viewer.role !== Role.ARTISAN) {
+      qb.andWhere('job.customer = :viewerId', { viewerId: viewer.id });
+      return;
+    }
+    qb.andWhere(
+      new Brackets((w) => {
+        w.where('job.status = :openStatus', { openStatus: Status.OPEN })
+          .orWhere('job.acceptedArtisan = :viewerId', { viewerId: viewer.id })
+          .orWhere(
+            'EXISTS (SELECT 1 FROM job_applications ja WHERE ja.job_id = job.id AND ja.artisan_id = :viewerId)',
+            { viewerId: viewer.id },
+          );
+      }),
+    );
   }
 
   // ─── Application flow ────────────────────────────────────────────────────────
@@ -545,6 +607,17 @@ export class JobsService {
 
     this.assertAcceptedArtisan(job, artisanId);
 
+    // QA JOB-11: work must not begin before the customer's money is secured.
+    // Jobs with no payment attached (created from a booking) are unaffected.
+    if (
+      job.paymentIntentId &&
+      !(await this.paymentsService.isPaymentSecured(job.paymentIntentId))
+    ) {
+      throw new BadRequestException(
+        "The customer hasn't paid for this job yet. You can start once the payment is secured.",
+      );
+    }
+
     await this.transitionAndSave(job, Status.IN_PROGRESS, String(artisanId));
 
     this.logger.log(`Job ${jobId} → IN_PROGRESS by artisan ${artisanId}`);
@@ -678,16 +751,20 @@ export class JobsService {
         Status.COMPLETED,
         String(customerId),
       );
+      await this.syncLinkedBooking(manager, job.id, BookingStatus.COMPLETED);
     });
 
     // Outside the transaction: the job's COMPLETED status has already
     // durably committed. A capture failure here must never roll that back —
     // it leaves the Payment in a retryable state (PENDING_TRANSFER /
     // TRANSFER_FAILED) instead, surfaced to the artisan/admin.
+    let message: string = SUCCESS_MESSAGES.JOB.CONFIRMED;
     if (paymentIntentId) {
       try {
         await this.paymentsService.capturePayment(paymentIntentId, jobId);
+        message = SUCCESS_MESSAGES.JOB.CONFIRMED_PAYMENT_RELEASING;
       } catch (err) {
+        message = SUCCESS_MESSAGES.JOB.CONFIRMED_PAYMENT_DELAYED;
         this.logger.error(
           `Job ${jobId} confirmed COMPLETED but payment capture failed — payment left in a retryable state. ${err instanceof Error ? err.message : String(err)}`,
         );
@@ -695,9 +772,7 @@ export class JobsService {
     }
 
     const job = await this.loadJobOrFail(jobId);
-    this.logger.log(
-      `Job ${jobId} → COMPLETED. Payment captured. Customer ${customerId}`,
-    );
+    this.logger.log(`Job ${jobId} → COMPLETED. Customer ${customerId}`);
 
     if (job.acceptedArtisanId) {
       this.eventEmitter.emit(APP_EVENTS.JOB_COMPLETED, {
@@ -708,7 +783,7 @@ export class JobsService {
     }
 
     return {
-      message: SUCCESS_MESSAGES.JOB.CONFIRMED,
+      message,
       data: await this.loadJobDto(jobId),
     };
   }
@@ -744,9 +819,22 @@ export class JobsService {
     jobId: number,
     customerId: number,
   ): Promise<{ message: string }> {
-    let paymentIntentId: string | undefined;
+    // QA JOB-18 / PAY-15: the job used to be cancelled first and the refund
+    // attempted afterwards, so a refused refund left a CANCELLED job with the
+    // customer's money still HELD and no way to retry. Settle the money first:
+    // if the provider refuses, nothing has changed and the customer can retry.
+    const current = await this.jobsRepository.findOne({ where: { id: jobId } });
+    if (!current)
+      throw new NotFoundException(`Job with id ${jobId} not found.`);
+    this.assertOwner(current, customerId);
+    this.assertCancellable(current);
+    if (current.paymentIntentId) {
+      await this.paymentsService.cancelPayment(current.paymentIntentId, jobId);
+    }
+
     let acceptedArtisanId: number | undefined;
     let jobTitle: string | undefined;
+    let rejectedArtisanIds: number[] = [];
 
     await this.dataSource.transaction(async (manager) => {
       const jobRepo = manager.getRepository(Job);
@@ -762,22 +850,10 @@ export class JobsService {
       });
       if (!job) throw new NotFoundException(`Job with id ${jobId} not found.`);
       this.assertOwner(job, customerId);
+      // Re-checked under the lock: something may have moved the job between
+      // the payment step and here.
+      this.assertCancellable(job);
 
-      if (job.status === Status.COMPLETED || job.status === Status.CANCELLED) {
-        throw new BadRequestException(
-          `A ${job.status} job cannot be cancelled.`,
-        );
-      }
-      if (job.status === Status.EXPIRED) {
-        throw new BadRequestException('An expired job cannot be cancelled.');
-      }
-      if (job.completionRequestedAt) {
-        throw new BadRequestException(
-          'This job cannot be self-cancelled once the artisan has requested completion. Raise a dispute instead.',
-        );
-      }
-
-      paymentIntentId = job.paymentIntentId;
       acceptedArtisanId = job.acceptedArtisanId;
       jobTitle = job.title;
 
@@ -792,16 +868,22 @@ export class JobsService {
         Status.CANCELLED,
         String(customerId),
       );
-    });
+      await this.syncLinkedBooking(manager, job.id, BookingStatus.CANCELLED);
 
-    // Release the payment hold if one exists. Runs after the job's
-    // CANCELLED status has committed, and locks the Payment row itself
-    // (see PaymentsService.cancelPayment), so it safely no-ops if a
-    // concurrent capture already moved the payment past a
-    // refundable/cancellable state.
-    if (paymentIntentId) {
-      await this.paymentsService.cancelPayment(paymentIntentId, jobId);
-    }
+      // QA JOB-18: applications on a cancelled job used to stay PENDING.
+      const appRepo = manager.getRepository(JobApplication);
+      const pending = await appRepo.find({
+        where: { job: { id: jobId }, status: ApplicationStatus.PENDING },
+        relations: ['artisan'],
+      });
+      if (pending.length) {
+        await appRepo.update(
+          pending.map((a) => a.id),
+          { status: ApplicationStatus.REJECTED },
+        );
+        rejectedArtisanIds = pending.map((a) => a.artisan.id);
+      }
+    });
 
     this.logger.log(`Job ${jobId} → CANCELLED by customer ${customerId}`);
 
@@ -812,8 +894,30 @@ export class JobsService {
         jobId,
       } as JobCancelledPayload);
     }
+    for (const artisanId of rejectedArtisanIds) {
+      this.eventEmitter.emit(APP_EVENTS.JOB_APPLICATION_REJECTED, {
+        artisanId,
+        jobTitle: jobTitle ?? `Job #${jobId}`,
+        jobId,
+      } as JobApplicationRejectedPayload);
+    }
 
     return { message: SUCCESS_MESSAGES.JOB.CANCELLED };
+  }
+
+  /** The states a customer may cancel from (shared by both cancel checks). */
+  private assertCancellable(job: Job): void {
+    if (job.status === Status.COMPLETED || job.status === Status.CANCELLED) {
+      throw new BadRequestException(`A ${job.status} job cannot be cancelled.`);
+    }
+    if (job.status === Status.EXPIRED) {
+      throw new BadRequestException('An expired job cannot be cancelled.');
+    }
+    if (job.completionRequestedAt) {
+      throw new BadRequestException(
+        'This job cannot be self-cancelled once the artisan has requested completion. Raise a dispute instead.',
+      );
+    }
   }
 
   // ─── Admin / scheduler actions ──────────────────────────────────────────────
@@ -939,6 +1043,7 @@ export class JobsService {
         'SYSTEM',
         'auto-completed after 48h — customer did not respond',
       );
+      await this.syncLinkedBooking(manager, job.id, BookingStatus.COMPLETED);
       return true;
     });
 
@@ -1059,10 +1164,21 @@ export class JobsService {
     }
   }
 
+  /**
+   * QA JOB-16: a job can be edited only while it is OPEN. Once an artisan is
+   * accepted, the title, scope and budget are what they agreed to (and the
+   * payment was created from), so changing them afterwards was a bait and
+   * switch the API allowed.
+   */
   private assertMutable(job: Job): void {
     if (IMMUTABLE_STATUSES.has(job.status)) {
       throw new BadRequestException(
         `Jobs with status ${job.status} cannot be edited.`,
+      );
+    }
+    if (job.status !== Status.OPEN) {
+      throw new BadRequestException(
+        'This job can no longer be edited because an artisan has been accepted for it.',
       );
     }
   }
@@ -1099,6 +1215,24 @@ export class JobsService {
         reason,
       );
     });
+  }
+
+  /**
+   * QA BK-23 / JOB-22: a job created from a booking finishes (or is
+   * cancelled) together with that booking, so the two never disagree. A
+   * no-op for jobs that weren't booked, and for a booking already moved on.
+   */
+  private async syncLinkedBooking(
+    manager: EntityManager,
+    jobId: number,
+    to: BookingStatus.COMPLETED | BookingStatus.CANCELLED,
+  ): Promise<void> {
+    await manager.query(
+      `UPDATE bookings SET status = $1, updated_at = now()
+        WHERE status = $2
+          AND id = (SELECT booking_id FROM jobs WHERE id = $3)`,
+      [to, BookingStatus.CONFIRMED, jobId],
+    );
   }
 
   private async recordHistory(

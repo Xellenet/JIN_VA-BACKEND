@@ -9,6 +9,7 @@ import {
   MinLength,
 } from 'class-validator';
 import { DisputeCategory } from '@common/types/enums';
+import { TrimText } from '@common/validators/trim-text.decorator';
 
 export class CreateDisputeDto {
   @ApiProperty({ example: 1, description: 'ID of the booking being disputed' })
@@ -35,6 +36,7 @@ export class CreateDisputeDto {
       'The artisan did not complete the agreed work and is refusing to return.',
     description: 'Detailed reason for raising the dispute',
   })
+  @TrimText()
   @IsString()
   @MinLength(20, {
     message: 'Please provide a detailed reason (at least 20 characters).',

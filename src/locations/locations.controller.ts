@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
+  ApiBearerAuth,
   ApiOkResponse,
   ApiOperation,
   ApiTags,
@@ -18,6 +19,11 @@ import { LocationsService } from './locations.service';
 import { LocationSuggestionsQueryDto } from './dto/location-suggestions-query.dto';
 import { LocationSuggestionsResponseDto } from './dto/location-suggestions-response.dto';
 import { LocationSuggestionsThrottlerGuard } from './guards/location-suggestions-throttler.guard';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import {
+  ReverseLocationQueryDto,
+  ReverseLocationResponseDto,
+} from './dto/reverse-location.dto';
 import { LocationSuggestionsExceptionFilter } from './filters/location-suggestions-exception.filter';
 
 /** Browser cache for a successful answer; matches the server cache (LOC10). */
@@ -73,6 +79,32 @@ export class LocationsController {
       message: result.available
         ? 'Location suggestions retrieved'
         : 'Location suggestions unavailable',
+      data: result,
+    };
+  }
+
+  /** QA JOB-04: an address for "Use my location" (see LocationsService.reverse). */
+  @Get('reverse')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, LocationSuggestionsThrottlerGuard)
+  @UseFilters(LocationSuggestionsExceptionFilter)
+  @ApiOperation({
+    summary: 'A readable address for a point (signed-in users)',
+    description:
+      'Sends only the point rounded to about 100 m to the OpenStreetMap geocoder (Photon). ' +
+      'Returns 200 with `available: false` and no label when it is unavailable.',
+  })
+  @ApiOkResponse({ type: ReverseLocationResponseDto })
+  async reverse(
+    @Query() query: ReverseLocationQueryDto,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<{ message: string; data: ReverseLocationResponseDto }> {
+    const result = await this.locationsService.reverse(query.lat, query.lon);
+    res.setHeader('Cache-Control', 'no-store');
+    return {
+      message: result.available
+        ? 'Location found'
+        : 'Location lookup unavailable',
       data: result,
     };
   }

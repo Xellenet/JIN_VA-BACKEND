@@ -53,6 +53,9 @@ export class UserTokenService {
    * @returns The user associated with the token or null if invalid
    */
   async validateToken(token: string, type: Token): Promise<User | null> {
+    if (!isUsableToken(token)) {
+      throw new BadRequestException('Invalid or expired token');
+    }
     const userToken = await this.tokenRepo.findOne({
       where: { token, type },
       relations: ['user'],
@@ -83,6 +86,10 @@ export class UserTokenService {
    *   consumed/revoked, DB-expired, or fails JWT signature/expiry verification.
    */
   async consumeRefreshToken(token: string): Promise<User | null> {
+    if (!isUsableToken(token)) {
+      this.logger.warn('Refresh token missing or empty');
+      return null;
+    }
     const userToken = await this.tokenRepo.findOne({
       where: { token, type: Token.REFRESH },
       relations: ['user'],
@@ -111,7 +118,11 @@ export class UserTokenService {
     }
 
     try {
-      this.jwtService.verify(token);
+      const verified = this.jwtService.verify<JwtPayload>(token);
+      if (verified.typ && verified.typ !== 'refresh') {
+        this.logger.warn('Refused a non-refresh token at the refresh endpoint');
+        return null;
+      }
     } catch (error) {
       this.logger.warn(
         `Refresh token JWT verification failed: ${getErrorMessage(error)}`,
@@ -138,6 +149,10 @@ export class UserTokenService {
   }
 
   async revokeToken(token: string): Promise<void> {
+    if (!isUsableToken(token)) {
+      this.logger.warn('Skipped revoking a missing or empty token');
+      return;
+    }
     this.logger.log(`Revoking token`);
     await this.tokenRepo.delete({ token });
   }
@@ -212,7 +227,10 @@ export class UserTokenService {
 
     let access_token: string;
     try {
-      access_token = this.jwtService.sign(payload, accessOptions);
+      access_token = this.jwtService.sign(
+        { ...payload, typ: 'access' },
+        accessOptions,
+      );
       this.logger.log('Access token signed successfully');
     } catch (signError) {
       this.logger.error(
@@ -225,7 +243,10 @@ export class UserTokenService {
     const refreshOptions = { expiresIn: refreshExpiresIn };
     let refresh_token: string;
     try {
-      refresh_token = this.jwtService.sign(payload, refreshOptions);
+      refresh_token = this.jwtService.sign(
+        { ...payload, typ: 'refresh', jti: crypto.randomUUID() },
+        refreshOptions,
+      );
       this.logger.log('Refresh token signed successfully');
     } catch (signError) {
       this.logger.error(
@@ -260,4 +281,14 @@ export class UserTokenService {
     this.logger.log(`Revoking refresh tokens for user with id: ${userId}`);
     await this.tokenRepo.delete({ user: { id: userId }, type: Token.REFRESH });
   }
+}
+
+/**
+ * A token lookup or delete must never run without a real token value: TypeORM
+ * drops `undefined` from a `where`/delete criteria, so `{ token: undefined,
+ * type }` matches the first token of that type for ANY user (QA AUTH-24:
+ * a token-less password reset changed another account's password).
+ */
+function isUsableToken(token: unknown): token is string {
+  return typeof token === 'string' && token.trim().length > 0;
 }

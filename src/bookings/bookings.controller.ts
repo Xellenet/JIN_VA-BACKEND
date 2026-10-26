@@ -23,6 +23,7 @@ import { BookingsService } from './bookings.service';
 import { CreateBookingDto } from './dto/create-booking.dto';
 import { GetBookingsQueryDto } from './dto/get-bookings-query.dto';
 import { RespondBookingDto } from './dto/respond-booking.dto';
+import { ConfirmBookingDto } from './dto/confirm-booking.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { NotSuspendedGuard } from '@common/guards/not-suspended.guard';
@@ -122,7 +123,7 @@ export class BookingsController {
   confirm(
     @Req() req: AuthenticatedRequest,
     @Param('id', ParseIntPipe) id: number,
-    @Body() dto: RespondBookingDto,
+    @Body() dto: ConfirmBookingDto,
   ) {
     return this.bookingsService.confirm(req.user.id, id, dto);
   }

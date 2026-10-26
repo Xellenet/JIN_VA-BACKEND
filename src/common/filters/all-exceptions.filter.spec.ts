@@ -8,7 +8,10 @@ import type { ArgumentsHost, ExecutionContext } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import type { Logger } from 'winston';
 import type { ThrottlerLimitDetail } from '@nestjs/throttler';
-import { AllExceptionsFilter } from './all-exceptions.filter';
+import {
+  AllExceptionsFilter,
+  redactQuerySecrets,
+} from './all-exceptions.filter';
 import { MessageSendThrottlerGuard } from '@messages/guards/message-send-throttler.guard';
 import { AccountPendingDeletionException } from '../exceptions/account-pending-deletion.exception';
 import { ErrorResponse } from '../types/api-response.type';
@@ -260,5 +263,22 @@ describe('AllExceptionsFilter', () => {
 
       expect(body.meta.details).toBeUndefined();
     });
+  });
+});
+
+describe('redactQuerySecrets (QA RES-11)', () => {
+  it('removes one-time tokens from a logged URL', () => {
+    expect(
+      redactQuerySecrets('/api/v1/auth/reset-password?token=abc123&x=1'),
+    ).toBe('/api/v1/auth/reset-password?token=[redacted]&x=1');
+    expect(redactQuerySecrets('/cb?state=s1&code=c2')).toBe(
+      '/cb?state=[redacted]&code=[redacted]',
+    );
+  });
+
+  it('leaves URLs without secrets unchanged', () => {
+    expect(redactQuerySecrets('/api/v1/artisans?page=2')).toBe(
+      '/api/v1/artisans?page=2',
+    );
   });
 });

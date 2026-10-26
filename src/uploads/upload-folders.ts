@@ -18,8 +18,8 @@
  * ── The split ───────────────────────────────────────────────────────────────
  * - {@link PUBLIC_UPLOAD_FOLDERS} keep exactly the behaviour they have today:
  *   a public CDN URL under S3, and the long-lived immutable static mount under
- *   local storage. Nothing about avatars, portfolio items, review photos,
- *   message attachments or job attachments changes.
+ *   local storage. Avatars, portfolio items and review photos are public by
+ *   design. Message and job attachments were too, until QA MSG-18.
  * - {@link PRIVATE_UPLOAD_FOLDERS} are never reachable anonymously in either
  *   mode:
  *   - under S3 the object key is prefixed with {@link PRIVATE_S3_KEY_PREFIX},
@@ -43,15 +43,32 @@ export const PUBLIC_UPLOAD_FOLDERS = [
   'avatars',
   'portfolio',
   'reviews',
-  /** MC4: image attachments on direct messages. */
+] as const;
+
+/** KYC media: identity documents and verification selfies. Admins only. */
+export const KYC_UPLOAD_FOLDERS = ['documents', 'selfies'] as const;
+
+/**
+ * QA MSG-18: images people share with each other — message attachments (MC4)
+ * and job/booking photos. They used to be public folders, readable by anyone
+ * holding the URL. They are now private like KYC media, and read back through
+ * `GET /uploads/private/:folder/:filename`, which only answers the people
+ * involved (see `SharedMediaAccessService`).
+ */
+export const SHARED_PRIVATE_UPLOAD_FOLDERS = [
   'messages',
   'job-attachments',
 ] as const;
 
-/** KYC media: identity documents and verification selfies. */
-export const PRIVATE_UPLOAD_FOLDERS = ['documents', 'selfies'] as const;
+export const PRIVATE_UPLOAD_FOLDERS = [
+  ...KYC_UPLOAD_FOLDERS,
+  ...SHARED_PRIVATE_UPLOAD_FOLDERS,
+] as const;
 
 export type PublicUploadFolder = (typeof PUBLIC_UPLOAD_FOLDERS)[number];
+export type KycUploadFolder = (typeof KYC_UPLOAD_FOLDERS)[number];
+export type SharedPrivateUploadFolder =
+  (typeof SHARED_PRIVATE_UPLOAD_FOLDERS)[number];
 export type PrivateUploadFolder = (typeof PRIVATE_UPLOAD_FOLDERS)[number];
 export type UploadFolder = PublicUploadFolder | PrivateUploadFolder;
 
@@ -68,6 +85,16 @@ export const PRIVATE_S3_KEY_PREFIX = 'private';
  * documentation and the contract cannot drift apart.
  */
 export const KYC_MEDIA_ROUTE = 'uploads/kyc';
+
+export function isKycUploadFolder(value: string): value is KycUploadFolder {
+  return (KYC_UPLOAD_FOLDERS as readonly string[]).includes(value);
+}
+
+export function isSharedPrivateUploadFolder(
+  value: string,
+): value is SharedPrivateUploadFolder {
+  return (SHARED_PRIVATE_UPLOAD_FOLDERS as readonly string[]).includes(value);
+}
 
 export function isPrivateUploadFolder(
   value: string,

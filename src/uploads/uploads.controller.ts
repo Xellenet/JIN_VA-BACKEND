@@ -6,7 +6,6 @@ import {
   Param,
   ParseFilePipe,
   Post,
-  MaxFileSizeValidator,
   Req,
   Res,
   UploadedFile,
@@ -29,14 +28,17 @@ import { memoryStorage } from 'multer';
 import type { Response } from 'express';
 import { UploadsService } from './uploads.service';
 import { KycMediaService } from './kyc-media.service';
-import { PRIVATE_UPLOAD_FOLDERS } from './upload-folders';
+import { SharedMediaService } from './shared-media.service';
+import {
+  KYC_UPLOAD_FOLDERS,
+  SHARED_PRIVATE_UPLOAD_FOLDERS,
+} from './upload-folders';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '@common/decorators/roles.decorator';
 import { Role } from '@common/types/enums';
 import type { AuthenticatedRequest } from '@common/types/authenticated-request.type';
-
-const MB = 1024 * 1024;
+import { maxFileSizeMb } from './max-file-size';
 
 const fileField = {
   schema: {
@@ -54,6 +56,7 @@ export class UploadsController {
   constructor(
     private readonly uploadsService: UploadsService,
     private readonly kycMediaService: KycMediaService,
+    private readonly sharedMediaService: SharedMediaService,
   ) {}
 
   @Post('avatar')
@@ -61,14 +64,14 @@ export class UploadsController {
   @UseInterceptors(FileInterceptor('file', { storage: memoryStorage() }))
   @ApiOperation({
     summary:
-      'Upload a profile avatar (all authenticated users, ≤ 3 MB, JPEG/PNG/WebP)',
+      'Upload a profile avatar (all authenticated users, ≤ 5 MB, JPEG/PNG/WebP)',
   })
   @ApiConsumes('multipart/form-data')
   @ApiBody(fileField)
   uploadAvatar(
     @UploadedFile(
       new ParseFilePipe({
-        validators: [new MaxFileSizeValidator({ maxSize: 3 * MB })],
+        validators: [maxFileSizeMb(5)],
       }),
     )
     file: Express.Multer.File,
@@ -89,7 +92,7 @@ export class UploadsController {
   uploadDocument(
     @UploadedFile(
       new ParseFilePipe({
-        validators: [new MaxFileSizeValidator({ maxSize: 10 * MB })],
+        validators: [maxFileSizeMb(10)],
       }),
     )
     file: Express.Multer.File,
@@ -110,7 +113,7 @@ export class UploadsController {
   uploadSelfie(
     @UploadedFile(
       new ParseFilePipe({
-        validators: [new MaxFileSizeValidator({ maxSize: 5 * MB })],
+        validators: [maxFileSizeMb(5)],
       }),
     )
     file: Express.Multer.File,
@@ -131,7 +134,7 @@ export class UploadsController {
   uploadJobAttachment(
     @UploadedFile(
       new ParseFilePipe({
-        validators: [new MaxFileSizeValidator({ maxSize: 10 * MB })],
+        validators: [maxFileSizeMb(10)],
       }),
     )
     file: Express.Multer.File,
@@ -152,7 +155,7 @@ export class UploadsController {
   uploadReviewPhoto(
     @UploadedFile(
       new ParseFilePipe({
-        validators: [new MaxFileSizeValidator({ maxSize: 5 * MB })],
+        validators: [maxFileSizeMb(5)],
       }),
     )
     file: Express.Multer.File,
@@ -174,7 +177,7 @@ export class UploadsController {
   uploadMessageAttachment(
     @UploadedFile(
       new ParseFilePipe({
-        validators: [new MaxFileSizeValidator({ maxSize: 5 * MB })],
+        validators: [maxFileSizeMb(5)],
       }),
     )
     file: Express.Multer.File,
@@ -204,7 +207,7 @@ export class UploadsController {
       'Cache-Control: private, no-store. Build the path from the stored ' +
       'reference: "/uploads/documents/<file>" → GET /uploads/kyc/documents/<file>.',
   })
-  @ApiParam({ name: 'folder', enum: PRIVATE_UPLOAD_FOLDERS })
+  @ApiParam({ name: 'folder', enum: KYC_UPLOAD_FOLDERS })
   @ApiParam({
     name: 'filename',
     description: 'The stored filename, e.g. "9f1c….jpg". No path separators.',
@@ -249,6 +252,53 @@ export class UploadsController {
       // connection instead of emitting a truncated body that looks complete.
       res.destroy();
     });
+    object.stream.pipe(res);
+  }
+
+  /**
+   * QA MSG-18: a message image or job/booking photo, for the people it was
+   * shared with only (see `SharedMediaService` for who that is). Same raw-bytes
+   * response and private, no-store caching as the KYC route. Build the path
+   * from the stored reference: "/uploads/messages/<file>" →
+   * GET /uploads/private/messages/<file>.
+   */
+  @Get('private/:folder/:filename')
+  @ApiOperation({
+    summary:
+      'Stream a message image or job/booking photo to someone it was shared with. ' +
+      'Raw bytes with Cache-Control: private, no-store.',
+  })
+  @ApiParam({ name: 'folder', enum: SHARED_PRIVATE_UPLOAD_FOLDERS })
+  @ApiParam({
+    name: 'filename',
+    description: 'The stored filename. No path separators.',
+  })
+  @ApiOkResponse({
+    description: 'The file bytes, with the stored Content-Type.',
+  })
+  @ApiNotFoundResponse({
+    description:
+      "No such file, or the caller isn't one of the people it was shared with (the same answer, so existence is never confirmed).",
+  })
+  async streamSharedMedia(
+    @Req() req: AuthenticatedRequest,
+    @Param('folder') folder: string,
+    @Param('filename') filename: string,
+    @Res() res: Response,
+  ): Promise<void> {
+    const object = await this.sharedMediaService.open(
+      folder,
+      filename,
+      req.user,
+    );
+    res.setHeader('Content-Type', object.contentType);
+    if (object.contentLength !== undefined) {
+      res.setHeader('Content-Length', String(object.contentLength));
+    }
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+    object.stream.on('error', () => res.destroy());
     object.stream.pipe(res);
   }
 }

@@ -101,6 +101,12 @@ describe('AuthController', () => {
   });
 
   describe('loginUser', () => {
+    const cookieCalls = () =>
+      (mockRes.cookie as jest.Mock).mock.calls.map(
+        ([name, , opts]: [string, string, { maxAge?: number }]) =>
+          `${name}:${opts.maxAge === 0 ? 'cleared' : 'set'}`,
+      );
+
     it('should call authService.loginUser, set the httpOnly cookies, and return only the body result', async () => {
       const loginDto: LoginDto = {
         email: 'test@example.com',
@@ -122,8 +128,42 @@ describe('AuthController', () => {
       expect(result).toEqual(expectedResult);
       expect(result).not.toHaveProperty('refresh_token');
       expect(result).not.toHaveProperty('refreshToken');
-      // Both httpOnly cookies must be set: the refresh token and the S2 role/auth signal.
-      expect(mockRes.cookie).toHaveBeenCalledTimes(2);
+      // Both httpOnly cookies must be set: the refresh token and the S2
+      // role/auth signal, persistent by default (QA AUTH-31), and the
+      // session-only marker cleared.
+      expect(cookieCalls()).toEqual([
+        `${VARIABLES.REFRESH_TOKEN_COOKIE_NAME}:set`,
+        `${VARIABLES.AUTH_SESSION_COOKIE_NAME}:set`,
+        'jinva_session_only:cleared',
+      ]);
+      for (const [, , options] of (
+        mockRes.cookie as jest.Mock
+      ).mock.calls.slice(0, 2) as [string, string, { maxAge?: number }][]) {
+        expect(options.maxAge).toBeGreaterThan(0);
+      }
+    });
+
+    it('keeps the sign-in to the browser session when "Remember me" is unticked (QA AUTH-31)', async () => {
+      mockAuthService.loginUser.mockResolvedValueOnce({
+        result: { access_token: 'token', data: { id: 1, role: Role.CUSTOMER } },
+        refreshToken: 'refresh-token',
+      });
+
+      await controller.loginUser(
+        { email: 'test@example.com', password: 'pass', rememberMe: false },
+        mockRes,
+      );
+
+      const calls = (mockRes.cookie as jest.Mock).mock.calls as [
+        string,
+        string,
+        { maxAge?: number },
+      ][];
+      for (const [name, , options] of calls) {
+        if (name === 'jinva_session_only') continue;
+        expect(options.maxAge).toBeUndefined();
+      }
+      expect(cookieCalls()).toContain('jinva_session_only:set');
     });
   });
 
@@ -184,8 +224,9 @@ describe('AuthController', () => {
           error_description: undefined,
         },
       );
-      // G3: same httpOnly cookie contract as POST /auth/login.
-      expect(mockRes.cookie).toHaveBeenCalledTimes(2);
+      // G3: same httpOnly cookie contract as POST /auth/login (the two auth
+      // cookies, plus clearing any "Remember me" session-only marker).
+      expect(mockRes.cookie).toHaveBeenCalledTimes(3);
       // G4: redirect, never a JSON body.
       expect(mockRes.redirect).toHaveBeenCalledWith(
         'https://app.example.com/auth/callback',
@@ -299,6 +340,7 @@ describe('AuthController', () => {
         `${VARIABLES.PENDING_SOCIAL_SIGNUP_COOKIE_NAME}:cleared`,
         `${VARIABLES.REFRESH_TOKEN_COOKIE_NAME}:set`,
         `${VARIABLES.AUTH_SESSION_COOKIE_NAME}:set`,
+        'jinva_session_only:cleared',
       ]);
     });
 

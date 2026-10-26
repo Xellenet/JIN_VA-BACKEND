@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsString, MaxLength, MinLength } from 'class-validator';
+import { TrimText } from '@common/validators/trim-text.decorator';
 
 /**
  * DR4: the counterparty's single written response to a dispute filed against
@@ -12,6 +13,7 @@ export class RespondToDisputeDto {
       'I attended on the agreed date but nobody was at the property to let me in.',
     description: "The counterparty's side of the dispute (20–2000 characters).",
   })
+  @TrimText()
   @IsString()
   @MinLength(20, {
     message: 'Please provide a detailed response (at least 20 characters).',

@@ -7,8 +7,10 @@ import {
   IsOptional,
   IsString,
   MaxLength,
+  MinLength,
   Min,
 } from 'class-validator';
+import { TrimText } from '@common/validators/trim-text.decorator';
 
 /**
  * Fields a job owner may update on an existing OPEN job.
@@ -22,7 +24,9 @@ export class UpdateJobDto {
     description: 'Revised job title (max 150 chars)',
   })
   @IsOptional()
+  @TrimText()
   @IsString()
+  @MinLength(5, { message: 'Title must be at least 5 characters.' })
   @MaxLength(150)
   title?: string;
 
@@ -31,7 +35,9 @@ export class UpdateJobDto {
     description: 'Revised job description (max 2000 chars)',
   })
   @IsOptional()
+  @TrimText()
   @IsString()
+  @MinLength(10, { message: 'Description must be at least 10 characters.' })
   @MaxLength(2000)
   description?: string;
 

@@ -9,6 +9,7 @@ import { JobApplication } from '@jobs/entities/job-application.entity';
 import { ArtisanVerification } from '../verification/entities/artisan-verification.entity';
 import { Booking } from '../bookings/entities/booking.entity';
 import { Dispute } from '../disputes/entities/dispute.entity';
+import { UserToken } from '@users/entities/user-token.entity';
 import { JobsModule } from '@jobs/jobs.module';
 import { VerificationModule } from '../verification/verification.module';
 import { DisputesModule } from '../disputes/disputes.module';
@@ -29,6 +30,8 @@ import { AdminAuditModule } from '../admin-audit/admin-audit.module';
       // AT6: disputes are one of the three entity types the cross-entity
       // admin search covers.
       Dispute,
+      // A ban ends the user's sessions by deleting their refresh tokens.
+      UserToken,
     ]),
     JobsModule,
     VerificationModule,

@@ -57,7 +57,15 @@ export const SUCCESS_MESSAGES = {
     STARTED: 'Job started. Work is now in progress.',
     COMPLETION_REQUESTED:
       'Completion request submitted. Awaiting customer confirmation.',
-    CONFIRMED: 'Job confirmed as complete. Payment has been released.',
+    /**
+     * QA NOT-07: "Payment has been released" was said even when nothing had
+     * been paid. Which sentence applies depends on the capture's outcome.
+     */
+    CONFIRMED: 'Job confirmed as complete.',
+    CONFIRMED_PAYMENT_RELEASING:
+      "Job confirmed as complete. The artisan's payment is on its way to them.",
+    CONFIRMED_PAYMENT_DELAYED:
+      "Job confirmed as complete. Releasing the artisan's payment is taking longer than usual; we'll keep trying.",
     CANCELLED: 'Job cancelled successfully.',
   },
   FAVOURITE: {

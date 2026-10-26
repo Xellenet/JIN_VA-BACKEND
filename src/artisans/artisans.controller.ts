@@ -25,6 +25,7 @@ import {
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { OptionalJwtAuthGuard } from '../auth/guards/optional-jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '@common/decorators/roles.decorator';
 import { Role } from '@common/types/enums';
@@ -82,8 +83,12 @@ export class ArtisansController {
     type: ArtisanPublicResponseDto,
   })
   @ApiNotFoundResponse({ description: 'Artisan profile not found' })
-  findById(@Param('id', ParseIntPipe) id: number) {
-    return this.artisansService.findById(id);
+  @UseGuards(OptionalJwtAuthGuard)
+  findById(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
+    return this.artisansService.findById(id, req.user);
   }
 
   // ─── Authenticated artisan self-management ─────────────────────────────────

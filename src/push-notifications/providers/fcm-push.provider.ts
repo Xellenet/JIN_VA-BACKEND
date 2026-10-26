@@ -65,7 +65,10 @@ export class FcmPushProvider implements IPushProvider, OnModuleInit {
     const failedTokens: string[] = [];
     response.responses.forEach((r, i) => {
       if (!r.success) {
-        this.logger.warn(`FCM token failed (${r.error?.code}): ${tokens[i]}`);
+        // Device tokens are credentials for that device: log a short prefix only.
+        this.logger.warn(
+          `FCM token failed (${r.error?.code}): ${tokens[i].slice(0, 8)}…`,
+        );
         if (
           r.error?.code === 'messaging/registration-token-not-registered' ||
           r.error?.code === 'messaging/invalid-registration-token'

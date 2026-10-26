@@ -26,6 +26,12 @@ import type { FindOperator } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { hashEmailForLog } from '@common/utils/log-identifier.util';
 
+/** QA AUTH-04: email lookups match `LOWER(email)` against the normalised address. */
+function expectSameEmail(operator: FindOperator<unknown>, email: string) {
+  expect(operator.type).toBe('raw');
+  expect(operator.objectLiteralParameters).toEqual({ normalizedEmail: email });
+}
+
 describe('UsersService', () => {
   let service: UsersService;
 
@@ -48,7 +54,19 @@ describe('UsersService', () => {
     update: jest.fn(),
   };
 
+  /** Chainable query builder; `getOne`/`getExists` are set per test. */
+  const mockUserQb = {
+    select: jest.fn().mockReturnThis(),
+    addSelect: jest.fn().mockReturnThis(),
+    where: jest.fn().mockReturnThis(),
+    andWhere: jest.fn().mockReturnThis(),
+    withDeleted: jest.fn().mockReturnThis(),
+    getOne: jest.fn().mockResolvedValue(null),
+    getExists: jest.fn().mockResolvedValue(false),
+  };
+
   const mockUsersRepository = {
+    createQueryBuilder: jest.fn(() => mockUserQb),
     create: jest.fn(),
     save: jest.fn(),
     find: jest.fn(),
@@ -335,13 +353,16 @@ describe('UsersService', () => {
       ).rejects.toThrow(NotFoundException);
     });
 
-    it('should return the user if found', async () => {
+    it('should return the user if found, whatever case the address is typed in (QA AUTH-04)', async () => {
       mockUsersRepository.findOne.mockResolvedValueOnce(mockUser);
-      const result = await service.findUserByEmail(mockUser.email);
+      const result = await service.findUserByEmail(
+        `  ${mockUser.email.toUpperCase()} `,
+      );
 
-      expect(mockUsersRepository.findOne).toHaveBeenCalledWith({
-        where: { email: mockUser.email },
-      });
+      const [[options]] = mockUsersRepository.findOne.mock.calls as [
+        [{ where: { email: FindOperator<unknown> } }],
+      ];
+      expectSameEmail(options.where.email, mockUser.email.toLowerCase());
       expect(result).toEqual(mockUser);
     });
 
@@ -403,6 +424,85 @@ describe('UsersService', () => {
       const result = await service.findMe(mockUser.id);
       expect(result.message).toBe(SUCCESS_MESSAGES.USER.RETRIEVED);
       expect(result.data.id).toBe(mockUser.id);
+    });
+  });
+
+  describe('national ID (QA CUS-07)', () => {
+    const asCustomer = () => ({ ...mockUser, addresses: [] });
+
+    it('saves a first national ID and returns it masked', async () => {
+      mockUsersRepository.findOne
+        .mockResolvedValueOnce(asCustomer())
+        .mockResolvedValueOnce(asCustomer());
+      mockUserQb.getOne.mockResolvedValueOnce(null).mockResolvedValueOnce({
+        id: mockUser.id,
+        nationalId: 'GHA-123456789-0',
+      });
+
+      const result = await service.updateMe(mockUser.id, {
+        nationalId: 'GHA-123456789-0',
+      });
+
+      expect(mockUsersRepository.update).toHaveBeenCalledWith(mockUser.id, {
+        nationalId: 'GHA-123456789-0',
+      });
+      expect((result.data as { nationalId?: string }).nationalId).toBe(
+        '•••••••••••89-0',
+      );
+    });
+
+    it('refuses to change a national ID that is already set', async () => {
+      mockUsersRepository.findOne.mockResolvedValueOnce(asCustomer());
+      mockUserQb.getOne.mockResolvedValueOnce({
+        id: mockUser.id,
+        nationalId: 'GHA-123456789-0',
+      });
+
+      await expect(
+        service.updateMe(mockUser.id, { nationalId: 'GHA-999999999-9' }),
+      ).rejects.toThrow(BadRequestException);
+      expect(mockUsersRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('refuses an ID already linked to another account', async () => {
+      mockUsersRepository.findOne.mockResolvedValueOnce(asCustomer());
+      mockUserQb.getOne.mockResolvedValueOnce(null);
+      mockUserQb.getExists.mockResolvedValueOnce(true);
+
+      await expect(
+        service.updateMe(mockUser.id, { nationalId: 'GHA-123456789-0' }),
+      ).rejects.toThrow(ConflictException);
+      expect(mockUsersRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('leaves the national ID alone when it is not sent', async () => {
+      mockUsersRepository.findOne
+        .mockResolvedValueOnce(asCustomer())
+        .mockResolvedValueOnce(asCustomer());
+
+      await service.updateMe(mockUser.id, { firstname: 'Ama' });
+
+      expect(mockUsersRepository.update).toHaveBeenCalledWith(mockUser.id, {
+        firstname: 'Ama',
+      });
+    });
+
+    it('writes every sent field in one UPDATE, so racing saves cannot mix (QA RES-09)', async () => {
+      mockUsersRepository.findOne
+        .mockResolvedValueOnce(asCustomer())
+        .mockResolvedValueOnce(asCustomer());
+
+      await service.updateMe(mockUser.id, {
+        firstname: 'Ama',
+        lastname: 'Owusu',
+      });
+
+      expect(mockUsersRepository.update).toHaveBeenCalledTimes(1);
+      expect(mockUsersRepository.update).toHaveBeenCalledWith(mockUser.id, {
+        firstname: 'Ama',
+        lastname: 'Owusu',
+      });
+      expect(mockUsersRepository.save).not.toHaveBeenCalled();
     });
   });
 
@@ -502,9 +602,12 @@ describe('UsersService', () => {
 
       const options = (
         mockUsersRepository.findOne.mock.calls as unknown[][]
-      )[0][0] as { where: { email: string }; withDeleted: boolean };
+      )[0][0] as {
+        where: { email: FindOperator<unknown> };
+        withDeleted: boolean;
+      };
       expect(options.withDeleted).toBe(true);
-      expect(options.where.email).toBe('gone@example.com');
+      expectSameEmail(options.where.email, 'gone@example.com');
       // No `deletedAt` predicate: live *and* deleted rows both count as taken.
       expect(options.where).not.toHaveProperty('deletedAt');
     });
@@ -628,14 +731,14 @@ describe('UsersService', () => {
         mockUsersRepository.findOne.mock.calls as unknown[][]
       )[0][0] as {
         where: {
-          email: string;
+          email: FindOperator<unknown>;
           deletedAt: FindOperator<unknown>;
           purgedAt: FindOperator<unknown>;
         };
         withDeleted: boolean;
       };
       expect(options.withDeleted).toBe(true);
-      expect(options.where.email).toBe('gone@example.com');
+      expectSameEmail(options.where.email, 'gone@example.com');
       // `deletedAt IS NOT NULL` — not merely `withDeleted: true`, which alone
       // would also match live rows.
       expect(options.where.deletedAt.type).toBe('not');

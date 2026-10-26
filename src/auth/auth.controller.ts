@@ -11,6 +11,7 @@ import {
   Res,
   BadRequestException,
 } from '@nestjs/common';
+import { AccountBannedException } from '@common/exceptions/account-banned.exception';
 import type { Request, Response } from 'express';
 import {
   ApiBadRequestResponse,
@@ -52,6 +53,8 @@ import { ChangePasswordDto } from './dto/change-password.dto';
 import type { AuthenticatedRequest } from '@common/types/authenticated-request.type';
 import {
   setRefreshTokenCookie,
+  setSessionOnlyMarker,
+  isSessionOnly,
   clearRefreshTokenCookie,
   readRefreshTokenCookie,
 } from './utils/refresh-cookie.util';
@@ -74,6 +77,8 @@ import { UserAlreadyExists } from '@common/exceptions/user-already-exists.except
 const OAUTH_ERROR_CODES = {
   /** Google reported an error on the callback (denied/cancelled consent). */
   ACCESS_DENIED: 'access_denied',
+  /** QA AUTH-17: the Google account belongs to a banned JinVa account. */
+  ACCOUNT_BANNED: 'account_banned',
   /** Any other failure: invalid/expired/replayed state, provider errors,
    *  account-creation errors, etc. Deliberately not split into finer-grained
    *  codes — the frontend shows a generic "sign-in failed" message for this
@@ -212,8 +217,16 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ): Promise<LoginResponseDto> {
     const { result, refreshToken } = await this.authService.loginUser(loginDto);
-    setRefreshTokenCookie(res, refreshToken);
-    setAuthSessionCookie(res, { sub: result.data.id, role: result.data.role });
+    // QA AUTH-31: "Remember me" unticked keeps the sign-in to this browser
+    // session; refreshes keep it that way via the marker cookie.
+    const persistent = loginDto.rememberMe !== false;
+    setRefreshTokenCookie(res, refreshToken, persistent);
+    setAuthSessionCookie(
+      res,
+      { sub: result.data.id, role: result.data.role },
+      persistent,
+    );
+    setSessionOnlyMarker(res, !persistent);
     return result;
   }
 
@@ -284,6 +297,7 @@ export class AuthController {
         sub: result.data.id,
         role: result.data.role,
       });
+      setSessionOnlyMarker(res, false);
     }
     return result;
   }
@@ -466,8 +480,13 @@ export class AuthController {
     }
     const { result, refreshToken } =
       await this.authService.refreshTokens(token);
-    setRefreshTokenCookie(res, refreshToken);
-    setAuthSessionCookie(res, { sub: result.data.id, role: result.data.role });
+    const persistent = !isSessionOnly(req);
+    setRefreshTokenCookie(res, refreshToken, persistent);
+    setAuthSessionCookie(
+      res,
+      { sub: result.data.id, role: result.data.role },
+      persistent,
+    );
     return result;
   }
 
@@ -506,6 +525,7 @@ export class AuthController {
     }
     clearRefreshTokenCookie(res);
     clearAuthSessionCookie(res);
+    setSessionOnlyMarker(res, false);
     return { message: SUCCESS_MESSAGES.AUTH.LOGGED_OUT };
   }
 
@@ -559,8 +579,13 @@ export class AuthController {
       changePasswordDto,
       req.user.id,
     );
-    setRefreshTokenCookie(res, refreshToken);
-    setAuthSessionCookie(res, { sub: result.data.id, role: result.data.role });
+    const persistent = !isSessionOnly(req);
+    setRefreshTokenCookie(res, refreshToken, persistent);
+    setAuthSessionCookie(
+      res,
+      { sub: result.data.id, role: result.data.role },
+      persistent,
+    );
     return result;
   }
 
@@ -715,6 +740,7 @@ export class AuthController {
         sub: result.data.id,
         role: result.data.role,
       });
+      setSessionOnlyMarker(res, false);
       res.redirect(this.buildFrontendRedirect());
     } catch (err) {
       this.logger.warn(
@@ -722,7 +748,9 @@ export class AuthController {
       );
       const code = callbackDto.error
         ? OAUTH_ERROR_CODES.ACCESS_DENIED
-        : OAUTH_ERROR_CODES.OAUTH_FAILED;
+        : err instanceof AccountBannedException
+          ? OAUTH_ERROR_CODES.ACCOUNT_BANNED
+          : OAUTH_ERROR_CODES.OAUTH_FAILED;
       res.redirect(this.buildFrontendRedirect(code));
     }
   }
@@ -812,6 +840,7 @@ export class AuthController {
         sub: result.data.id,
         role: result.data.role,
       });
+      setSessionOnlyMarker(res, false);
       return result;
     } catch (err) {
       // The address is taken: the pending signup was consumed and can never

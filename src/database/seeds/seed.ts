@@ -7,7 +7,6 @@ import { ArtisanProfile } from '../../users/entities/artisan-profile.entity';
 import { computeProfileCompleteness } from '../../artisans/artisans.service';
 import { CustomerProfile } from '../../users/entities/customer-profile.entity';
 import { Address } from '../../users/entities/address.entity';
-import { UserToken } from '../../users/entities/user-token.entity';
 import { ServiceEntity } from '../../services/entities/service.entity';
 import { Job } from '../../jobs/entities/job.entity';
 import { JobApplication } from '../../jobs/entities/job-application.entity';
@@ -24,6 +23,7 @@ import { DeviceToken } from '../../push-notifications/entities/device-token.enti
 import { JobStatusHistory } from '../../jobs/entities/job-status-history.entity';
 import { Payment } from '../../payments/entities/payment.entity';
 import { Dispute } from '../../disputes/entities/dispute.entity';
+import { VARIABLES } from '../../common/constants/variables.constants';
 import {
   Gender,
   Role,
@@ -815,13 +815,28 @@ async function seed() {
     }),
   );
 
+  // QA SRCH-09: search's "Highest Rated" sorts on weightedRating, so the seed
+  // sets it with ReviewsService's formula (m = RATING_BAYESIAN_MIN_VOTES,
+  // C = the platform mean of these reviews) rather than leaving it at 0.
+  const platformMean = (4.5 + 5.0) / 2;
+  const weighted = (average: number, count: number) => {
+    const m = VARIABLES.RATING_BAYESIAN_MIN_VOTES;
+    return Number(
+      (
+        (count / (count + m)) * average +
+        (m / (count + m)) * platformMean
+      ).toFixed(2),
+    );
+  };
   await artisanProfileRepo.update(yawProfile.id, {
     averageRating: 4.5,
     totalReviews: 1,
+    weightedRating: weighted(4.5, 1),
   });
   await artisanProfileRepo.update(akuaProfile.id, {
     averageRating: 5.0,
     totalReviews: 1,
+    weightedRating: weighted(5.0, 1),
   });
   console.log('✔  Created 2 reviews');
 

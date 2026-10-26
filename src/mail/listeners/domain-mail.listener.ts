@@ -6,7 +6,8 @@ import { ConfigService } from '@nestjs/config';
 import { MailService } from '../mail.service';
 import { APP_EVENTS } from '@common/events/app.events';
 import { getErrorMessage } from '@common/utils/error.util';
-import { Role } from '@common/types/enums';
+import { NotificationType } from '@common/types/enums';
+import { preferenceKeyFor } from '../../notifications/notifications.service';
 import { User } from '../../users/entities/user.entity';
 import { NotificationPreferences } from '../../notifications/entities/notification-preferences.entity';
 import type {
@@ -45,23 +46,25 @@ export class DomainMailListener {
   }
 
   /**
-   * A7: reuses the same `NotificationPreferences`-lookup pattern
-   * `NotificationsService.persist` already uses for in-app suppression, but
-   * applied here to the email channel too, since reminders must respect the
-   * recipient's opt-out regardless of channel and `DomainMailListener`
-   * otherwise sends unconditionally.
+   * A7 / QA NOT-09: whether this person wants this email. The same rules as
+   * in-app notifications (`preferenceKeyFor`): all email off, or the type's
+   * own toggle off, means no email. Reminders used to be the only emails that
+   * checked; booking and verification emails went out regardless.
    */
-  private async isReminderEnabled(
+  private async isEmailWanted(
     userId: number,
-    role: Role,
+    type: NotificationType,
   ): Promise<boolean> {
     const prefs = await this.prefsRepository.findOne({
       where: { user: { id: userId } },
+      relations: ['user'],
     });
     if (!prefs) return true; // no record yet → defaults apply (enabled)
     if (!prefs.emailEnabled) return false;
-    const key = role === Role.ARTISAN ? 'bookingReminders' : 'serviceReminders';
-    return prefs[key] !== false;
+    const key = prefs.user
+      ? preferenceKeyFor(prefs.user.role, type)
+      : undefined;
+    return !key || prefs[key] !== false;
   }
 
   private get appName(): string {
@@ -85,6 +88,13 @@ export class DomainMailListener {
     payload: ArtisanProfileVerifiedPayload,
   ): Promise<void> {
     try {
+      if (
+        !(await this.isEmailWanted(
+          payload.artisanUserId,
+          NotificationType.ARTISAN_PROFILE_VERIFIED,
+        ))
+      )
+        return;
       const user = await this.findUser(payload.artisanUserId);
       if (!user) return;
       await this.mailService.sendMail(
@@ -110,6 +120,13 @@ export class DomainMailListener {
     payload: ArtisanVerificationRejectedPayload,
   ): Promise<void> {
     try {
+      if (
+        !(await this.isEmailWanted(
+          payload.artisanUserId,
+          NotificationType.ARTISAN_VERIFICATION_REJECTED,
+        ))
+      )
+        return;
       const user = await this.findUser(payload.artisanUserId);
       if (!user) return;
       await this.mailService.sendMail(
@@ -133,6 +150,13 @@ export class DomainMailListener {
   @OnEvent(APP_EVENTS.BOOKING_RECEIVED, { async: true })
   async handleBookingReceived(payload: BookingReceivedPayload): Promise<void> {
     try {
+      if (
+        !(await this.isEmailWanted(
+          payload.artisanUserId,
+          NotificationType.BOOKING_RECEIVED,
+        ))
+      )
+        return;
       const user = await this.findUser(payload.artisanUserId);
       if (!user) return;
       await this.mailService.sendMail(user.email, APP_EVENTS.BOOKING_RECEIVED, {
@@ -156,6 +180,13 @@ export class DomainMailListener {
     payload: BookingConfirmedPayload,
   ): Promise<void> {
     try {
+      if (
+        !(await this.isEmailWanted(
+          payload.customerId,
+          NotificationType.BOOKING_CONFIRMED,
+        ))
+      )
+        return;
       const user = await this.findUser(payload.customerId);
       if (!user) return;
       await this.mailService.sendMail(
@@ -182,6 +213,13 @@ export class DomainMailListener {
   @OnEvent(APP_EVENTS.BOOKING_DECLINED, { async: true })
   async handleBookingDeclined(payload: BookingDeclinedPayload): Promise<void> {
     try {
+      if (
+        !(await this.isEmailWanted(
+          payload.customerId,
+          NotificationType.BOOKING_DECLINED,
+        ))
+      )
+        return;
       const user = await this.findUser(payload.customerId);
       if (!user) return;
       await this.mailService.sendMail(user.email, APP_EVENTS.BOOKING_DECLINED, {
@@ -206,6 +244,13 @@ export class DomainMailListener {
     payload: BookingCancelledPayload,
   ): Promise<void> {
     try {
+      if (
+        !(await this.isEmailWanted(
+          payload.artisanUserId,
+          NotificationType.BOOKING_CANCELLED,
+        ))
+      )
+        return;
       const user = await this.findUser(payload.artisanUserId);
       if (!user) return;
       await this.mailService.sendMail(
@@ -233,6 +278,13 @@ export class DomainMailListener {
     payload: BookingCompletedPayload,
   ): Promise<void> {
     try {
+      if (
+        !(await this.isEmailWanted(
+          payload.artisanUserId,
+          NotificationType.BOOKING_COMPLETED,
+        ))
+      )
+        return;
       const user = await this.findUser(payload.artisanUserId);
       if (!user) return;
       await this.mailService.sendMail(
@@ -257,6 +309,13 @@ export class DomainMailListener {
   @OnEvent(APP_EVENTS.BOOKING_EXPIRED, { async: true })
   async handleBookingExpired(payload: BookingExpiredPayload): Promise<void> {
     try {
+      if (
+        !(await this.isEmailWanted(
+          payload.customerId,
+          NotificationType.BOOKING_EXPIRED,
+        ))
+      )
+        return;
       const user = await this.findUser(payload.customerId);
       if (!user) return;
       await this.mailService.sendMail(user.email, APP_EVENTS.BOOKING_EXPIRED, {
@@ -277,6 +336,13 @@ export class DomainMailListener {
   @OnEvent(APP_EVENTS.BOOKING_NO_SHOW, { async: true })
   async handleBookingNoShow(payload: BookingNoShowPayload): Promise<void> {
     try {
+      if (
+        !(await this.isEmailWanted(
+          payload.recipientUserId,
+          NotificationType.BOOKING_NO_SHOW,
+        ))
+      )
+        return;
       const user = await this.findUser(payload.recipientUserId);
       if (!user) return;
       await this.mailService.sendMail(user.email, APP_EVENTS.BOOKING_NO_SHOW, {
@@ -313,9 +379,9 @@ export class DomainMailListener {
     payload: BookingReminderPayload,
   ): Promise<void> {
     try {
-      const enabled = await this.isReminderEnabled(
+      const enabled = await this.isEmailWanted(
         payload.recipientUserId,
-        payload.recipientRole,
+        NotificationType.BOOKING_REMINDER,
       );
       if (!enabled) return;
       const user = await this.findUser(payload.recipientUserId);
@@ -327,7 +393,7 @@ export class DomainMailListener {
       await this.mailService.sendMail(user.email, eventKey, {
         firstname: user.firstname,
         scheduledDate: payload.scheduledDate,
-        startTime: payload.startTime,
+        startTime: payload.startTime.slice(0, 5),
         bookingId: payload.bookingId,
         hoursOut: payload.milestone === '24H' ? '24 hours' : '2 hours',
         appName: this.appName,

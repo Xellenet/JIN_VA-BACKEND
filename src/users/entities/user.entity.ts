@@ -73,6 +73,24 @@ export class User {
   @Column({ name: 'profile_picture', nullable: true })
   profilePicture: string;
 
+  /**
+   * QA CUS-07: a customer's national ID, set once from Settings. Sensitive, so
+   * never selected by default and never part of `UserResponseDto` (which is
+   * also used for other people's profiles); only the owner sees it, masked.
+   */
+  @Index('uq_users_national_id', {
+    unique: true,
+    where: '"national_id" IS NOT NULL',
+  })
+  @Column({
+    name: 'national_id',
+    type: 'varchar',
+    length: 30,
+    nullable: true,
+    select: false,
+  })
+  nationalId?: string | null;
+
   @Column({ name: 'social_provider', nullable: true })
   socialProvider: string;
 

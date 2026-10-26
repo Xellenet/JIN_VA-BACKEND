@@ -79,6 +79,21 @@ describe('LocationsService', () => {
     service = build();
   });
 
+  it('sends only the point rounded to about 100 m for a reverse lookup (QA JOB-04)', async () => {
+    get.mockReturnValueOnce(
+      of({ data: { features: [{ properties: { city: 'Accra' } }] } }),
+    );
+
+    const result = await service.reverse(5.603716, -0.186964);
+
+    expect(result).toEqual({ label: 'Accra', available: true });
+    const [[url]] = get.mock.calls as [[string]];
+    expect(url).toContain('/reverse?');
+    expect(url).toContain('lat=5.604');
+    expect(url).toContain('lon=-0.187');
+    expect(url).not.toContain('5.603716');
+  });
+
   afterEach(() => {
     nowSpy.mockRestore();
     warn.mockRestore();
@@ -422,5 +437,35 @@ describe('LocationsService', () => {
       expect(warn).not.toHaveBeenCalled();
       expect(log).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('LocationsService.reverseLabel (QA JOB-04)', () => {
+  it('builds "street, area, town, region" without repeats', () => {
+    const body = {
+      features: [
+        {
+          properties: {
+            street: 'Oxford Street',
+            district: 'Osu',
+            city: 'Accra',
+            state: 'Greater Accra',
+          },
+        },
+      ],
+    };
+    expect(LocationsService.reverseLabel(body)).toBe(
+      'Oxford Street, Osu, Accra, Greater Accra',
+    );
+    expect(
+      LocationsService.reverseLabel({
+        features: [{ properties: { name: 'Accra', city: 'Accra' } }],
+      }),
+    ).toBe('Accra');
+  });
+
+  it('returns null when there is nothing to show', () => {
+    expect(LocationsService.reverseLabel({ features: [] })).toBeNull();
+    expect(LocationsService.reverseLabel(null)).toBeNull();
   });
 });

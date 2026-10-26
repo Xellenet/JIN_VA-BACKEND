@@ -1,7 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
+import { removeTestData, testUserIds } from './helpers/test-data';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from '../src/app.module';
@@ -86,16 +87,6 @@ describe('Bookings — A4 real concurrent-request race (e2e)', () => {
         isBanned: false,
       }),
     );
-    const profile = await profileRepo.save(
-      profileRepo.create({
-        user: artisanUser,
-        currency: 'GHS',
-        isVerified: true,
-        isProfileComplete: true,
-      }),
-    );
-    artisanProfileId = profile.id;
-
     const service = await serviceRepo.save(
       serviceRepo.create({
         name: `A4 Concurrency Test Service ${Date.now()}`,
@@ -103,6 +94,18 @@ describe('Bookings — A4 real concurrent-request race (e2e)', () => {
       }),
     );
     serviceId = service.id;
+
+    // The artisan must offer the booked service (QA BK-08).
+    const profile = await profileRepo.save(
+      profileRepo.create({
+        user: artisanUser,
+        currency: 'GHS',
+        isVerified: true,
+        isProfileComplete: true,
+        services: [service],
+      }),
+    );
+    artisanProfileId = profile.id;
 
     testDate = nextMonday();
     await slotRepo.save(
@@ -148,6 +151,12 @@ describe('Bookings — A4 real concurrent-request race (e2e)', () => {
   });
 
   afterAll(async () => {
+    // Leave the shared dev database holding only its seed data.
+    const dataSource = app.get(DataSource);
+    await removeTestData(dataSource, {
+      userIds: await testUserIds(dataSource, 'a4-'),
+      serviceIds: serviceId ? [serviceId] : [],
+    });
     await app.close();
   });
 

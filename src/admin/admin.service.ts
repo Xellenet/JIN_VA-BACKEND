@@ -4,7 +4,9 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { ConfigService } from '@nestjs/config';
+import { VARIABLES } from '@common/constants/variables.constants';
+import { Brackets, Repository } from 'typeorm';
 import { User } from '@users/entities/user.entity';
 import { ArtisanProfile } from '@users/entities/artisan-profile.entity';
 import { Job } from '@jobs/entities/job.entity';
@@ -13,6 +15,7 @@ import { ArtisanVerification } from '../verification/entities/artisan-verificati
 import { Booking } from '../bookings/entities/booking.entity';
 import { JobsService } from '@jobs/jobs.service';
 import {
+  AdminArtisansQueryDto,
   AdminUsersQueryDto,
   AdminJobsQueryDto,
   AdminBookingsQueryDto,
@@ -21,6 +24,7 @@ import {
   SuspendUserDto,
 } from './dto/admin-query.dto';
 import { Dispute } from '../disputes/entities/dispute.entity';
+import { UserToken } from '@users/entities/user-token.entity';
 import { AdminAuditService } from '../admin-audit/admin-audit.service';
 import { PaymentsService } from '../payments/payments.service';
 import {
@@ -31,6 +35,7 @@ import {
   DisputeCategory,
   Role,
   Status,
+  Token,
   VerificationStatus,
 } from '@common/types/enums';
 
@@ -59,11 +64,14 @@ export class AdminService {
     /** AT6: the third entity type the cross-entity admin search covers. */
     @InjectRepository(Dispute)
     private readonly disputesRepo: Repository<Dispute>,
+    @InjectRepository(UserToken)
+    private readonly tokensRepo: Repository<UserToken>,
     private readonly jobsService: JobsService,
     /** AT5: ban/unban and suspend/activate each write an audit row. */
     private readonly auditService: AdminAuditService,
     /** AT9: exposes the platform fee percentage the backend actually applies. */
     private readonly paymentsService: PaymentsService,
+    private readonly config: ConfigService,
   ) {}
 
   // ─── Users ───────────────────────────────────────────────────────────────────
@@ -112,6 +120,28 @@ export class AdminService {
       });
     }
 
+    const term = query.search?.trim();
+    if (term) {
+      const digits = term.replace(/\D/g, '');
+      qb.andWhere(
+        new Brackets((w) => {
+          w.where(
+            "LOWER(u.firstname || ' ' || u.lastname) LIKE :like OR LOWER(u.email) LIKE :like",
+            { like: `%${term.toLowerCase()}%` },
+          );
+          // Phone numbers are stored as E.164; match on digits so "024 412"
+          // finds +233244123456. Three digits minimum, so a stray digit in a
+          // name search doesn't match every phone.
+          if (digits.length >= 3) {
+            w.orWhere(
+              "regexp_replace(COALESCE(u.phoneNumber, ''), '\\D', '', 'g') LIKE :digits",
+              { digits: `%${digits.replace(/^0/, '')}%` },
+            );
+          }
+        }),
+      );
+    }
+
     const [users, total] = await qb
       .skip((page - 1) * limit)
       .take(limit)
@@ -147,6 +177,12 @@ export class AdminService {
     user.bannedAt = new Date();
     user.bannedById = admin.id;
     await this.usersRepo.save(user);
+    // QA ADM-04: end every session now; refresh would refuse the account
+    // anyway, but there is no reason to leave its tokens lying around.
+    await this.tokensRepo.delete({
+      user: { id: user.id },
+      type: Token.REFRESH,
+    });
 
     await this.recordUserAction(
       admin,
@@ -335,12 +371,46 @@ export class AdminService {
 
   // ─── Artisans ────────────────────────────────────────────────────────────────
 
-  async listArtisans(page = 1, limit = 20) {
+  async listArtisans(query: AdminArtisansQueryDto = {}) {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 20;
     const qb = this.profileRepo
       .createQueryBuilder('ap')
       .innerJoinAndSelect('ap.user', 'user')
       .leftJoinAndSelect('ap.services', 'services')
       .orderBy('ap.createdAt', 'DESC');
+
+    switch (query.status) {
+      case AdminUserStatus.BANNED:
+        qb.andWhere('user.isBanned = true');
+        break;
+      case AdminUserStatus.SUSPENDED:
+        qb.andWhere('user.isSuspended = true').andWhere(
+          'user.isBanned = false',
+        );
+        break;
+      case AdminUserStatus.ACTIVE:
+        qb.andWhere('user.isBanned = false').andWhere(
+          'user.isSuspended = false',
+        );
+        break;
+    }
+
+    const term = query.search?.trim().toLowerCase();
+    if (term) {
+      // A subquery, so matching on a service doesn't drop the artisan's other
+      // services from the joined result.
+      qb.andWhere(
+        `(LOWER(user.firstname || ' ' || user.lastname) LIKE :like
+          OR LOWER(user.email) LIKE :like
+          OR LOWER(COALESCE(ap.businessName, '')) LIKE :like
+          OR EXISTS (
+            SELECT 1 FROM artisan_profile_services aps
+              JOIN services s ON s.id = aps.service_id
+             WHERE aps.artisan_profile_id = ap.id AND LOWER(s.name) LIKE :like))`,
+        { like: `%${term}%` },
+      );
+    }
 
     const [profiles, total] = await qb
       .skip((page - 1) * limit)
@@ -349,7 +419,10 @@ export class AdminService {
 
     return {
       message: 'Artisans retrieved.',
-      data: profiles,
+      data: profiles.map((p) => ({
+        ...p,
+        accountStatus: this.accountStatus(p.user),
+      })),
       pagination: this.paginate(total, page, limit),
     };
   }
@@ -545,6 +618,26 @@ export class AdminService {
         /** Tells the frontend to render the field read-only rather than editable. */
         platformFeeEditable: false,
         currency: 'GHS',
+        // QA ADM-20: the Settings screen showed editable fields whose Save
+        // sent nothing. These are the rules the backend actually enforces, for
+        // it to show as they are.
+        timezone: 'Africa/Accra (GMT, UTC+0)',
+        supportEmail: this.config.get<string>('SUPPORT_EMAIL', '') || null,
+        bookingResponseHours: VARIABLES.BOOKING_EXPIRY_HOURS,
+        maxPendingBookingsPerArtisan:
+          VARIABLES.MAX_PENDING_BOOKINGS_PER_ARTISAN,
+        bookingReminderHours: [
+          VARIABLES.REMINDER_24H_HOURS,
+          VARIABLES.REMINDER_2H_HOURS,
+        ],
+        agreedPriceTolerancePercent: Math.round(
+          VARIABLES.AGREED_PRICE_TOLERANCE_RATIO * 100,
+        ),
+        jobAutoCompleteHours: VARIABLES.JOB_AUTO_COMPLETE_HOURS,
+        emailVerificationRequired: true,
+        passwordMinLength: 8,
+        passwordRule:
+          'At least 8 characters with upper- and lower-case letters, a number and one of ! @ # $ % ^ & *',
       },
     };
   }

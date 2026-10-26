@@ -6,7 +6,6 @@ import {
   HttpCode,
   HttpStatus,
   Logger,
-  MaxFileSizeValidator,
   Param,
   ParseFilePipe,
   ParseIntPipe,
@@ -53,6 +52,7 @@ import { DeleteAccountResponseDto } from './dto/delete-account-response.dto';
 import type { AuthenticatedRequest } from '@common/types/authenticated-request.type';
 import { clearRefreshTokenCookie } from '../auth/utils/refresh-cookie.util';
 import { clearAuthSessionCookie } from '../auth/utils/session-cookie.util';
+import { maxFileSizeMb } from '../uploads/max-file-size';
 
 /**
  * Handles user management and self-service profile operations.
@@ -279,7 +279,7 @@ export class UsersController {
     @Req() req: AuthenticatedRequest,
     @UploadedFile(
       new ParseFilePipe({
-        validators: [new MaxFileSizeValidator({ maxSize: 5 * 1024 * 1024 })],
+        validators: [maxFileSizeMb(5)],
       }),
     )
     file: Express.Multer.File,

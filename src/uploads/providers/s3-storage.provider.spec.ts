@@ -277,13 +277,7 @@ describe('S3StorageProvider — BI1 failure discipline', () => {
       process.env.AWS_S3_PUBLIC_URL_BASE = 'https://cdn.jinva.example';
       const provider = new S3StorageProvider();
 
-      for (const folder of [
-        'avatars',
-        'portfolio',
-        'reviews',
-        'messages',
-        'job-attachments',
-      ] as const) {
+      for (const folder of ['avatars', 'portfolio', 'reviews'] as const) {
         sendMock.mockResolvedValueOnce({});
         const result = await provider.upload(Buffer.from('bytes'), {
           folder,
@@ -294,6 +288,23 @@ describe('S3StorageProvider — BI1 failure discipline', () => {
         expect(result.url).toBe(
           `https://cdn.jinva.example/${folder}/${result.filename}`,
         );
+      }
+    });
+
+    it('keeps message and job photos off the public prefix too (QA MSG-18)', async () => {
+      process.env.AWS_S3_PUBLIC_URL_BASE = 'https://cdn.jinva.example';
+      const provider = new S3StorageProvider();
+
+      for (const folder of ['messages', 'job-attachments'] as const) {
+        sendMock.mockResolvedValueOnce({});
+        const result = await provider.upload(Buffer.from('bytes'), {
+          folder,
+          originalName: 'x.jpg',
+          mimetype: 'image/jpeg',
+        });
+
+        expect(result.url).toBe(`/uploads/${folder}/${result.filename}`);
+        expect(result.url).not.toContain('cdn.jinva.example');
       }
     });
 

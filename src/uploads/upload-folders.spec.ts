@@ -29,8 +29,13 @@ describe('upload folder sensitivity split', () => {
     }
   });
 
-  it('treats the two KYC folders — and only those — as private', () => {
-    expect([...PRIVATE_UPLOAD_FOLDERS]).toEqual(['documents', 'selfies']);
+  it('treats the KYC folders and shared photos (QA MSG-18) as private', () => {
+    expect([...PRIVATE_UPLOAD_FOLDERS]).toEqual([
+      'documents',
+      'selfies',
+      'messages',
+      'job-attachments',
+    ]);
     for (const folder of PUBLIC_UPLOAD_FOLDERS) {
       expect(isPrivateUploadFolder(folder)).toBe(false);
     }

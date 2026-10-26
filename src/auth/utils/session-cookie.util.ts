@@ -73,13 +73,15 @@ function baseCookieOptions() {
 export function setAuthSessionCookie(
   res: Response,
   payload: AuthSessionPayload,
+  persistent = true,
 ): void {
   res.cookie(
     VARIABLES.AUTH_SESSION_COOKIE_NAME,
     encodeAuthSessionValue(payload),
     {
       ...baseCookieOptions(),
-      maxAge: SESSION_COOKIE_MAX_AGE_MS,
+      // QA AUTH-31: same lifetime rule as the refresh cookie.
+      ...(persistent ? { maxAge: SESSION_COOKIE_MAX_AGE_MS } : {}),
     },
   );
 }

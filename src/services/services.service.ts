@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   Logger,
   NotFoundException,
@@ -40,9 +41,7 @@ export class ServicesService {
   async create(
     createServiceDto: CreateServiceDto,
   ): Promise<{ message: string; data: ServiceResponseDto }> {
-    const existing = await this.servicesRepository.findOne({
-      where: { name: createServiceDto.name },
-    });
+    const existing = await this.findByNameIgnoringCase(createServiceDto.name);
 
     if (existing) {
       throw new BadRequestException(
@@ -139,10 +138,14 @@ export class ServicesService {
       throw new NotFoundException(`Service with id ${id} not found.`);
     }
 
-    if (updateServiceDto.name && updateServiceDto.name !== service.name) {
-      const existing = await this.servicesRepository.findOne({
-        where: { name: updateServiceDto.name },
-      });
+    if (
+      updateServiceDto.name &&
+      updateServiceDto.name.toLowerCase() !== service.name.toLowerCase()
+    ) {
+      const existing = await this.findByNameIgnoringCase(
+        updateServiceDto.name,
+        id,
+      );
 
       if (existing) {
         throw new BadRequestException(
@@ -172,9 +175,53 @@ export class ServicesService {
    */
   async remove(id: number): Promise<{ message: string }> {
     await this.findOne(id);
+
+    // QA ADM-12: deleting a service in use either failed with a raw 500 (jobs
+    // reference it), left bookings that could never be confirmed (their
+    // service became NULL), or silently took it off every artisan offering
+    // it. Refuse instead, and say what is using it.
+    const [usage]: Array<{ artisans: number; bookings: number; jobs: number }> =
+      await this.servicesRepository.manager.query(
+        `SELECT
+           (SELECT COUNT(*)::int FROM artisan_profile_services WHERE service_id = $1) AS artisans,
+           (SELECT COUNT(*)::int FROM bookings WHERE service_id = $1) AS bookings,
+           (SELECT COUNT(*)::int FROM jobs WHERE service_id = $1) AS jobs`,
+        [id],
+      );
+    const uses = [
+      usage.artisans &&
+        plural(usage.artisans, 'artisan offers', 'artisans offer'),
+      usage.bookings && plural(usage.bookings, 'booking uses', 'bookings use'),
+      usage.jobs && plural(usage.jobs, 'job uses', 'jobs use'),
+    ].filter(Boolean);
+    if (uses.length) {
+      throw new ConflictException(
+        `This service can't be deleted because ${uses.join(', ')} it. ` +
+          (usage.bookings || usage.jobs
+            ? 'Services with booking or job history are kept so those records stay complete. You can edit its name or description instead.'
+            : 'Ask those artisans to remove it from their profile first.'),
+      );
+    }
+
     await this.servicesRepository.delete(id);
     this.logger.log(`Deleted service with id: ${id}`);
 
     return { message: SUCCESS_MESSAGES.SERVICE.DELETED };
   }
+
+  /** QA ADM-10: names are unique regardless of case. */
+  private findByNameIgnoringCase(
+    name: string,
+    exceptId?: number,
+  ): Promise<ServiceEntity | null> {
+    const qb = this.servicesRepository
+      .createQueryBuilder('s')
+      .where('LOWER(s.name) = LOWER(:name)', { name });
+    if (exceptId != null) qb.andWhere('s.id <> :exceptId', { exceptId });
+    return qb.getOne();
+  }
+}
+
+function plural(count: number, one: string, many: string): string {
+  return `${count} ${count === 1 ? one : many}`;
 }
