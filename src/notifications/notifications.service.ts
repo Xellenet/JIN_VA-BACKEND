@@ -659,7 +659,7 @@ export class NotificationsService {
         userId,
         type,
         title,
-        this.buildDisputeOutcomeBody(payload, userId),
+        describeDisputeOutcome(payload, userId).join(' '),
         {
           disputeId: payload.disputeId,
           bookingId: payload.bookingId,
@@ -672,67 +672,6 @@ export class NotificationsService {
         },
       );
     }
-  }
-
-  /** DR2/DR4: verdict + money movement, written from `recipientId`'s side. */
-  private buildDisputeOutcomeBody(
-    payload: DisputeOutcomePayload,
-    recipientId: number,
-  ): string {
-    if (payload.outcome === 'CLOSED') {
-      return (
-        `The dispute on booking #${payload.bookingId} has been closed. ` +
-        'If you still need help, contact support.'
-      );
-    }
-
-    const parts = [
-      `The dispute on booking #${payload.bookingId} has been resolved.`,
-    ];
-
-    switch (payload.verdict) {
-      case DisputeOutcome.REFUND_CLIENT:
-        parts.push('Outcome: ruled for the client.');
-        break;
-      case DisputeOutcome.RELEASE_ARTISAN:
-        parts.push('Outcome: ruled for the artisan.');
-        break;
-      case DisputeOutcome.MUTUAL:
-        parts.push('Outcome: mutually resolved.');
-        break;
-      default:
-        break;
-    }
-
-    const amount = payload.moneyAmount;
-    if (
-      payload.moneyAction === DisputeMoneyAction.REFUND &&
-      amount != null &&
-      amount > 0
-    ) {
-      parts.push(
-        recipientId === payload.customerUserId
-          ? `Refunded to you: ${formatGhs(amount)}. It should reach your original payment method shortly.`
-          : `${formatGhs(amount)} was refunded to the client.`,
-      );
-    } else if (
-      payload.moneyAction === DisputeMoneyAction.RELEASE &&
-      amount != null &&
-      amount > 0
-    ) {
-      parts.push(
-        recipientId === payload.artisanUserId
-          ? `Released to you: ${formatGhs(amount)}.`
-          : `${formatGhs(amount)} was released to the artisan.`,
-      );
-    } else if (payload.moneyAction === DisputeMoneyAction.NONE) {
-      parts.push('No change was made to the payment.');
-    }
-
-    if (payload.resolution)
-      parts.push(`Note from our team: ${payload.resolution}`);
-
-    return parts.join(' ');
   }
 
   // ─── Admin moderation queue (PR3) ───────────────────────────────────────────
@@ -1053,4 +992,69 @@ export class NotificationsService {
 export function asSentence(text: string): string {
   const trimmed = text.trim();
   return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+}
+
+/**
+ * DR2/DR4: verdict + money movement, written from `recipientId`'s side, one
+ * sentence per entry. Shared by the in-app notification (joined into one body)
+ * and the outcome email (one paragraph each).
+ */
+export function describeDisputeOutcome(
+  payload: DisputeOutcomePayload,
+  recipientId: number,
+): string[] {
+  if (payload.outcome === 'CLOSED') {
+    return [
+      `The dispute on booking #${payload.bookingId} has been closed.`,
+      'If you still need help, contact support.',
+    ];
+  }
+
+  const parts = [
+    `The dispute on booking #${payload.bookingId} has been resolved.`,
+  ];
+
+  switch (payload.verdict) {
+    case DisputeOutcome.REFUND_CLIENT:
+      parts.push('Outcome: ruled for the client.');
+      break;
+    case DisputeOutcome.RELEASE_ARTISAN:
+      parts.push('Outcome: ruled for the artisan.');
+      break;
+    case DisputeOutcome.MUTUAL:
+      parts.push('Outcome: mutually resolved.');
+      break;
+    default:
+      break;
+  }
+
+  const amount = payload.moneyAmount;
+  if (
+    payload.moneyAction === DisputeMoneyAction.REFUND &&
+    amount != null &&
+    amount > 0
+  ) {
+    parts.push(
+      recipientId === payload.customerUserId
+        ? `Refunded to you: ${formatGhs(amount)}. It should reach your original payment method shortly.`
+        : `${formatGhs(amount)} was refunded to the client.`,
+    );
+  } else if (
+    payload.moneyAction === DisputeMoneyAction.RELEASE &&
+    amount != null &&
+    amount > 0
+  ) {
+    parts.push(
+      recipientId === payload.artisanUserId
+        ? `Released to you: ${formatGhs(amount)}.`
+        : `${formatGhs(amount)} was released to the artisan.`,
+    );
+  } else if (payload.moneyAction === DisputeMoneyAction.NONE) {
+    parts.push('No change was made to the payment.');
+  }
+
+  if (payload.resolution)
+    parts.push(`Note from our team: ${payload.resolution}`);
+
+  return parts;
 }
