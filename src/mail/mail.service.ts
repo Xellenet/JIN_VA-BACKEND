@@ -5,6 +5,42 @@ import { MailTemplateService } from './mail.template';
 import { getErrorMessage } from '@common/utils/error.util';
 import { hashEmailForLog } from '@common/utils/log-identifier.util';
 
+const NAMED_ENTITIES: Record<string, string> = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+  nbsp: ' ',
+  copy: '©',
+  mdash: '—',
+  ndash: '–',
+};
+
+/**
+ * The plain-text part is the HTML with its tags stripped, which left
+ * Handlebars' escaping behind ("We&#x27;ve", "&quot;Fix tap&quot;"). Decodes
+ * the entities so the text reads as written. Runs after the tags are gone, so
+ * a decoded "<" can't turn back into markup.
+ */
+export function decodeEntities(text: string): string {
+  return text.replace(
+    /&(#x[0-9a-f]+|#\d+|[a-z]+);/gi,
+    (entity: string, code: string) => {
+      if (code[0] === '#') {
+        const n =
+          code[1] === 'x' || code[1] === 'X'
+            ? parseInt(code.slice(2), 16)
+            : parseInt(code.slice(1), 10);
+        return Number.isFinite(n) && n <= 0x10ffff
+          ? String.fromCodePoint(n)
+          : entity;
+      }
+      return NAMED_ENTITIES[code.toLowerCase()] ?? entity;
+    },
+  );
+}
+
 @Injectable()
 export class MailService {
   private readonly logger = new Logger(MailService.name);
@@ -39,7 +75,7 @@ export class MailService {
         to,
         subject,
         html,
-        text: html.replace(/<[^>]*>?/gm, ''),
+        text: decodeEntities(html.replace(/<[^>]*>?/gm, '')),
       });
 
       // PR6: the recipient is logged as its hash, never in plaintext.

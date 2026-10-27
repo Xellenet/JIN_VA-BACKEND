@@ -10,11 +10,12 @@ import { ResendMailProvider } from './providers/resend-mail.provider';
 import { SmtpMailProvider } from './providers/smtp-mail.provider';
 import { User } from '../users/entities/user.entity';
 import { NotificationPreferences } from '../notifications/entities/notification-preferences.entity';
+import { Message } from '../messages/entities/message.entity';
 
 @Module({
   imports: [
     ConfigModule,
-    TypeOrmModule.forFeature([User, NotificationPreferences]),
+    TypeOrmModule.forFeature([User, NotificationPreferences, Message]),
   ],
   providers: [
     MailService,

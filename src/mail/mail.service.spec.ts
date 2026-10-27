@@ -77,6 +77,23 @@ describe('MailService (BI4)', () => {
     expect(sent.html).toBe(RENDERED.html);
   });
 
+  it('decodes HTML entities in the plain-text part', async () => {
+    build();
+    (templates.renderTemplate as jest.Mock).mockReturnValueOnce({
+      subject: 'Job Started',
+      html: '<p>We&#x27;ve started &quot;Fix tap&quot; &amp; more&nbsp;&copy; &#8212; &bogus;</p>',
+    });
+
+    await service.sendMail('ama@example.test', 'job.started', {});
+
+    const sendSpy = provider.send as jest.Mock<
+      Promise<void>,
+      [{ text: string }]
+    >;
+    const sent = sendSpy.mock.calls[0][0];
+    expect(sent.text).toBe('We\'ve started "Fix tap" & more © — &bogus;');
+  });
+
   it('asks the factory for the provider on every send, so MAIL_PROVIDER is honoured without a restart-order dependency', async () => {
     const { factory } = build();
 
