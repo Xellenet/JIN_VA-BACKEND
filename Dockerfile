@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # ---- deps: full install (dev deps needed for `nest build`) ----
-FROM node:22-slim AS deps
+FROM node:24-slim AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -12,7 +12,7 @@ COPY . .
 RUN npm run build && npm prune --omit=dev
 
 # ---- runtime ----
-FROM node:22-slim AS runtime
+FROM node:24-slim AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
 
