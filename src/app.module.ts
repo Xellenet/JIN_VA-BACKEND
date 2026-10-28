@@ -38,6 +38,9 @@ import { LocationsModule } from './locations/locations.module';
     ConfigModule.forRoot({
       isGlobal: true,
       load: [appConfig],
+      // Tests get their whole configuration from the test setup, never from a
+      // developer's .env, so they behave the same locally and in a pipeline.
+      ignoreEnvFile: process.env.NODE_ENV === 'test',
     }),
     TypeOrmModule.forRootAsync(typeOrmConfigAsync),
     WinstonModule.forRoot(winstonConfig),

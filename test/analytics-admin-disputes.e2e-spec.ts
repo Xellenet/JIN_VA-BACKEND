@@ -16,6 +16,7 @@ import { Notification } from '../src/notifications/entities/notification.entity'
 import { AdminAction } from '../src/admin-audit/entities/admin-action.entity';
 import { UserTokenService } from '@users/token.service';
 import { AdminAnalyticsService } from '../src/analytics/admin-analytics.service';
+import { PlatformAnalyticsCacheService } from '../src/analytics/platform-analytics-cache.service';
 import { DisputesService } from '../src/disputes/disputes.service';
 import {
   AdminActionType,
@@ -1143,6 +1144,11 @@ describe('Analytics, admin tooling & disputes (e2e)', () => {
         weightedRating: 9.95,
         totalReviews: 0,
       });
+
+      // The rollup is cached at boot. Tests run on an empty database, so
+      // refresh it now that this suite's users and jobs exist, as the cron
+      // would, instead of relying on seed data being there at boot.
+      await app.get(PlatformAnalyticsCacheService).refresh();
     });
 
     // ─── DC2.2: every range returns 200 with a populated kpis block ───────────

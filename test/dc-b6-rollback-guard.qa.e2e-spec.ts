@@ -72,6 +72,17 @@ function body<T>(res: request.Response): Envelope<T> {
 }
 
 describe('B6: dispute money-action rollback status guard — QA verification (e2e)', () => {
+  // This suite races two admin sessions: admin B's request runs while admin
+  // A's transaction is still open. That needs a database with real concurrent
+  // sessions, which the default in-memory test database (one session) is not,
+  // so it runs only on opt-in against a disposable Postgres:
+  // `E2E_REAL_POSTGRES=1 DB_HOST=… npm run test:e2e -- dc-b6`. The guard is
+  // also covered without a database by disputes.service.spec.ts.
+  if (process.env.E2E_REAL_POSTGRES !== '1') {
+    it.skip('needs E2E_REAL_POSTGRES=1 (concurrent database sessions)', () => {});
+    return;
+  }
+
   let app: INestApplication<App>;
   let dataSource: DataSource;
   let userRepo: Repository<User>;

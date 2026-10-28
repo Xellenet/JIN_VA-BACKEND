@@ -15,11 +15,11 @@
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "test:watch": "jest --watch",
-    "test:cov": "jest --coverage",
+    "test:cov": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.coverage.json --coverage --runInBand",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config ./test/jest-e2e.json",
     "test:e2e:fixtures": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config ./test/jest-e2e.json --testPathIgnorePatterns /node_modules/ --testPathPatterns fixture",
-    "test:prepush": "jest --coverage --ci",
+    "test:prepush": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.coverage.json --coverage --runInBand --ci",
     "prepare": "husky || true",
     "commit": "cz",
     "sonar": "sonar-scanner",
@@ -76,6 +76,7 @@
   "devDependencies": {
     "@commitlint/cli": "^19.8.1",
     "@commitlint/config-conventional": "^19.8.1",
+    "@electric-sql/pglite": "0.5.8",
     "@eslint/eslintrc": "^3.2.0",
     "@eslint/js": "^9.18.0",
     "@nestjs/cli": "^11.0.0",
@@ -118,6 +119,9 @@
     ],
     "rootDir": "src",
     "testRegex": ".*\\.spec\\.ts$",
+    "setupFiles": [
+      "<rootDir>/../test/support/hermetic.ts"
+    ],
     "transform": {
       "^.+\\.(t|j)s$": "ts-jest"
     },
@@ -129,26 +133,6 @@
     ],
     "coverageDirectory": "../coverage",
     "testEnvironment": "node",
-    "coverageThreshold": {
-      "global": {
-        "branches": 50,
-        "functions": 50,
-        "lines": 50,
-        "statements": 50
-      },
-      "**/*.service.ts": {
-        "branches": 60,
-        "functions": 60,
-        "lines": 60,
-        "statements": 60
-      },
-      "**/*.controller.ts": {
-        "branches": 50,
-        "functions": 50,
-        "lines": 50,
-        "statements": 50
-      }
-    },
     "moduleNameMapper": {
       "^@common/(.*)$": "<rootDir>/common/$1",
       "^@users/(.*)$": "<rootDir>/users/$1",

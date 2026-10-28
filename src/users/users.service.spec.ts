@@ -202,6 +202,7 @@ describe('UsersService', () => {
    */
   describe('createUserInTransaction', () => {
     const txUsers = {
+      findOne: jest.fn(() => Promise.resolve(null)),
       create: jest.fn((d: Record<string, unknown>) => d),
       save: jest.fn((d: Record<string, unknown>) =>
         Promise.resolve({ id: 30, ...d }),
@@ -239,6 +240,16 @@ describe('UsersService', () => {
         (cb: (m: unknown) => unknown): unknown =>
           cb({ getRepository: repoFor }),
       );
+    });
+
+    it('checks for a duplicate email inside the transaction, not beside it', async () => {
+      mockUsersRepository.findOne.mockClear();
+      txUsers.findOne.mockClear();
+
+      await service.createUserInTransaction(social(Role.CUSTOMER));
+
+      expect(txUsers.findOne).toHaveBeenCalledTimes(1);
+      expect(mockUsersRepository.findOne).not.toHaveBeenCalled();
     });
 
     it('writes only through the transaction manager and creates the account verified', async () => {
