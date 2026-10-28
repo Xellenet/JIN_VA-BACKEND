@@ -1,3 +1,4 @@
+import { stripVTControlCharacters } from 'util';
 import { PlatformTools } from 'typeorm/platform/PlatformTools';
 import { ParameterlessQueryLogger } from './typeorm-logger';
 
@@ -21,7 +22,9 @@ describe('ParameterlessQueryLogger', () => {
       ['esi.sample@example.com', '+233241234567'],
     );
 
-    const out = lines.join('\n');
+    // TypeORM colours the SQL when colour output is on (as it is in CI), so
+    // compare the text without the colour codes.
+    const out = stripVTControlCharacters(lines.join('\n'));
     expect(out).toContain('INSERT INTO "users"');
     expect(out).toContain('duplicate key value');
     expect(out).not.toContain('esi.sample@example.com');
