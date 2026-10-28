@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - main
+    tags:
+      - 'v*.*.*'
+permissions:
+  contents: read
 
 jobs:
   build-and-publish:
@@ -27,14 +31,14 @@ jobs:
         id: image_tags
         uses: docker/metadata-action@v6
         with:
-          images: docker.io/xellenet/jin-va-backend
+          images: docker.io/nnyabechamamme/xellenet_jinva
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}}
             type=sha
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
 
-      - name: Build Docker image
+      - name: Build And Push Docker image
         uses: docker/build-push-action@v7
         with:
           context: .
