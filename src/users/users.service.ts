@@ -158,7 +158,11 @@ export class UsersService {
       manager?.getRepository(CustomerProfile) ??
       this.customerProfilesRepository;
 
-    const existingUser = await this.findUserByEmail(email);
+    // Inside a transaction, the duplicate check runs on that transaction's
+    // connection, so it is part of the work it guards.
+    const existingUser = manager
+      ? await this.findUserByEmail(email, manager)
+      : await this.findUserByEmail(email);
     if (existingUser) {
       throw new UserAlreadyExists(
         ERROR_MESSAGES.USER.EMAIL_ALREADY_EXISTS(email),
@@ -523,7 +527,10 @@ export class UsersService {
    * C1.4 deliberately did **not** widen this. The one place that needs to see
    * soft-deleted rows uses {@link findSoftDeletedUserByEmail} instead.
    */
-  async findUserByEmail(email: string): Promise<User | null> {
+  async findUserByEmail(
+    email: string,
+    manager?: EntityManager,
+  ): Promise<User | null> {
     if (!email) {
       throw new NotFoundException('Email required');
     }
@@ -542,7 +549,8 @@ export class UsersService {
     // log readers an enumeration oracle that the response bodies deliberately
     // are not.
     this.logger.log(`Finding user by email hash ${hashEmailForLog(email)}`);
-    return this.usersRepository.findOne({ where: { email: sameEmail(email) } });
+    const repo = manager?.getRepository(User) ?? this.usersRepository;
+    return repo.findOne({ where: { email: sameEmail(email) } });
   }
 
   /**

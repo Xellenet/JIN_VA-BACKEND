@@ -16,10 +16,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # Node 24 "Krypton" LTS, supported until April 2028. A bare major picks
+      # up the newest 24.x patch, including security releases, on every run.
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
+          check-latest: true
 
       - name: Install dependencies
         run: npm install

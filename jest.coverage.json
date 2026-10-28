@@ -1,0 +1,24 @@
+{
+  "projects": ["<rootDir>", "<rootDir>/test/jest-e2e.json"],
+  "coverageDirectory": "<rootDir>/coverage",
+  "coverageThreshold": {
+    "global": {
+      "branches": 50,
+      "functions": 50,
+      "lines": 50,
+      "statements": 50
+    },
+    "**/*.service.ts": {
+      "branches": 60,
+      "functions": 60,
+      "lines": 60,
+      "statements": 60
+    },
+    "**/*.controller.ts": {
+      "branches": 50,
+      "functions": 50,
+      "lines": 50,
+      "statements": 50
+    }
+  }
+}
