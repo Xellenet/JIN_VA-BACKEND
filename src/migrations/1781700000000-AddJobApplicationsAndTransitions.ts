@@ -1,6 +1,8 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class AddJobApplicationsAndTransitions1781700000000 implements MigrationInterface {
+export class AddJobApplicationsAndTransitions1781700000000
+  implements MigrationInterface
+{
   name = 'AddJobApplicationsAndTransitions1781700000000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
@@ -48,13 +50,27 @@ export class AddJobApplicationsAndTransitions1781700000000 implements MigrationI
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(`ALTER TABLE "job_applications" DROP CONSTRAINT "FK_job_applications_artisan"`);
-    await queryRunner.query(`ALTER TABLE "job_applications" DROP CONSTRAINT "FK_job_applications_job"`);
+    await queryRunner.query(
+      `ALTER TABLE "job_applications" DROP CONSTRAINT "FK_job_applications_artisan"`,
+    );
+    await queryRunner.query(
+      `ALTER TABLE "job_applications" DROP CONSTRAINT "FK_job_applications_job"`,
+    );
     await queryRunner.query(`DROP TABLE "job_applications"`);
-    await queryRunner.query(`DROP TYPE "public"."job_applications_status_enum"`);
-    await queryRunner.query(`ALTER TABLE "jobs" DROP CONSTRAINT "FK_jobs_accepted_artisan"`);
-    await queryRunner.query(`ALTER TABLE "jobs" DROP COLUMN "completion_requested_at"`);
-    await queryRunner.query(`ALTER TABLE "jobs" DROP COLUMN "payment_intent_id"`);
-    await queryRunner.query(`ALTER TABLE "jobs" DROP COLUMN "accepted_artisan_id"`);
+    await queryRunner.query(
+      `DROP TYPE "public"."job_applications_status_enum"`,
+    );
+    await queryRunner.query(
+      `ALTER TABLE "jobs" DROP CONSTRAINT "FK_jobs_accepted_artisan"`,
+    );
+    await queryRunner.query(
+      `ALTER TABLE "jobs" DROP COLUMN "completion_requested_at"`,
+    );
+    await queryRunner.query(
+      `ALTER TABLE "jobs" DROP COLUMN "payment_intent_id"`,
+    );
+    await queryRunner.query(
+      `ALTER TABLE "jobs" DROP COLUMN "accepted_artisan_id"`,
+    );
   }
 }

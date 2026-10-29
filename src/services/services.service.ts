@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   Logger,
   NotFoundException,
@@ -14,7 +15,12 @@ import { ServiceResponseDto } from './dto/service-response.dto';
 import { plainToInstance } from 'class-transformer';
 import { SUCCESS_MESSAGES } from '@common/constants/success-messages.constants';
 
-type Pagination = { total: number; page: number; limit: number; totalPages: number };
+type Pagination = {
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+};
 
 @Injectable()
 export class ServicesService {
@@ -32,10 +38,10 @@ export class ServicesService {
    * @returns The created service wrapped in a `{ message, data }` response payload.
    * @throws {BadRequestException} When a service with the same name already exists.
    */
-  async create(createServiceDto: CreateServiceDto): Promise<{ message: string; data: ServiceResponseDto }> {
-    const existing = await this.servicesRepository.findOne({
-      where: { name: createServiceDto.name },
-    });
+  async create(
+    createServiceDto: CreateServiceDto,
+  ): Promise<{ message: string; data: ServiceResponseDto }> {
+    const existing = await this.findByNameIgnoringCase(createServiceDto.name);
 
     if (existing) {
       throw new BadRequestException(
@@ -49,7 +55,9 @@ export class ServicesService {
 
     return {
       message: SUCCESS_MESSAGES.SERVICE.CREATED,
-      data: plainToInstance(ServiceResponseDto, saved, { excludeExtraneousValues: true }),
+      data: plainToInstance(ServiceResponseDto, saved, {
+        excludeExtraneousValues: true,
+      }),
     };
   }
 
@@ -59,12 +67,14 @@ export class ServicesService {
    * @param query - Optional `search` (name substring), `page`, and `limit`.
    * @returns `{ message, data, pagination }` response payload.
    */
-  async findAll(
-    query: GetServicesQueryDto,
-  ): Promise<{ message: string; data: ServiceResponseDto[]; pagination: Pagination }> {
-    const page  = query.page  ?? 1;
+  async findAll(query: GetServicesQueryDto): Promise<{
+    message: string;
+    data: ServiceResponseDto[];
+    pagination: Pagination;
+  }> {
+    const page = query.page ?? 1;
     const limit = query.limit ?? 100;
-    const skip  = (page - 1) * limit;
+    const skip = (page - 1) * limit;
 
     const where = query.search ? { name: ILike(`%${query.search}%`) } : {};
 
@@ -77,7 +87,9 @@ export class ServicesService {
 
     return {
       message: SUCCESS_MESSAGES.SERVICE.ALL_RETRIEVED,
-      data: plainToInstance(ServiceResponseDto, services, { excludeExtraneousValues: true }),
+      data: plainToInstance(ServiceResponseDto, services, {
+        excludeExtraneousValues: true,
+      }),
       pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
   }
@@ -89,7 +101,9 @@ export class ServicesService {
    * @returns The matching service wrapped in a `{ message, data }` response payload.
    * @throws {NotFoundException} When no service with the given ID exists.
    */
-  async findOne(id: number): Promise<{ message: string; data: ServiceResponseDto }> {
+  async findOne(
+    id: number,
+  ): Promise<{ message: string; data: ServiceResponseDto }> {
     const service = await this.servicesRepository.findOne({ where: { id } });
 
     if (!service) {
@@ -98,7 +112,9 @@ export class ServicesService {
 
     return {
       message: SUCCESS_MESSAGES.SERVICE.RETRIEVED,
-      data: plainToInstance(ServiceResponseDto, service, { excludeExtraneousValues: true }),
+      data: plainToInstance(ServiceResponseDto, service, {
+        excludeExtraneousValues: true,
+      }),
     };
   }
 
@@ -112,17 +128,24 @@ export class ServicesService {
    * @throws {NotFoundException} When no service with the given ID exists.
    * @throws {BadRequestException} When the new name is already taken by another service.
    */
-  async update(id: number, updateServiceDto: UpdateServiceDto): Promise<{ message: string; data: ServiceResponseDto }> {
+  async update(
+    id: number,
+    updateServiceDto: UpdateServiceDto,
+  ): Promise<{ message: string; data: ServiceResponseDto }> {
     const service = await this.servicesRepository.findOne({ where: { id } });
 
     if (!service) {
       throw new NotFoundException(`Service with id ${id} not found.`);
     }
 
-    if (updateServiceDto.name && updateServiceDto.name !== service.name) {
-      const existing = await this.servicesRepository.findOne({
-        where: { name: updateServiceDto.name },
-      });
+    if (
+      updateServiceDto.name &&
+      updateServiceDto.name.toLowerCase() !== service.name.toLowerCase()
+    ) {
+      const existing = await this.findByNameIgnoringCase(
+        updateServiceDto.name,
+        id,
+      );
 
       if (existing) {
         throw new BadRequestException(
@@ -137,7 +160,9 @@ export class ServicesService {
 
     return {
       message: SUCCESS_MESSAGES.SERVICE.UPDATED,
-      data: plainToInstance(ServiceResponseDto, saved, { excludeExtraneousValues: true }),
+      data: plainToInstance(ServiceResponseDto, saved, {
+        excludeExtraneousValues: true,
+      }),
     };
   }
 
@@ -150,9 +175,53 @@ export class ServicesService {
    */
   async remove(id: number): Promise<{ message: string }> {
     await this.findOne(id);
+
+    // QA ADM-12: deleting a service in use either failed with a raw 500 (jobs
+    // reference it), left bookings that could never be confirmed (their
+    // service became NULL), or silently took it off every artisan offering
+    // it. Refuse instead, and say what is using it.
+    const [usage]: Array<{ artisans: number; bookings: number; jobs: number }> =
+      await this.servicesRepository.manager.query(
+        `SELECT
+           (SELECT COUNT(*)::int FROM artisan_profile_services WHERE service_id = $1) AS artisans,
+           (SELECT COUNT(*)::int FROM bookings WHERE service_id = $1) AS bookings,
+           (SELECT COUNT(*)::int FROM jobs WHERE service_id = $1) AS jobs`,
+        [id],
+      );
+    const uses = [
+      usage.artisans &&
+        plural(usage.artisans, 'artisan offers', 'artisans offer'),
+      usage.bookings && plural(usage.bookings, 'booking uses', 'bookings use'),
+      usage.jobs && plural(usage.jobs, 'job uses', 'jobs use'),
+    ].filter(Boolean);
+    if (uses.length) {
+      throw new ConflictException(
+        `This service can't be deleted because ${uses.join(', ')} it. ` +
+          (usage.bookings || usage.jobs
+            ? 'Services with booking or job history are kept so those records stay complete. You can edit its name or description instead.'
+            : 'Ask those artisans to remove it from their profile first.'),
+      );
+    }
+
     await this.servicesRepository.delete(id);
     this.logger.log(`Deleted service with id: ${id}`);
 
     return { message: SUCCESS_MESSAGES.SERVICE.DELETED };
   }
+
+  /** QA ADM-10: names are unique regardless of case. */
+  private findByNameIgnoringCase(
+    name: string,
+    exceptId?: number,
+  ): Promise<ServiceEntity | null> {
+    const qb = this.servicesRepository
+      .createQueryBuilder('s')
+      .where('LOWER(s.name) = LOWER(:name)', { name });
+    if (exceptId != null) qb.andWhere('s.id <> :exceptId', { exceptId });
+    return qb.getOne();
+  }
+}
+
+function plural(count: number, one: string, many: string): string {
+  return `${count} ${count === 1 ? one : many}`;
 }

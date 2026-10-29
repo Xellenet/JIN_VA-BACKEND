@@ -14,12 +14,18 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/checkout@v7
         with:
-          node-version: 22
+          # SonarQube Cloud needs the full history to tell new code from old.
+          fetch-depth: 0
+
+      # Node 24 "Krypton" LTS, supported until April 2028. A bare major picks
+      # up the newest 24.x patch, including security releases, on every run.
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          check-latest: true
 
       - name: Install dependencies
         run: npm install
@@ -27,8 +33,10 @@ jobs:
       - name: Run tests with coverage
         run: npm run test:cov
 
-      - name: SonarCloud Scan
-        uses: SonarSource/sonarcloud-github-action@v2
+      # sonarcloud-github-action is archived; this is SonarSource's
+      # replacement and works the same way for SonarQube Cloud.
+      - name: SonarQube Cloud Scan
+        uses: SonarSource/sonarqube-scan-action@v8.3.0
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         with:
@@ -36,4 +44,3 @@ jobs:
             -Dsonar.projectKey=Xellenet_JIN_VA-BACKEND
             -Dsonar.organization=xellenet
             -Dsonar.host.url=https://sonarcloud.io
-

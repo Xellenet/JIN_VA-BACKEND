@@ -11,15 +11,52 @@ import { In, Repository, SelectQueryBuilder } from 'typeorm';
 import { ArtisanProfile } from '@users/entities/artisan-profile.entity';
 import { User } from '@users/entities/user.entity';
 import { ServiceEntity } from '@services/entities/service.entity';
+import { Job } from '@jobs/entities/job.entity';
 import { ArtisanPublicResponseDto } from './dto/artisan-public-response.dto';
-import { GetArtisansQueryDto, ArtisanSortBy } from './dto/get-artisans-query.dto';
+import {
+  GetArtisansQueryDto,
+  ArtisanSortBy,
+  AvailabilityWindow,
+} from './dto/get-artisans-query.dto';
 import { UpdateArtisanProfileDto } from '@users/dto/update-artisan-profile.dto';
 import { ArtisanProfileResponseDto } from '@users/dto/artisan-profile-response.dto';
 import { SUCCESS_MESSAGES } from '@common/constants/success-messages.constants';
-type Pagination = { total: number; page: number; limit: number; totalPages: number };
-type PublicList = { message: string; data: ArtisanPublicResponseDto[]; pagination: Pagination };
+import { Role, Status } from '@common/types/enums';
+type Pagination = {
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+};
+type PublicList = {
+  message: string;
+  data: ArtisanPublicResponseDto[];
+  pagination: Pagination;
+};
 type PublicItem = { message: string; data: ArtisanPublicResponseDto };
 type PrivateItem = { message: string; data: ArtisanProfileResponseDto };
+
+/**
+ * F3: fields an artisan profile must have to be considered "complete enough"
+ * to appear in customer-facing search: an hourly rate, a service area, and at
+ * least one offered service are the minimum a customer needs to evaluate and
+ * book the artisan.
+ *
+ * B2 (google-signup-prefill): **bio is no longer required**. It is optional at
+ * sign-up (B1), and an artisan without one stays searchable, so `missingFields`
+ * never contains `'bio'`. Possible keys: `hourlyRate`, `location`, `services`.
+ */
+export function computeProfileCompleteness(
+  profile: Pick<ArtisanProfile, 'hourlyRate' | 'location' | 'services'>,
+): { isComplete: boolean; missingFields: string[] } {
+  const missingFields: string[] = [];
+  if (profile.hourlyRate === null || profile.hourlyRate === undefined)
+    missingFields.push('hourlyRate');
+  if (!profile.location?.trim()) missingFields.push('location');
+  if (!profile.services || profile.services.length === 0)
+    missingFields.push('services');
+  return { isComplete: missingFields.length === 0, missingFields };
+}
 
 @Injectable()
 export class ArtisansService {
@@ -32,6 +69,8 @@ export class ArtisansService {
     private readonly usersRepository: Repository<User>,
     @InjectRepository(ServiceEntity)
     private readonly servicesRepository: Repository<ServiceEntity>,
+    @InjectRepository(Job)
+    private readonly jobsRepository: Repository<Job>,
   ) {}
 
   // ─── Public discovery ────────────────────────────────────────────────────────
@@ -53,19 +92,41 @@ export class ArtisansService {
    * @returns `{ message, data, pagination }`.
    */
   async search(query: GetArtisansQueryDto): Promise<PublicList> {
-    const page  = query.page  ?? 1;
-    const limit = query.limit ?? 10;
-    const skip  = (page - 1) * limit;
+    const page = query.page ?? 1;
+    // D6: default reconciled to 20/page to match the PRD (previously 10).
+    const limit = query.limit ?? 20;
+    const skip = (page - 1) * limit;
 
     const qb = this.buildSearchQb();
     this.applySearchFilters(qb, query);
     this.applySortOrder(qb, query.sortBy);
 
-    const [profiles, total] = await qb.skip(skip).take(limit).getManyAndCount();
+    // NOTE: intentionally not using qb.getManyAndCount() here. TypeORM's
+    // getManyAndCount() has a "lazyCount" fast-path optimization that, when
+    // fewer rows come back than the requested `take`, infers `total = skip +
+    // entities.length` instead of issuing a real COUNT query. That inference
+    // is wrong whenever the requested page is beyond the last real page
+    // (e.g. 0 real matches, page > 1): it reports `total = skip` instead of
+    // the true count. Cloning the qb before skip/take and calling
+    // `.getCount()` on the clone always runs the real COUNT(DISTINCT ...)
+    // query, sidestepping the shortcut entirely.
+    const countQb = qb.clone();
+    const [profiles, total] = await Promise.all([
+      qb.skip(skip).take(limit).getMany(),
+      countQb.getCount(),
+    ]);
+
+    // D3: bulk-compute completed-jobs counts for every profile on this page
+    // in a single query, rather than N+1 queries per result card.
+    const countsByUserId = await this.getCompletedJobsCountsByUserId(
+      profiles.map((p) => p.user.id),
+    );
 
     return {
       message: SUCCESS_MESSAGES.ARTISAN_PROFILE.ALL_RETRIEVED,
-      data: profiles.map(p => this.toPublic(p)),
+      data: profiles.map((p) =>
+        this.toPublic(p, countsByUserId.get(p.user.id) ?? 0),
+      ),
       pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
   }
@@ -75,21 +136,54 @@ export class ArtisansService {
    *
    * @param artisanProfileId - The primary key of the artisan profile.
    * @returns `{ message, data: ArtisanPublicResponseDto }`.
-   * @throws {NotFoundException} When no artisan profile with the given ID exists.
+   * @throws {NotFoundException} When no artisan profile with the given ID
+   *   exists, or when its owning account is soft-deleted or purged.
    */
-  async findById(artisanProfileId: number): Promise<PublicItem> {
+  async findById(
+    artisanProfileId: number,
+    viewer?: { id: number; role: Role },
+  ): Promise<PublicItem> {
     const profile = await this.artisanProfileRepository.findOne({
       where: { id: artisanProfileId },
       relations: ['user', 'services'],
     });
 
-    if (!profile) {
-      throw new NotFoundException(`Artisan profile with id ${artisanProfileId} not found.`);
+    // C1.6: `user` being null here means the owning account is soft-deleted
+    // (C1) or purged (C1.7) — `artisan_profiles` itself is not soft-deletable,
+    // and TypeORM appends `AND user.deleted_at IS NULL` to the relation's LEFT
+    // join, so the profile row still comes back with a null `user`.
+    //
+    // This must be the *same* 404 a nonexistent ID gets, for two reasons:
+    // dereferencing the null relation below used to throw a `TypeError` and
+    // hand an unauthenticated caller a 500 on a public route (so a bookmarked
+    // or shared artisan link broke rather than saying "not found"), and a
+    // 500-vs-404 difference is itself an oracle for "this artisan deleted
+    // their account". Nonexistent, soft-deleted and purged are indistinguishable.
+    // QA SRCH-15: an artisan hidden from search (suspended, banned or with an
+    // incomplete profile) also gets the not-found answer by direct link, so
+    // they can't be booked from a saved URL. They and admins still see it.
+    const isOwnerOrAdmin =
+      viewer?.role === Role.ADMIN ||
+      (profile?.user != null && viewer?.id === profile.user.id);
+    const hidden =
+      profile?.user != null &&
+      (profile.user.isBanned ||
+        profile.user.isSuspended ||
+        !profile.isProfileComplete);
+    if (!profile || !profile.user || (hidden && !isOwnerOrAdmin)) {
+      throw new NotFoundException(
+        `Artisan profile with id ${artisanProfileId} not found.`,
+      );
     }
+
+    // D3/P1: same completed-jobs count computation as search, for the Hero section.
+    const completedJobsCount = await this.getCompletedJobsCount(
+      profile.user.id,
+    );
 
     return {
       message: SUCCESS_MESSAGES.ARTISAN_PROFILE.RETRIEVED,
-      data: this.toPublic(profile),
+      data: this.toPublic(profile, completedJobsCount),
     };
   }
 
@@ -104,7 +198,10 @@ export class ArtisansService {
    * @returns `{ message, data: ArtisanProfileResponseDto }` with full profile.
    * @throws {NotFoundException} When the artisan profile or any requested service is not found.
    */
-  async updateMe(userId: number, dto: UpdateArtisanProfileDto): Promise<PrivateItem> {
+  async updateMe(
+    userId: number,
+    dto: UpdateArtisanProfileDto,
+  ): Promise<PrivateItem> {
     const { serviceIds, ...profileUpdates } = dto;
 
     const profile = await this.artisanProfileRepository.findOne({
@@ -113,14 +210,18 @@ export class ArtisansService {
     });
 
     if (!profile) {
-      throw new NotFoundException(`Artisan profile for user ${userId} not found.`);
+      throw new NotFoundException(
+        `Artisan profile for user ${userId} not found.`,
+      );
     }
 
     if (serviceIds !== undefined) {
       if (serviceIds.length === 0) {
         profile.services = [];
       } else {
-        const services = await this.servicesRepository.findBy({ id: In(serviceIds) });
+        const services = await this.servicesRepository.findBy({
+          id: In(serviceIds),
+        });
         if (services.length !== serviceIds.length) {
           throw new NotFoundException('One or more services were not found.');
         }
@@ -129,6 +230,13 @@ export class ArtisansService {
     }
 
     Object.assign(profile, profileUpdates);
+
+    // F3: recompute search-visibility eligibility on every profile edit — an
+    // artisan who edits themselves into an incomplete state must drop out of
+    // search immediately, not just be blocked from newly appearing.
+    const { isComplete, missingFields } = computeProfileCompleteness(profile);
+    profile.isProfileComplete = isComplete;
+
     await this.artisanProfileRepository.save(profile);
 
     const updated = await this.artisanProfileRepository.findOne({
@@ -140,7 +248,11 @@ export class ArtisansService {
 
     return {
       message: SUCCESS_MESSAGES.ARTISAN_PROFILE.UPDATED,
-      data: plainToInstance(ArtisanProfileResponseDto, updated, { excludeExtraneousValues: true }),
+      data: this.toPrivate(
+        updated!,
+        missingFields,
+        await this.getCompletedJobsCount(userId),
+      ),
     };
   }
 
@@ -160,20 +272,30 @@ export class ArtisansService {
     });
 
     if (!profile) {
-      throw new NotFoundException(`Artisan profile for user ${userId} not found.`);
+      throw new NotFoundException(
+        `Artisan profile for user ${userId} not found.`,
+      );
     }
 
-    const service = await this.servicesRepository.findOne({ where: { id: serviceId } });
+    const service = await this.servicesRepository.findOne({
+      where: { id: serviceId },
+    });
     if (!service) {
       throw new NotFoundException(`Service with id ${serviceId} not found.`);
     }
 
-    const alreadyAdded = profile.services.some(s => s.id === serviceId);
+    const alreadyAdded = profile.services.some((s) => s.id === serviceId);
     if (alreadyAdded) {
-      throw new ConflictException(`Service "${service.name}" is already on your profile.`);
+      throw new ConflictException(
+        `Service "${service.name}" is already on your profile.`,
+      );
     }
 
     profile.services.push(service);
+
+    const { isComplete, missingFields } = computeProfileCompleteness(profile);
+    profile.isProfileComplete = isComplete;
+
     await this.artisanProfileRepository.save(profile);
 
     const updated = await this.artisanProfileRepository.findOne({
@@ -181,11 +303,17 @@ export class ArtisansService {
       relations: ['user', 'user.addresses', 'services'],
     });
 
-    this.logger.log(`Artisan ${userId} added service ${serviceId} to their profile`);
+    this.logger.log(
+      `Artisan ${userId} added service ${serviceId} to their profile`,
+    );
 
     return {
       message: SUCCESS_MESSAGES.ARTISAN_PROFILE.SERVICE_ADDED,
-      data: plainToInstance(ArtisanProfileResponseDto, updated, { excludeExtraneousValues: true }),
+      data: this.toPrivate(
+        updated!,
+        missingFields,
+        await this.getCompletedJobsCount(userId),
+      ),
     };
   }
 
@@ -205,15 +333,23 @@ export class ArtisansService {
     });
 
     if (!profile) {
-      throw new NotFoundException(`Artisan profile for user ${userId} not found.`);
+      throw new NotFoundException(
+        `Artisan profile for user ${userId} not found.`,
+      );
     }
 
-    const index = profile.services.findIndex(s => s.id === serviceId);
+    const index = profile.services.findIndex((s) => s.id === serviceId);
     if (index === -1) {
-      throw new BadRequestException(`Service with id ${serviceId} is not on your profile.`);
+      throw new BadRequestException(
+        `Service with id ${serviceId} is not on your profile.`,
+      );
     }
 
     profile.services.splice(index, 1);
+
+    const { isComplete, missingFields } = computeProfileCompleteness(profile);
+    profile.isProfileComplete = isComplete;
+
     await this.artisanProfileRepository.save(profile);
 
     const updated = await this.artisanProfileRepository.findOne({
@@ -221,22 +357,39 @@ export class ArtisansService {
       relations: ['user', 'user.addresses', 'services'],
     });
 
-    this.logger.log(`Artisan ${userId} removed service ${serviceId} from their profile`);
+    this.logger.log(
+      `Artisan ${userId} removed service ${serviceId} from their profile`,
+    );
 
     return {
       message: SUCCESS_MESSAGES.ARTISAN_PROFILE.SERVICE_REMOVED,
-      data: plainToInstance(ArtisanProfileResponseDto, updated, { excludeExtraneousValues: true }),
+      data: this.toPrivate(
+        updated!,
+        missingFields,
+        await this.getCompletedJobsCount(userId),
+      ),
     };
   }
 
   // ─── Private helpers ─────────────────────────────────────────────────────────
 
   private buildSearchQb(): SelectQueryBuilder<ArtisanProfile> {
-    return this.artisanProfileRepository
-      .createQueryBuilder('ap')
-      .innerJoinAndSelect('ap.user', 'user')
-      .leftJoinAndSelect('ap.services', 'services')
-      .where('user.deletedAt IS NULL');
+    return (
+      this.artisanProfileRepository
+        .createQueryBuilder('ap')
+        .innerJoinAndSelect('ap.user', 'user')
+        .leftJoinAndSelect('ap.services', 'services')
+        .where('user.deletedAt IS NULL')
+        // F3: profiles missing required fields never appear in customer-facing search.
+        .andWhere('ap.isProfileComplete = true')
+        // AT3: a suspended artisan is not publicly discoverable — that is half
+        // of what suspension means (Open Question 4, resolved). A *banned*
+        // artisan is excluded here too: they can no longer log in at all, so
+        // surfacing them to customers could only ever produce a booking
+        // nobody can fulfil.
+        .andWhere('user.isSuspended = false')
+        .andWhere('user.isBanned = false')
+    );
   }
 
   private applySearchFilters(
@@ -273,7 +426,9 @@ export class ArtisansService {
     }
 
     if (query.minRating !== undefined) {
-      qb.andWhere('ap.averageRating >= :minRating', { minRating: query.minRating });
+      qb.andWhere('ap.averageRating >= :minRating', {
+        minRating: query.minRating,
+      });
     }
 
     if (query.availabilityStatus) {
@@ -283,10 +438,79 @@ export class ArtisansService {
     }
 
     if (query.isVerified !== undefined) {
-      qb.andWhere('ap.isVerified = :isVerified', { isVerified: query.isVerified });
+      qb.andWhere('ap.isVerified = :isVerified', {
+        isVerified: query.isVerified,
+      });
+    }
+
+    // D4: price-range filter against Service.price for any service the artisan offers.
+    if (query.minPrice !== undefined || query.maxPrice !== undefined) {
+      const priceConditions = [
+        'aps2.artisan_profile_id = ap.id',
+        'svc.price IS NOT NULL',
+      ];
+      const params: Record<string, number> = {};
+      if (query.minPrice !== undefined) {
+        priceConditions.push('svc.price >= :minPrice');
+        params.minPrice = query.minPrice;
+      }
+      if (query.maxPrice !== undefined) {
+        priceConditions.push('svc.price <= :maxPrice');
+        params.maxPrice = query.maxPrice;
+      }
+      qb.andWhere(
+        `EXISTS (
+          SELECT 1 FROM artisan_profile_services aps2
+          INNER JOIN services svc ON svc.id = aps2.service_id
+          WHERE ${priceConditions.join(' AND ')}
+        )`,
+        params,
+      );
+    }
+
+    // D7: best-effort "now" / "this week" availability filter, backed by real
+    // ArtisanAvailability weekly-hours rows. Cannot account for already-booked/
+    // blocked time — see AvailabilityWindow doc comment and api-contract.md.
+    if (query.availabilityWindow === AvailabilityWindow.NOW) {
+      const now = new Date();
+      const dayOfWeek = now.getDay(); // 0 = Sunday, matches ArtisanAvailability.dayOfWeek
+      const currentTime = now.toTimeString().slice(0, 8); // HH:MM:SS
+      qb.andWhere(
+        `EXISTS (
+          SELECT 1 FROM artisan_availability av
+          WHERE av.artisan_profile_id = ap.id
+          AND av.is_active = true
+          AND av.day_of_week = :availDayOfWeek
+          AND av.start_time <= :availCurrentTime
+          AND av.end_time > :availCurrentTime
+        )`,
+        { availDayOfWeek: dayOfWeek, availCurrentTime: currentTime },
+      );
+    } else if (query.availabilityWindow === AvailabilityWindow.THIS_WEEK) {
+      // The stored schedule is a recurring weekly pattern (not date-specific),
+      // so any active slot recurs within any 7-day window by definition.
+      qb.andWhere(
+        `EXISTS (
+          SELECT 1 FROM artisan_availability av
+          WHERE av.artisan_profile_id = ap.id
+          AND av.is_active = true
+        )`,
+      );
     }
   }
 
+  /**
+   * RA2: `RATING` (and the default, when `sortBy` is omitted) now orders by
+   * `weightedRating` (the Bayesian-weighted score), not the plain
+   * `averageRating` — this is exactly the "ranking/sorting artisans against
+   * each other" use case RA2 reserves the weighted score for, so a
+   * brand-new artisan with one 5-star review no longer outranks an
+   * established artisan with hundreds of reviews at 4.7. The plain average
+   * is unaffected and still what's shown on a single profile (`minRating`
+   * filtering elsewhere in this method also stays on `averageRating` — see
+   * `applySearchFilters`). Flagged as a behavior change (not a shape
+   * change) in `docs/team/reviews-ratings-favourites/api-contract.md`.
+   */
   private applySortOrder(
     qb: SelectQueryBuilder<ArtisanProfile>,
     sortBy?: ArtisanSortBy,
@@ -303,14 +527,84 @@ export class ArtisansService {
         break;
       case ArtisanSortBy.RATING:
       default:
-        qb.orderBy('ap.averageRating', 'DESC');
+        // QA SRCH-09: ties (most often between artisans nobody has reviewed,
+        // all at 0) used to come back in no particular order; break them by
+        // review count, then oldest profile, so the list is stable.
+        qb.orderBy('ap.weightedRating', 'DESC')
+          .addOrderBy('ap.totalReviews', 'DESC')
+          .addOrderBy('ap.id', 'ASC');
         break;
     }
   }
 
-  private toPublic(profile: ArtisanProfile): ArtisanPublicResponseDto {
-    return plainToInstance(ArtisanPublicResponseDto, profile, {
+  private toPublic(
+    profile: ArtisanProfile,
+    completedJobsCount = 0,
+  ): ArtisanPublicResponseDto {
+    const dto = plainToInstance(ArtisanPublicResponseDto, profile, {
       excludeExtraneousValues: true,
     });
+    dto.completedJobsCount = completedJobsCount;
+    return dto;
+  }
+
+  /**
+   * F3: builds the authenticated self-view DTO with `missingFields` attached.
+   * `missingFields` isn't a persisted column (only the derived `isProfileComplete`
+   * boolean is), so it's computed fresh and stitched onto the transformed DTO here
+   * rather than sourced from the entity by `plainToInstance`.
+   */
+  private toPrivate(
+    profile: ArtisanProfile,
+    missingFields: string[],
+    completedJobsCount = 0,
+  ): ArtisanProfileResponseDto {
+    const dto = plainToInstance(ArtisanProfileResponseDto, profile, {
+      excludeExtraneousValues: true,
+    });
+    dto.completedJobsCount = completedJobsCount;
+    dto.missingFields = missingFields;
+    return dto;
+  }
+
+  /**
+   * D3/P1: number of `Job` records completed by the given artisan (by user ID).
+   */
+  private async getCompletedJobsCount(userId: number): Promise<number> {
+    return this.jobsRepository.count({
+      where: { acceptedArtisan: { id: userId }, status: Status.COMPLETED },
+    });
+  }
+
+  /**
+   * D3: bulk variant of {@link getCompletedJobsCount} for a page of search
+   * results — one grouped query instead of one query per result card.
+   */
+  private async getCompletedJobsCountsByUserId(
+    userIds: number[],
+  ): Promise<Map<number, number>> {
+    const counts = new Map<number, number>();
+    if (userIds.length === 0) return counts;
+
+    // NOTE: `job.acceptedArtisanId` is a @RelationId() virtual property on
+    // Job, not a real column — TypeORM can't translate it inside a raw
+    // select/groupBy string, so Postgres receives the literal (invalid)
+    // identifier and rejects the query. Join the real `acceptedArtisan`
+    // relation and reference the joined alias's `id` instead, which TypeORM
+    // correctly maps to the real `accepted_artisan_id` column.
+    const rows = await this.jobsRepository
+      .createQueryBuilder('job')
+      .innerJoin('job.acceptedArtisan', 'acceptedArtisan')
+      .select('acceptedArtisan.id', 'artisanUserId')
+      .addSelect('COUNT(*)', 'count')
+      .where('acceptedArtisan.id IN (:...userIds)', { userIds })
+      .andWhere('job.status = :status', { status: Status.COMPLETED })
+      .groupBy('acceptedArtisan.id')
+      .getRawMany<{ artisanUserId: number; count: string }>();
+
+    for (const row of rows) {
+      counts.set(Number(row.artisanUserId), Number(row.count));
+    }
+    return counts;
   }
 }

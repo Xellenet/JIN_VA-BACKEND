@@ -2,7 +2,9 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 
 export class ApproveVerificationDto {
-  @ApiPropertyOptional({ example: 'Documents look authentic and match the profile.' })
+  @ApiPropertyOptional({
+    example: 'Documents look authentic and match the profile.',
+  })
   @IsOptional()
   @IsString()
   @MaxLength(1000)

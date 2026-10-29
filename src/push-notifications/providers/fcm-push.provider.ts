@@ -2,7 +2,11 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { initializeApp, getApps, cert } from 'firebase-admin/app';
 import { getMessaging } from 'firebase-admin/messaging';
-import type { IPushProvider, PushPayload, PushSendResult } from './push-provider.interface';
+import type {
+  IPushProvider,
+  PushPayload,
+  PushSendResult,
+} from './push-provider.interface';
 
 @Injectable()
 export class FcmPushProvider implements IPushProvider, OnModuleInit {
@@ -14,24 +18,41 @@ export class FcmPushProvider implements IPushProvider, OnModuleInit {
   onModuleInit(): void {
     const projectId = this.config.get<string>('FIREBASE_PROJECT_ID');
     if (!projectId) {
-      this.logger.warn('FIREBASE_PROJECT_ID not set — FCM provider inactive. Set PUSH_PROVIDER=fcm to enable.');
+      this.logger.warn(
+        'FIREBASE_PROJECT_ID not set — FCM provider inactive. Set PUSH_PROVIDER=fcm to enable.',
+      );
       return;
     }
 
     if (!getApps().length) {
-      initializeApp({
-        credential: cert({
-          projectId,
-          clientEmail: this.config.get<string>('FIREBASE_CLIENT_EMAIL'),
-          privateKey:  this.config.get<string>('FIREBASE_PRIVATE_KEY')?.replace(/\\n/g, '\n'),
-        }),
-      });
-      this.logger.log('Firebase Admin SDK initialised');
+      // A malformed credential must not take the whole API down at boot:
+      // push stays inactive (send() is a no-op without an app) and the log
+      // names the problem — by error code only, never the key material.
+      try {
+        initializeApp({
+          credential: cert({
+            projectId,
+            clientEmail: this.config.get<string>('FIREBASE_CLIENT_EMAIL'),
+            privateKey: this.config
+              .get<string>('FIREBASE_PRIVATE_KEY')
+              ?.replace(/\\n/g, '\n'),
+          }),
+        });
+        this.logger.log('Firebase Admin SDK initialised');
+      } catch (err) {
+        const code = (err as { code?: string }).code ?? 'unknown';
+        this.logger.error(
+          `Firebase Admin SDK not initialised (${code}) — push notifications are inactive. ` +
+            'Check FIREBASE_CLIENT_EMAIL and FIREBASE_PRIVATE_KEY: they come from the service-account JSON ' +
+            '(Project settings → Service accounts → Generate new private key), not the web app config.',
+        );
+      }
     }
   }
 
   async send(tokens: string[], payload: PushPayload): Promise<PushSendResult> {
-    if (!tokens.length || !getApps().length) return { successCount: 0, failedTokens: [] };
+    if (!tokens.length || !getApps().length)
+      return { successCount: 0, failedTokens: [] };
 
     const response = await getMessaging().sendEachForMulticast({
       tokens,
@@ -44,7 +65,10 @@ export class FcmPushProvider implements IPushProvider, OnModuleInit {
     const failedTokens: string[] = [];
     response.responses.forEach((r, i) => {
       if (!r.success) {
-        this.logger.warn(`FCM token failed (${r.error?.code}): ${tokens[i]}`);
+        // Device tokens are credentials for that device: log a short prefix only.
+        this.logger.warn(
+          `FCM token failed (${r.error?.code}): ${tokens[i].slice(0, 8)}…`,
+        );
         if (
           r.error?.code === 'messaging/registration-token-not-registered' ||
           r.error?.code === 'messaging/invalid-registration-token'
@@ -54,7 +78,9 @@ export class FcmPushProvider implements IPushProvider, OnModuleInit {
       }
     });
 
-    this.logger.log(`Push sent: ${response.successCount}/${tokens.length} succeeded`);
+    this.logger.log(
+      `Push sent: ${response.successCount}/${tokens.length} succeeded`,
+    );
     return { successCount: response.successCount, failedTokens };
   }
 }

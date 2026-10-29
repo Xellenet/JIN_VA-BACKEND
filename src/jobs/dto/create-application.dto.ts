@@ -1,6 +1,12 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsNumber, IsOptional, IsString, MaxLength, Min } from 'class-validator';
+import {
+  IsNumber,
+  IsOptional,
+  IsString,
+  MaxLength,
+  Min,
+} from 'class-validator';
 
 /**
  * Body sent by an artisan when applying to a job.
@@ -10,11 +16,16 @@ import { IsNumber, IsOptional, IsString, MaxLength, Min } from 'class-validator'
 export class CreateApplicationDto {
   @ApiPropertyOptional({
     example: 250,
-    description: 'Proposed price for the job (>= 0). Helps the customer compare bids.',
+    description:
+      'Proposed price for the job in GHS (> 0, up to 2 decimals). It becomes the payment amount if the customer accepts.',
   })
   @IsOptional()
-  @IsNumber()
-  @Min(0)
+  @IsNumber(
+    { maxDecimalPlaces: 2 },
+    { message: 'quotePrice must have at most 2 decimal places' },
+  )
+  // QA JOB-08: a GH₵ 0 quote became a GH₵ 0 payment that Paystack rejects.
+  @Min(0.01, { message: 'quotePrice must be greater than 0' })
   @Type(() => Number)
   quotePrice?: number;
 

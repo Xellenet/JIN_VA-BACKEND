@@ -13,15 +13,23 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiParam,
+  ApiTags,
+} from '@nestjs/swagger';
 import { BookingsService } from './bookings.service';
 import { CreateBookingDto } from './dto/create-booking.dto';
 import { GetBookingsQueryDto } from './dto/get-bookings-query.dto';
 import { RespondBookingDto } from './dto/respond-booking.dto';
+import { ConfirmBookingDto } from './dto/confirm-booking.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
+import { NotSuspendedGuard } from '@common/guards/not-suspended.guard';
 import { Roles } from '@common/decorators/roles.decorator';
 import { Role } from '@common/types/enums';
+import type { AuthenticatedRequest } from '@common/types/authenticated-request.type';
 
 @ApiTags('Bookings')
 @ApiBearerAuth()
@@ -33,10 +41,11 @@ export class BookingsController {
   // ─── Customer routes ──────────────────────────────────────────────────────────
 
   @Post()
-  @UseGuards(RolesGuard)
+  // AT3: a suspended customer keeps read access but cannot create new work.
+  @UseGuards(RolesGuard, NotSuspendedGuard)
   @Roles(Role.CUSTOMER)
   @ApiOperation({ summary: 'Create a booking request (customer only)' })
-  create(@Req() req: any, @Body() dto: CreateBookingDto) {
+  create(@Req() req: AuthenticatedRequest, @Body() dto: CreateBookingDto) {
     return this.bookingsService.create(req.user.id, dto);
   }
 
@@ -44,7 +53,10 @@ export class BookingsController {
   @UseGuards(RolesGuard)
   @Roles(Role.CUSTOMER)
   @ApiOperation({ summary: 'List my bookings (customer only)' })
-  getMyBookings(@Req() req: any, @Query() query: GetBookingsQueryDto) {
+  getMyBookings(
+    @Req() req: AuthenticatedRequest,
+    @Query() query: GetBookingsQueryDto,
+  ) {
     return this.bookingsService.getMyBookings(req.user.id, query);
   }
 
@@ -54,7 +66,10 @@ export class BookingsController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Cancel a booking (customer only)' })
   @ApiParam({ name: 'id', type: Number })
-  cancel(@Req() req: any, @Param('id', ParseIntPipe) id: number) {
+  cancel(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
     return this.bookingsService.cancel(req.user.id, id);
   }
 
@@ -63,8 +78,26 @@ export class BookingsController {
   @Roles(Role.CUSTOMER)
   @ApiOperation({ summary: 'Mark a booking as completed (customer only)' })
   @ApiParam({ name: 'id', type: Number })
-  complete(@Req() req: any, @Param('id', ParseIntPipe) id: number) {
+  complete(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
     return this.bookingsService.complete(req.user.id, id);
+  }
+
+  // ─── A6: no-show (either party to the booking) ─────────────────────────────────
+
+  @Patch(':id/no-show')
+  @ApiOperation({
+    summary:
+      'A6: flag the other party as a no-show (callable by either party to this booking, only after the scheduled end time has passed)',
+  })
+  @ApiParam({ name: 'id', type: Number })
+  flagNoShow(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
+    return this.bookingsService.flagNoShow(req.user.id, id);
   }
 
   // ─── Artisan routes ────────────────────────────────────────────────────────────
@@ -72,8 +105,13 @@ export class BookingsController {
   @Get('artisan')
   @UseGuards(RolesGuard)
   @Roles(Role.ARTISAN)
-  @ApiOperation({ summary: 'List bookings for my artisan profile (artisan only)' })
-  getArtisanBookings(@Req() req: any, @Query() query: GetBookingsQueryDto) {
+  @ApiOperation({
+    summary: 'List bookings for my artisan profile (artisan only)',
+  })
+  getArtisanBookings(
+    @Req() req: AuthenticatedRequest,
+    @Query() query: GetBookingsQueryDto,
+  ) {
     return this.bookingsService.getArtisanBookings(req.user.id, query);
   }
 
@@ -82,7 +120,11 @@ export class BookingsController {
   @Roles(Role.ARTISAN)
   @ApiOperation({ summary: 'Confirm a booking request (artisan only)' })
   @ApiParam({ name: 'id', type: Number })
-  confirm(@Req() req: any, @Param('id', ParseIntPipe) id: number, @Body() dto: RespondBookingDto) {
+  confirm(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: ConfirmBookingDto,
+  ) {
     return this.bookingsService.confirm(req.user.id, id, dto);
   }
 
@@ -91,16 +133,25 @@ export class BookingsController {
   @Roles(Role.ARTISAN)
   @ApiOperation({ summary: 'Decline a booking request (artisan only)' })
   @ApiParam({ name: 'id', type: Number })
-  decline(@Req() req: any, @Param('id', ParseIntPipe) id: number, @Body() dto: RespondBookingDto) {
+  decline(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: RespondBookingDto,
+  ) {
     return this.bookingsService.decline(req.user.id, id, dto);
   }
 
   // ─── Shared ────────────────────────────────────────────────────────────────────
 
   @Get(':id')
-  @ApiOperation({ summary: 'Get a single booking (customer or artisan who owns it)' })
+  @ApiOperation({
+    summary: 'Get a single booking (customer or artisan who owns it)',
+  })
   @ApiParam({ name: 'id', type: Number })
-  findOne(@Req() req: any, @Param('id', ParseIntPipe) id: number) {
+  findOne(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
     return this.bookingsService.findOne(id, req.user.id);
   }
 }

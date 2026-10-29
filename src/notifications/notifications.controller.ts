@@ -13,6 +13,7 @@ import {
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
+  ApiExtraModels,
   ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
@@ -25,7 +26,9 @@ import { GetNotificationsQueryDto } from './dto/get-notifications-query.dto';
 import { NotificationResponseDto } from './dto/notification-response.dto';
 import { CustomerNotificationPreferencesResponseDto } from './dto/customer-notification-preferences-response.dto';
 import { ArtisanNotificationPreferencesResponseDto } from './dto/artisan-notification-preferences-response.dto';
+import { AdminNotificationPreferencesResponseDto } from './dto/admin-notification-preferences-response.dto';
 import { UpdateNotificationPreferencesDto } from './dto/update-notification-preferences.dto';
+import type { AuthenticatedRequest } from '@common/types/authenticated-request.type';
 
 /**
  * In-app notification feed for the authenticated user.
@@ -35,6 +38,11 @@ import { UpdateNotificationPreferencesDto } from './dto/update-notification-pref
 @Controller('notifications')
 @UseGuards(JwtAuthGuard)
 @ApiBearerAuth()
+@ApiExtraModels(
+  CustomerNotificationPreferencesResponseDto,
+  ArtisanNotificationPreferencesResponseDto,
+  AdminNotificationPreferencesResponseDto,
+)
 export class NotificationsController {
   constructor(private readonly notificationsService: NotificationsService) {}
 
@@ -47,22 +55,31 @@ export class NotificationsController {
   @ApiOperation({
     summary: 'Get notification preferences',
     description:
-      'Returns the caller\'s notification preferences. ' +
+      "Returns the caller's notification preferences. " +
       'The shape differs by role — customers see booking/job/payment toggles; ' +
-      'artisans see opportunity/application/payment-released toggles. ' +
-      'Both roles see the channel toggles (email, SMS, push).',
+      'artisans see opportunity/application/payment toggles; ' +
+      'admins see the five platform-queue toggles (dispute filed, payout transfer failed, ' +
+      'verification submitted, review flagged, new artisan registered). ' +
+      'Every role sees the channel toggles (email, SMS, push).',
   })
   @ApiOkResponse({
     description: 'Preferences retrieved (shape varies by role)',
     schema: {
       oneOf: [
-        { $ref: '#/components/schemas/CustomerNotificationPreferencesResponseDto' },
-        { $ref: '#/components/schemas/ArtisanNotificationPreferencesResponseDto' },
+        {
+          $ref: '#/components/schemas/CustomerNotificationPreferencesResponseDto',
+        },
+        {
+          $ref: '#/components/schemas/ArtisanNotificationPreferencesResponseDto',
+        },
+        {
+          $ref: '#/components/schemas/AdminNotificationPreferencesResponseDto',
+        },
       ],
     },
   })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
-  getPreferences(@Req() req: any) {
+  getPreferences(@Req() req: AuthenticatedRequest) {
     return this.notificationsService.getPreferences(req.user.id);
   }
 
@@ -77,20 +94,31 @@ export class NotificationsController {
     summary: 'Update notification preferences',
     description:
       'Toggle individual notification types or channels on or off. ' +
-      'Only role-relevant fields are applied — artisan-only flags are ignored for customers and vice versa. ' +
+      'Only role-relevant fields are applied — artisan-only flags are ignored for customers, ' +
+      'admin-only flags are ignored for both, and vice versa. ' +
       'Send only the fields you want to change; omitted fields remain as-is.',
   })
   @ApiOkResponse({
     description: 'Preferences updated (shape varies by role)',
     schema: {
       oneOf: [
-        { $ref: '#/components/schemas/CustomerNotificationPreferencesResponseDto' },
-        { $ref: '#/components/schemas/ArtisanNotificationPreferencesResponseDto' },
+        {
+          $ref: '#/components/schemas/CustomerNotificationPreferencesResponseDto',
+        },
+        {
+          $ref: '#/components/schemas/ArtisanNotificationPreferencesResponseDto',
+        },
+        {
+          $ref: '#/components/schemas/AdminNotificationPreferencesResponseDto',
+        },
       ],
     },
   })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
-  updatePreferences(@Req() req: any, @Body() dto: UpdateNotificationPreferencesDto) {
+  updatePreferences(
+    @Req() req: AuthenticatedRequest,
+    @Body() dto: UpdateNotificationPreferencesDto,
+  ) {
     return this.notificationsService.updatePreferences(req.user.id, dto);
   }
 
@@ -101,9 +129,12 @@ export class NotificationsController {
    */
   @Get('unread-count')
   @ApiOperation({ summary: 'Get the number of unread notifications' })
-  @ApiOkResponse({ description: 'Unread count', schema: { properties: { count: { type: 'number' } } } })
+  @ApiOkResponse({
+    description: 'Unread count',
+    schema: { properties: { count: { type: 'number' } } },
+  })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
-  getUnreadCount(@Req() req: any) {
+  getUnreadCount(@Req() req: AuthenticatedRequest) {
     return this.notificationsService.getUnreadCount(req.user.id);
   }
 
@@ -113,9 +144,15 @@ export class NotificationsController {
    */
   @Get()
   @ApiOperation({ summary: "Get the user's notifications (paginated)" })
-  @ApiOkResponse({ description: 'Notifications retrieved', type: [NotificationResponseDto] })
+  @ApiOkResponse({
+    description: 'Notifications retrieved',
+    type: [NotificationResponseDto],
+  })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
-  findAll(@Req() req: any, @Query() query: GetNotificationsQueryDto) {
+  findAll(
+    @Req() req: AuthenticatedRequest,
+    @Query() query: GetNotificationsQueryDto,
+  ) {
     return this.notificationsService.findAll(req.user.id, query);
   }
 
@@ -128,7 +165,7 @@ export class NotificationsController {
   @ApiOperation({ summary: 'Mark all notifications as read' })
   @ApiOkResponse({ description: 'All notifications marked as read' })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
-  markAllRead(@Req() req: any) {
+  markAllRead(@Req() req: AuthenticatedRequest) {
     return this.notificationsService.markAllRead(req.user.id);
   }
 
@@ -141,7 +178,10 @@ export class NotificationsController {
   @ApiOkResponse({ description: 'Notification marked as read' })
   @ApiNotFoundResponse({ description: 'Notification not found' })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
-  markRead(@Req() req: any, @Param('id', ParseIntPipe) id: number) {
+  markRead(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
     return this.notificationsService.markRead(req.user.id, id);
   }
 }

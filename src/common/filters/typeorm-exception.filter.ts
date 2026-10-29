@@ -1,5 +1,21 @@
 import { ArgumentsHost, Catch, ExceptionFilter, Logger } from '@nestjs/common';
 import { QueryFailedError } from 'typeorm';
+import type { Request, Response } from 'express';
+
+/** TypeORM forwards the pg driver's error fields directly onto the thrown
+ * `QueryFailedError` instance at runtime, but they aren't part of its
+ * declared type — this narrows the `any` cast to just those two fields. */
+interface PgQueryFailedError extends QueryFailedError {
+  code?: string;
+  detail?: string;
+}
+
+/**
+ * PH9: the stable, machine-readable `meta.error` on the duplicate-phone 409.
+ * The frontend matches on it to show "This number is already used by another
+ * JinVa account" on the phone field (V5) instead of a toast.
+ */
+export const PHONE_NUMBER_IN_USE_ERROR_CODE = 'PHONE_NUMBER_IN_USE';
 
 /**
  * Global exception filter that intercepts TypeORM {@link QueryFailedError} instances
@@ -8,6 +24,7 @@ import { QueryFailedError } from 'typeorm';
  *
  * Currently handles:
  * - `23505` (unique_violation) → 409 Conflict with a column-specific message.
+ *   A duplicate phone number also carries `meta.error: "PHONE_NUMBER_IN_USE"`.
  */
 @Catch(QueryFailedError)
 export class TypeOrmFilter implements ExceptionFilter {
@@ -21,17 +38,19 @@ export class TypeOrmFilter implements ExceptionFilter {
    */
   catch(exception: QueryFailedError, host: ArgumentsHost): void {
     const ctx = host.switchToHttp();
-    const response = ctx.getResponse();
-    const request = ctx.getRequest();
+    const response = ctx.getResponse<Response>();
+    const request = ctx.getRequest<Request>();
 
+    const pgException = exception as PgQueryFailedError;
     // TypeORM forwards the pg driver error code directly onto the exception object.
-    const pgCode = (exception as any).code as string | undefined;
+    const pgCode = pgException.code;
     // PostgreSQL includes a human-readable detail like:
     // "Key (email)=(john@example.com) already exists."
-    const detail = ((exception as any).detail ?? '') as string;
+    const detail = pgException.detail ?? '';
 
     let message = 'Database operation failed';
     let status = 500;
+    let errorCode: string | undefined;
 
     if (pgCode === '23505') {
       status = 409;
@@ -42,6 +61,7 @@ export class TypeOrmFilter implements ExceptionFilter {
         message = 'Username already exists';
       } else if (detail.includes('phone_number')) {
         message = 'Phone number already in use';
+        errorCode = PHONE_NUMBER_IN_USE_ERROR_CODE;
       } else {
         message = 'Duplicate entry detected';
       }
@@ -56,6 +76,7 @@ export class TypeOrmFilter implements ExceptionFilter {
         timestamp: new Date().toISOString(),
         path: request.url,
         statusCode: status,
+        ...(errorCode ? { error: errorCode } : {}),
       },
     });
   }

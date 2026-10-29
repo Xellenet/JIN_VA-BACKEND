@@ -5,9 +5,12 @@ import { ArtisansService } from './artisans.service';
 import { ArtisanProfile } from '@users/entities/artisan-profile.entity';
 import { User } from '@users/entities/user.entity';
 import { ServiceEntity } from '@services/entities/service.entity';
+import { Job } from '@jobs/entities/job.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([ArtisanProfile, User, ServiceEntity])],
+  imports: [
+    TypeOrmModule.forFeature([ArtisanProfile, User, ServiceEntity, Job]),
+  ],
   controllers: [ArtisansController],
   providers: [ArtisansService],
   exports: [ArtisansService],

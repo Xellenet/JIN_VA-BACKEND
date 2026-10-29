@@ -96,6 +96,14 @@ export class NotificationPreferences {
   @Column({ name: 'verification_rejected', type: 'boolean', default: true })
   verificationRejected!: boolean;
 
+  /** PF5: a submitted portfolio item was approved by an admin */
+  @Column({ name: 'portfolio_approved', type: 'boolean', default: true })
+  portfolioApproved!: boolean;
+
+  /** PF5: a submitted portfolio item was rejected by an admin */
+  @Column({ name: 'portfolio_rejected', type: 'boolean', default: true })
+  portfolioRejected!: boolean;
+
   // ─── Booking notification types ───────────────────────────────────────────
   /** [Artisan] New booking request received */
   @Column({ name: 'booking_received', type: 'boolean', default: true })
@@ -116,6 +124,35 @@ export class NotificationPreferences {
   /** [Artisan] Customer marked a booking as completed */
   @Column({ name: 'booking_completed_artisan', type: 'boolean', default: true })
   bookingCompletedArtisan!: boolean;
+
+  /** [Artisan] A24h/2h pre-appointment reminder (A7) for a CONFIRMED booking */
+  @Column({ name: 'booking_reminders', type: 'boolean', default: true })
+  bookingReminders!: boolean;
+
+  // ─── Admin notification types (PR3) ───────────────────────────────────────
+  // The five real toggles that replace admin's previously-decorative
+  // "system notification settings" tab. Each one gates an event that is
+  // actually emitted somewhere in this codebase — no dead toggles.
+
+  /** [Admin] A customer or artisan opened a new dispute needing review. */
+  @Column({ name: 'dispute_filed', type: 'boolean', default: true })
+  disputeFiled!: boolean;
+
+  /** [Admin] An artisan payout failed and needs manual attention. */
+  @Column({ name: 'payment_transfer_failed', type: 'boolean', default: true })
+  paymentTransferFailed!: boolean;
+
+  /** [Admin] An artisan submitted documents for identity verification. */
+  @Column({ name: 'verification_submitted', type: 'boolean', default: true })
+  verificationSubmitted!: boolean;
+
+  /** [Admin] A review was flagged (FL1) and entered the moderation queue. */
+  @Column({ name: 'review_flagged', type: 'boolean', default: true })
+  reviewFlagged!: boolean;
+
+  /** [Admin] A new artisan account was created on the platform. */
+  @Column({ name: 'artisan_registered', type: 'boolean', default: true })
+  artisanRegistered!: boolean;
 
   // ─── Shared ───────────────────────────────────────────────────────────────
   @Column({ name: 'message_received', type: 'boolean', default: true })

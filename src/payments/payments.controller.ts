@@ -9,16 +9,25 @@ import {
   Query,
   Req,
   UseGuards,
+  ParseEnumPipe,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiQuery,
+  ApiTags,
+} from '@nestjs/swagger';
 import { PaymentsService } from './payments.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '@common/decorators/roles.decorator';
-import { Role } from '@common/types/enums';
+import { PaymentStatus, Role } from '@common/types/enums';
 import { InitializePaymentDto } from './dto/initialize-payment.dto';
 import { SetupPayoutMethodDto } from './dto/setup-payout-method.dto';
 import { AdminRefundDto } from './dto/admin-refund.dto';
+import { FraudFlagDto } from './dto/fraud-flag.dto';
+import type { AuthenticatedRequest } from '@common/types/authenticated-request.type';
+import type { Request } from 'express';
 
 @ApiTags('Payments')
 @Controller('payments')
@@ -33,9 +42,15 @@ export class PaymentsController {
    */
   @Post('webhook')
   @ApiOperation({ summary: 'Paystack webhook receiver — do not call directly' })
-  webhook(@Headers('x-paystack-signature') signature: string, @Req() req: any) {
-    const rawBody: Buffer = req.rawBody;
-    return this.paymentsService.processWebhook(rawBody?.toString() ?? '', signature ?? '');
+  webhook(
+    @Headers('x-paystack-signature') signature: string,
+    @Req() req: Request & { rawBody?: Buffer },
+  ) {
+    const rawBody = req.rawBody ?? Buffer.from('');
+    return this.paymentsService.processWebhook(
+      rawBody?.toString() ?? '',
+      signature ?? '',
+    );
   }
 
   // ─── Customer routes ──────────────────────────────────────────────────────────
@@ -45,7 +60,10 @@ export class PaymentsController {
   @Roles(Role.CUSTOMER)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get Paystack payment URL for an accepted job' })
-  initialize(@Req() req: any, @Body() dto: InitializePaymentDto) {
+  initialize(
+    @Req() req: AuthenticatedRequest,
+    @Body() dto: InitializePaymentDto,
+  ) {
     return this.paymentsService.initializePayment(req.user.id, dto.jobId);
   }
 
@@ -54,8 +72,23 @@ export class PaymentsController {
   @Roles(Role.CUSTOMER)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'My payment history' })
-  getHistory(@Req() req: any) {
+  getHistory(@Req() req: AuthenticatedRequest) {
     return this.paymentsService.getMyHistory(req.user.id);
+  }
+
+  @Get('verify/:reference')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.CUSTOMER)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Reconcile a payment reference against Paystack directly (belt-and-suspenders check for the post-redirect landing page)',
+  })
+  verify(
+    @Req() req: AuthenticatedRequest,
+    @Param('reference') reference: string,
+  ) {
+    return this.paymentsService.verifyPayment(req.user.id, reference);
   }
 
   // ─── Artisan routes ───────────────────────────────────────────────────────────
@@ -64,8 +97,13 @@ export class PaymentsController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ARTISAN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Register or update mobile money / bank account for payouts' })
-  setupPayout(@Req() req: any, @Body() dto: SetupPayoutMethodDto) {
+  @ApiOperation({
+    summary: 'Register or update mobile money / bank account for payouts',
+  })
+  setupPayout(
+    @Req() req: AuthenticatedRequest,
+    @Body() dto: SetupPayoutMethodDto,
+  ) {
     return this.paymentsService.setupPayoutMethod(req.user.id, dto);
   }
 
@@ -73,9 +111,27 @@ export class PaymentsController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ARTISAN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Retry a payout that was blocked by missing payout method' })
-  retryTransfer(@Param('jobId', ParseIntPipe) jobId: number) {
-    return this.paymentsService.retryPendingTransfer(jobId);
+  @ApiOperation({
+    summary:
+      'Retry a payout blocked by a missing payout method or a failed/reversed transfer',
+  })
+  retryTransfer(
+    @Req() req: AuthenticatedRequest,
+    @Param('jobId', ParseIntPipe) jobId: number,
+  ) {
+    return this.paymentsService.retryPendingTransfer(req.user.id, jobId);
+  }
+
+  @Get('my-earnings')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ARTISAN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'My earnings/payout history — job, my payout amount, status, and date only. Never provider-internal fields.',
+  })
+  getMyEarnings(@Req() req: AuthenticatedRequest) {
+    return this.paymentsService.getMyEarnings(req.user.id);
   }
 
   // ─── Admin routes (also in admin.controller for admin prefix) ─────────────────
@@ -84,23 +140,87 @@ export class PaymentsController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Admin: full payment log with pagination' })
+  @ApiOperation({
+    summary:
+      'Admin: full payment log with pagination, searchable by reference, customer, job title or job id, and filterable by status',
+  })
+  @ApiQuery({ name: 'search', required: false })
+  @ApiQuery({ name: 'status', required: false, enum: PaymentStatus })
   adminList(
     @Query('page', new ParseIntPipe({ optional: true })) page?: number,
     @Query('limit', new ParseIntPipe({ optional: true })) limit?: number,
+    @Query('search') search?: string,
+    @Query('status', new ParseEnumPipe(PaymentStatus, { optional: true }))
+    status?: PaymentStatus,
   ) {
-    return this.paymentsService.getAllPayments(page, limit);
+    return this.paymentsService.getAllPayments(page, limit, {
+      search: search?.slice(0, 100),
+      status,
+    });
+  }
+
+  @Get('admin/summary')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Admin: whole-ledger totals for the Transactions page',
+  })
+  adminSummary() {
+    return this.paymentsService.getAdminSummary();
   }
 
   @Post('admin/refund/:paymentId')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Admin: issue a (partial) refund on any HELD payment' })
+  @ApiOperation({
+    summary: 'Admin: issue a (partial) refund on any HELD payment',
+  })
   adminRefund(
+    @Req() req: AuthenticatedRequest,
     @Param('paymentId', ParseIntPipe) paymentId: number,
     @Body() dto: AdminRefundDto,
   ) {
-    return this.paymentsService.adminRefund(paymentId, dto.amountGhs);
+    // AT5: the acting admin is threaded through so the refund writes an audit
+    // row. It previously recorded no actor at all.
+    return this.paymentsService.adminRefund(paymentId, dto.amountGhs, req.user);
+  }
+
+  // ─── AT7: fraud flagging ──────────────────────────────────────────────────────
+
+  @Post('admin/:paymentId/fraud-flag')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Admin: flag a transaction for fraud review, with a reason',
+    description:
+      'AT7: marking, visibility and auditing only — the flag has no enforcement effect ' +
+      'on payouts, refunds or the account. Kept entirely separate from `status`, so a ' +
+      'payment can be both RELEASED and flagged and the settled payment-status ' +
+      'vocabulary is never forked.',
+  })
+  flagPaymentForFraud(
+    @Req() req: AuthenticatedRequest,
+    @Param('paymentId', ParseIntPipe) paymentId: number,
+    @Body() dto: FraudFlagDto,
+  ) {
+    return this.paymentsService.setFraudFlag(req.user, paymentId, dto.reason);
+  }
+
+  @Post('admin/:paymentId/fraud-flag/clear')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Admin: clear a fraud-review flag, with a reason',
+  })
+  clearPaymentFraudFlag(
+    @Req() req: AuthenticatedRequest,
+    @Param('paymentId', ParseIntPipe) paymentId: number,
+    @Body() dto: FraudFlagDto,
+  ) {
+    return this.paymentsService.clearFraudFlag(req.user, paymentId, dto.reason);
   }
 }

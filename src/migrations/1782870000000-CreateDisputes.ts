@@ -43,18 +43,30 @@ export class CreateDisputes1782870000000 implements MigrationInterface {
         FOREIGN KEY ("resolved_by_id") REFERENCES "users"("id") ON DELETE SET NULL
     `);
 
-    await queryRunner.query(`CREATE INDEX "idx_disputes_booking_id"   ON "disputes" ("booking_id")`);
-    await queryRunner.query(`CREATE INDEX "idx_disputes_raised_by_id" ON "disputes" ("raised_by_id")`);
-    await queryRunner.query(`CREATE INDEX "idx_disputes_status"       ON "disputes" ("status")`);
+    await queryRunner.query(
+      `CREATE INDEX "idx_disputes_booking_id"   ON "disputes" ("booking_id")`,
+    );
+    await queryRunner.query(
+      `CREATE INDEX "idx_disputes_raised_by_id" ON "disputes" ("raised_by_id")`,
+    );
+    await queryRunner.query(
+      `CREATE INDEX "idx_disputes_status"       ON "disputes" ("status")`,
+    );
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`DROP INDEX "idx_disputes_status"`);
     await queryRunner.query(`DROP INDEX "idx_disputes_raised_by_id"`);
     await queryRunner.query(`DROP INDEX "idx_disputes_booking_id"`);
-    await queryRunner.query(`ALTER TABLE "disputes" DROP CONSTRAINT "fk_disputes_resolved_by_id"`);
-    await queryRunner.query(`ALTER TABLE "disputes" DROP CONSTRAINT "fk_disputes_raised_by_id"`);
-    await queryRunner.query(`ALTER TABLE "disputes" DROP CONSTRAINT "fk_disputes_booking_id"`);
+    await queryRunner.query(
+      `ALTER TABLE "disputes" DROP CONSTRAINT "fk_disputes_resolved_by_id"`,
+    );
+    await queryRunner.query(
+      `ALTER TABLE "disputes" DROP CONSTRAINT "fk_disputes_raised_by_id"`,
+    );
+    await queryRunner.query(
+      `ALTER TABLE "disputes" DROP CONSTRAINT "fk_disputes_booking_id"`,
+    );
     await queryRunner.query(`DROP TABLE "disputes"`);
     await queryRunner.query(`DROP TYPE "public"."disputes_status_enum"`);
   }

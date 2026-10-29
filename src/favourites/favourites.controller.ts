@@ -27,7 +27,8 @@ import { Roles } from '@common/decorators/roles.decorator';
 import { Role } from '@common/types/enums';
 import { FavouritesService } from './favourites.service';
 import { GetFavouritesQueryDto } from './dto/get-favourites-query.dto';
-import { ArtisanPublicResponseDto } from '@artisans/dto/artisan-public-response.dto';
+import { FavouriteArtisanResponseDto } from './dto/favourite-artisan-response.dto';
+import type { AuthenticatedRequest } from '@common/types/authenticated-request.type';
 
 /**
  * Allows customers to save and manage their favourite artisans.
@@ -47,14 +48,22 @@ export class FavouritesController {
    *
    * @param req   - Express request; `req.user.id` is injected by `JwtAuthGuard`.
    * @param query - Pagination options (`page`, `limit`).
-   * @returns Paginated array of {@link ArtisanPublicResponseDto}.
+   * @returns Paginated array of {@link FavouriteArtisanResponseDto}.
    */
   @Get()
   @ApiOperation({ summary: "Get the customer's saved artisans (paginated)" })
-  @ApiOkResponse({ description: 'Favourites retrieved successfully', type: [ArtisanPublicResponseDto] })
+  @ApiOkResponse({
+    description: 'Favourites retrieved successfully',
+    type: [FavouriteArtisanResponseDto],
+  })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
-  @ApiForbiddenResponse({ description: 'Caller does not have the CUSTOMER role' })
-  findAll(@Req() req: any, @Query() query: GetFavouritesQueryDto) {
+  @ApiForbiddenResponse({
+    description: 'Caller does not have the CUSTOMER role',
+  })
+  findAll(
+    @Req() req: AuthenticatedRequest,
+    @Query() query: GetFavouritesQueryDto,
+  ) {
     return this.favouritesService.findAll(req.user.id, query);
   }
 
@@ -72,8 +81,13 @@ export class FavouritesController {
   @ApiNotFoundResponse({ description: 'Artisan profile not found' })
   @ApiConflictResponse({ description: 'Artisan is already in favourites' })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
-  @ApiForbiddenResponse({ description: 'Caller does not have the CUSTOMER role' })
-  add(@Req() req: any, @Param('artisanProfileId', ParseIntPipe) artisanProfileId: number) {
+  @ApiForbiddenResponse({
+    description: 'Caller does not have the CUSTOMER role',
+  })
+  add(
+    @Req() req: AuthenticatedRequest,
+    @Param('artisanProfileId', ParseIntPipe) artisanProfileId: number,
+  ) {
     return this.favouritesService.add(req.user.id, artisanProfileId);
   }
 
@@ -90,8 +104,13 @@ export class FavouritesController {
   @ApiOkResponse({ description: 'Artisan removed from favourites' })
   @ApiNotFoundResponse({ description: 'Artisan is not in favourites' })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
-  @ApiForbiddenResponse({ description: 'Caller does not have the CUSTOMER role' })
-  remove(@Req() req: any, @Param('artisanProfileId', ParseIntPipe) artisanProfileId: number) {
+  @ApiForbiddenResponse({
+    description: 'Caller does not have the CUSTOMER role',
+  })
+  remove(
+    @Req() req: AuthenticatedRequest,
+    @Param('artisanProfileId', ParseIntPipe) artisanProfileId: number,
+  ) {
     return this.favouritesService.remove(req.user.id, artisanProfileId);
   }
 }

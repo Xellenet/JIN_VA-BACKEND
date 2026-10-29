@@ -19,7 +19,10 @@ export class PushNotificationsService {
     private readonly factory: PushProviderFactory,
   ) {}
 
-  async registerDevice(userId: number, dto: RegisterDeviceDto): Promise<{ message: string }> {
+  async registerDevice(
+    userId: number,
+    dto: RegisterDeviceDto,
+  ): Promise<{ message: string }> {
     const existing = await this.deviceTokensRepository.findOne({
       where: { token: dto.token },
     });
@@ -38,14 +41,19 @@ export class PushNotificationsService {
     return { message: 'Device registered for push notifications.' };
   }
 
-  async unregisterDevice(userId: number, token: string): Promise<{ message: string }> {
+  async unregisterDevice(
+    userId: number,
+    token: string,
+  ): Promise<{ message: string }> {
     await this.deviceTokensRepository.delete({ userId, token });
     this.logger.log(`Device unregistered for user ${userId}`);
     return { message: 'Device unregistered.' };
   }
 
   async sendToUser(userId: number, payload: PushPayload): Promise<void> {
-    const prefs = await this.prefsRepository.findOne({ where: { user: { id: userId } } });
+    const prefs = await this.prefsRepository.findOne({
+      where: { user: { id: userId } },
+    });
 
     // If preferences row doesn't exist or push is disabled, skip
     if (prefs && !prefs.pushEnabled) return;
@@ -62,8 +70,12 @@ export class PushNotificationsService {
 
     // Prune stale tokens returned by FCM
     if (result.failedTokens.length) {
-      await this.deviceTokensRepository.delete({ token: In(result.failedTokens) });
-      this.logger.warn(`Pruned ${result.failedTokens.length} stale token(s) for user ${userId}`);
+      await this.deviceTokensRepository.delete({
+        token: In(result.failedTokens),
+      });
+      this.logger.warn(
+        `Pruned ${result.failedTokens.length} stale token(s) for user ${userId}`,
+      );
     }
   }
 }

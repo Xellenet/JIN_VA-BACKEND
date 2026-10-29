@@ -13,12 +13,13 @@
     "start:debug": "nest start --debug --watch",
     "start:prod": "node -r tsconfig-paths/register dist/src/main",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
-    "test": "jest",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "test:watch": "jest --watch",
-    "test:cov": "jest --coverage",
+    "test:cov": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.coverage.json --coverage --runInBand",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "jest --config ./test/jest-e2e.json",
-    "test:prepush": "jest --coverage --ci",
+    "test:e2e": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config ./test/jest-e2e.json",
+    "test:e2e:fixtures": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config ./test/jest-e2e.json --testPathIgnorePatterns /node_modules/ --testPathPatterns fixture",
+    "test:prepush": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.coverage.json --coverage --runInBand --ci",
     "prepare": "husky || true",
     "commit": "cz",
     "sonar": "sonar-scanner",
@@ -30,6 +31,7 @@
     "seed:force": "ts-node -r tsconfig-paths/register src/database/seeds/seed.ts --force"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1113.0",
     "@nestjs/axios": "^4.0.1",
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^4.0.2",
@@ -41,14 +43,19 @@
     "@nestjs/platform-express": "^11.0.1",
     "@nestjs/schedule": "^6.1.3",
     "@nestjs/swagger": "^11.2.0",
+    "@nestjs/throttler": "^6.5.0",
     "@nestjs/typeorm": "^11.0.0",
     "bcrypt": "^6.0.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.2",
+    "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "date-fns": "^4.1.0",
+    "file-type": "^21.0.0",
     "firebase-admin": "^14.0.0",
-    "handlebars": "^4.7.8",
+    "handlebars": "^4.7.9",
+    "libphonenumber-js": "1.13.15",
+    "load-esm": "^1.0.2",
     "nest-winston": "^1.10.2",
     "nodemailer": "^7.0.7",
     "passport": "^0.7.0",
@@ -56,21 +63,27 @@
     "passport-local": "^1.0.0",
     "pg": "^8.16.3",
     "reflect-metadata": "^0.2.2",
+    "resend": "^6.24.0",
     "rxjs": "^7.8.1",
-    "typeorm": "^0.3.26",
     "tsconfig-paths": "^4.2.0",
+    "typeorm": "^0.3.26",
     "typeorm-naming-strategies": "^4.1.0",
     "winston": "^3.17.0"
+  },
+  "overrides": {
+    "multer": "^2.2.0"
   },
   "devDependencies": {
     "@commitlint/cli": "^19.8.1",
     "@commitlint/config-conventional": "^19.8.1",
+    "@electric-sql/pglite": "0.5.8",
     "@eslint/eslintrc": "^3.2.0",
     "@eslint/js": "^9.18.0",
     "@nestjs/cli": "^11.0.0",
     "@nestjs/schematics": "^11.0.0",
     "@nestjs/testing": "^11.0.1",
     "@types/bcrypt": "^6.0.0",
+    "@types/cookie-parser": "^1.4.10",
     "@types/date-fns": "^2.5.3",
     "@types/express": "^5.0.0",
     "@types/jest": "^30.0.0",
@@ -106,6 +119,9 @@
     ],
     "rootDir": "src",
     "testRegex": ".*\\.spec\\.ts$",
+    "setupFiles": [
+      "<rootDir>/../test/support/hermetic.ts"
+    ],
     "transform": {
       "^.+\\.(t|j)s$": "ts-jest"
     },
@@ -117,30 +133,17 @@
     ],
     "coverageDirectory": "../coverage",
     "testEnvironment": "node",
-    "coverageThreshold": {
-      "global": {
-        "branches": 50,
-        "functions": 50,
-        "lines": 50,
-        "statements": 50
-      },
-      "**/*.service.ts": {
-        "branches": 60,
-        "functions": 60,
-        "lines": 60,
-        "statements": 60
-      },
-      "**/*.controller.ts": {
-        "branches": 50,
-        "functions": 50,
-        "lines": 50,
-        "statements": 50
-      }
-    },
     "moduleNameMapper": {
       "^@common/(.*)$": "<rootDir>/common/$1",
       "^@users/(.*)$": "<rootDir>/users/$1",
-      "^@auth/(.*)$": "<rootDir>/auth/$1"
+      "^@auth/(.*)$": "<rootDir>/auth/$1",
+      "^@services/(.*)$": "<rootDir>/services/$1",
+      "^@jobs/(.*)$": "<rootDir>/jobs/$1",
+      "^@artisans/(.*)$": "<rootDir>/artisans/$1",
+      "^@messages/(.*)$": "<rootDir>/messages/$1",
+      "^@notifications/(.*)$": "<rootDir>/notifications/$1",
+      "^mail/(.*)$": "<rootDir>/mail/$1",
+      "^config/(.*)$": "<rootDir>/config/$1"
     }
   },
   "config": {

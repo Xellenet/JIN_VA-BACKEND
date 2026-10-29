@@ -1,7 +1,7 @@
-import { HttpException } from "@nestjs/common";
+import { HttpException } from '@nestjs/common';
 
 export class InvalidCredentialsException extends HttpException {
-    constructor(message: string) {
-        super(message, 401);
-    }
+  constructor(message: string) {
+    super(message, 401);
+  }
 }

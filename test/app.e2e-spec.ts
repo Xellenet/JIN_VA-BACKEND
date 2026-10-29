@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
-import * as request from 'supertest';
+import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from './../src/app.module';
 
@@ -16,10 +16,25 @@ describe('AppController (e2e)', () => {
     await app.init();
   });
 
-  it('/ (GET)', () => {
+  // Pre-existing hang: this was the only e2e spec with no teardown, so the
+  // Postgres pool and the scheduler's timers stayed open and `npm run
+  // test:e2e` never exited after the suite passed (it needed `--forceExit` to
+  // print a result at all). Every other spec in this folder already closes its
+  // app in `afterAll`.
+  afterEach(async () => {
+    await app.close();
+  });
+
+  it('/ (GET) returns the uptime health-check payload', () => {
+    // Pre-existing stale assertion: this was still the Nest scaffold's
+    // `'Hello World!'` long after `AppController.healthCheck()` was changed to
+    // return `{ status: 'ok' }` (commit "fix: uptime health check"), so the
+    // e2e suite had a permanently red test unrelated to any feature. Aligned
+    // with the real contract — `/` is excluded from the `api/v1` global prefix
+    // and is what uptime monitoring polls.
     return request(app.getHttpServer())
       .get('/')
       .expect(200)
-      .expect('Hello World!');
+      .expect({ status: 'ok' });
   });
 });

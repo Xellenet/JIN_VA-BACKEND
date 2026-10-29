@@ -36,6 +36,13 @@ export const SUCCESS_MESSAGES = {
     CREATED: 'Review submitted successfully',
     RETRIEVED: 'Review retrieved successfully',
     ALL_RETRIEVED: 'Reviews retrieved successfully',
+    UPDATED: 'Review updated successfully.',
+    REPLY_ADDED: 'Reply posted successfully.',
+    FLAGGED: 'Review reported. It has been hidden pending admin review.',
+    REMOVED: 'Review permanently removed.',
+    RESTORED: 'Review restored.',
+    ADMIN_LIST_RETRIEVED: 'Reviews retrieved successfully.',
+    MODERATION_LOG_RETRIEVED: 'Moderation log retrieved successfully.',
   },
   JOB: {
     CREATED: 'Job created successfully',
@@ -45,10 +52,20 @@ export const SUCCESS_MESSAGES = {
     DELETED: 'Job deleted successfully',
     APPLICATION_SUBMITTED: 'Application submitted successfully.',
     APPLICATIONS_RETRIEVED: 'Applications retrieved successfully.',
-    APPLICATION_ACCEPTED: 'Application accepted. Job is now pending artisan start.',
+    APPLICATION_ACCEPTED:
+      'Application accepted. Job is now pending artisan start.',
     STARTED: 'Job started. Work is now in progress.',
-    COMPLETION_REQUESTED: 'Completion request submitted. Awaiting customer confirmation.',
-    CONFIRMED: 'Job confirmed as complete. Payment has been released.',
+    COMPLETION_REQUESTED:
+      'Completion request submitted. Awaiting customer confirmation.',
+    /**
+     * QA NOT-07: "Payment has been released" was said even when nothing had
+     * been paid. Which sentence applies depends on the capture's outcome.
+     */
+    CONFIRMED: 'Job confirmed as complete.',
+    CONFIRMED_PAYMENT_RELEASING:
+      "Job confirmed as complete. The artisan's payment is on its way to them.",
+    CONFIRMED_PAYMENT_DELAYED:
+      "Job confirmed as complete. Releasing the artisan's payment is taking longer than usual; we'll keep trying.",
     CANCELLED: 'Job cancelled successfully.',
   },
   FAVOURITE: {
@@ -72,11 +89,11 @@ export const SUCCESS_MESSAGES = {
     UPDATED: 'Notification preferences updated.',
   },
   AVAILABILITY: {
-    RETRIEVED:      'Availability retrieved successfully.',
+    RETRIEVED: 'Availability retrieved successfully.',
     STATUS_UPDATED: 'Availability status updated.',
-    SLOT_ADDED:     'Availability slot added.',
-    SLOT_UPDATED:   'Availability slot updated.',
-    SLOT_REMOVED:   'Availability slot removed.',
+    SLOT_ADDED: 'Availability slot added.',
+    SLOT_UPDATED: 'Availability slot updated.',
+    SLOT_REMOVED: 'Availability slot removed.',
   },
   DISPUTE: {
     RAISED: 'Dispute raised successfully.',
@@ -90,9 +107,25 @@ export const SUCCESS_MESSAGES = {
     USER_REGISTERED: 'User registered successfully',
     USER_LOGGED_IN: 'User logged in successfully',
     EMAIL_VERIFIED: 'Email verified successfully',
-    PASSWORD_RESET_EMAIL_SENT: 'Password reset link sent to your email',
+    PASSWORD_RESET_EMAIL_SENT:
+      'If an account with that email exists, a password reset link has been sent.',
     PASSWORD_RESET_SUCCESS: 'Password reset successfully',
     TOKENS_REFRESHED: 'Tokens refreshed successfully',
     PASSWORD_CHANGED: 'Password changed successfully',
+    VERIFICATION_EMAIL_RESENT:
+      'If an account with that email exists and is not yet verified, a new verification link has been sent.',
+    /** C1.4: restore succeeded and the caller is signed in. */
+    ACCOUNT_RESTORED: 'Your account has been restored.',
+    /**
+     * C1.4: restore succeeded, but the account had not verified its email
+     * before deletion, so no session was issued — restore takes precedence
+     * over the verification gate, and then the gate applies as normal.
+     */
+    ACCOUNT_RESTORED_VERIFY_EMAIL:
+      'Your account has been restored. Verify your email address to sign in.',
+    LOGGED_OUT: 'User logged out successfully',
+    SOCIAL_SIGNUP_PENDING: 'Pending sign-up retrieved',
+    SOCIAL_SIGNUP_COMPLETED: 'Account created successfully',
+    SOCIAL_SIGNUP_CANCELLED: 'Sign-up cancelled',
   },
 };

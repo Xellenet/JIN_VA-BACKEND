@@ -1,6 +1,16 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsDateString, IsISO4217CurrencyCode, IsNumber, IsOptional, IsString, MaxLength, Min } from 'class-validator';
+import {
+  IsDateString,
+  IsIn,
+  IsNumber,
+  IsOptional,
+  IsString,
+  MaxLength,
+  MinLength,
+  Min,
+} from 'class-validator';
+import { TrimText } from '@common/validators/trim-text.decorator';
 
 /**
  * Fields a job owner may update on an existing OPEN job.
@@ -9,59 +19,90 @@ import { IsDateString, IsISO4217CurrencyCode, IsNumber, IsOptional, IsString, Ma
  * - Status transitions are managed through dedicated flows.
  */
 export class UpdateJobDto {
-  @ApiPropertyOptional({ example: 'Updated: Leaky faucet repair', description: 'Revised job title (max 150 chars)' })
+  @ApiPropertyOptional({
+    example: 'Updated: Leaky faucet repair',
+    description: 'Revised job title (max 150 chars)',
+  })
   @IsOptional()
+  @TrimText()
   @IsString()
+  @MinLength(5, { message: 'Title must be at least 5 characters.' })
   @MaxLength(150)
   title?: string;
 
-  @ApiPropertyOptional({ example: 'Updated description of the work required.', description: 'Revised job description (max 2000 chars)' })
+  @ApiPropertyOptional({
+    example: 'Updated description of the work required.',
+    description: 'Revised job description (max 2000 chars)',
+  })
   @IsOptional()
+  @TrimText()
   @IsString()
+  @MinLength(10, { message: 'Description must be at least 10 characters.' })
   @MaxLength(2000)
   description?: string;
 
-  @ApiPropertyOptional({ example: 'Kumasi, Ghana', description: 'Revised job location (max 200 chars)' })
+  @ApiPropertyOptional({
+    example: 'Kumasi, Ghana',
+    description: 'Revised job location (max 200 chars)',
+  })
   @IsOptional()
   @IsString()
   @MaxLength(200)
   location?: string;
 
-  @ApiPropertyOptional({ example: 100, description: 'Revised minimum budget (>= 0)' })
+  @ApiPropertyOptional({
+    example: 100,
+    description: 'Revised minimum budget (>= 0)',
+  })
   @IsOptional()
   @IsNumber()
   @Min(0)
   @Type(() => Number)
   budgetMin?: number;
 
-  @ApiPropertyOptional({ example: 800, description: 'Revised maximum budget (>= 0)' })
+  @ApiPropertyOptional({
+    example: 800,
+    description: 'Revised maximum budget (>= 0)',
+  })
   @IsOptional()
   @IsNumber()
   @Min(0)
   @Type(() => Number)
   budgetMax?: number;
 
-  @ApiPropertyOptional({ example: 5.6037, description: 'Revised latitude of the job site' })
+  @ApiPropertyOptional({
+    example: 5.6037,
+    description: 'Revised latitude of the job site',
+  })
   @IsOptional()
   @IsNumber()
   @Type(() => Number)
   latitude?: number;
 
-  @ApiPropertyOptional({ example: -0.187, description: 'Revised longitude of the job site' })
+  @ApiPropertyOptional({
+    example: -0.187,
+    description: 'Revised longitude of the job site',
+  })
   @IsOptional()
   @IsNumber()
   @Type(() => Number)
   longitude?: number;
 
   @ApiPropertyOptional({
-    example: 'USD',
-    description: 'ISO 4217 currency code for the budget amounts (e.g. GHS, USD, EUR)',
+    example: 'GHS',
+    description:
+      'Currency code for the budget amounts. GHS only — see CreateJobDto for why.',
   })
   @IsOptional()
-  @IsISO4217CurrencyCode()
+  @IsIn(['GHS'], {
+    message: 'currency must be GHS — only Ghana cedis jobs can be paid in-app',
+  })
   currency?: string;
 
-  @ApiPropertyOptional({ example: '2026-07-01T00:00:00.000Z', description: 'Revised auto-expire deadline' })
+  @ApiPropertyOptional({
+    example: '2026-07-01T00:00:00.000Z',
+    description: 'Revised auto-expire deadline',
+  })
   @IsOptional()
   @IsDateString()
   deadline?: string;

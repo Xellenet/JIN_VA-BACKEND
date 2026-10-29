@@ -1,4 +1,10 @@
-import { BadRequestException, Injectable , Logger} from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  HttpException,
+  Injectable,
+  Logger,
+} from '@nestjs/common';
 import { ERROR_MESSAGES } from '@common/constants/error-messages.constants';
 import { UserAlreadyExists } from '@common/exceptions/user-already-exists.exception';
 import { CreateUserDto } from '@users/dto/create-user.dto';
@@ -6,14 +12,30 @@ import { UsersService } from '@users/users.service';
 import { plainToInstance } from 'class-transformer';
 import { UserResponseDto } from '@users/dto/user-response.dto';
 import { LoginDto } from './dto/login.dto';
-import { LoginResponseDto } from './dto/login-response.dto';
+import {
+  AuthTokenResult,
+  LoginResponseDto,
+  OAuthCallbackOutcome,
+} from './dto/login-response.dto';
 import { VARIABLES } from '@common/constants/variables.constants';
 import { SUCCESS_MESSAGES } from '@common/constants/success-messages.constants';
 import { InvalidCredentialsException } from '@common/exceptions/invalid-credentials.exceptions';
+import { AccountBannedException } from '@common/exceptions/account-banned.exception';
+import { AccountPendingDeletionException } from '@common/exceptions/account-pending-deletion.exception';
+import {
+  isWithinRecoveryWindow,
+  purgeDateFor,
+} from '@common/utils/account-recovery.util';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { MailEvent } from 'mail/events/mail.events';
+import type { AccountRestoredPayload } from 'mail/events/mail.events';
+import { RestoreAccountDto } from './dto/restore-account.dto';
+import {
+  RestoreAccountResponseDto,
+  type RestoreAccountResult,
+} from './dto/restore-account-response.dto';
 import { UserTokenService } from '@users/token.service';
-import { Token } from '@common/types/enums';
+import { Role, Token } from '@common/types/enums';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import * as bcrypt from 'bcrypt';
 import { ChangePasswordDto } from './dto/change-password.dto';
@@ -22,331 +44,840 @@ import { OAuthCallbackDto } from './dto/oauth-callback.dto';
 import { SocialUserProfile } from '@common/types/user-interfaces.type';
 import { SocialAuthStrategyFactory } from './social-auth.factory';
 import { OAuthStateService } from './oauth-state.service';
+import {
+  PendingSocialSignup,
+  PendingSocialSignupService,
+} from './pending-social-signup.service';
+import { CompleteSocialSignupDto } from './dto/complete-social-signup.dto';
+import { PendingSocialSignupResponseDto } from './dto/pending-social-signup-response.dto';
 import { UnauthorizedException } from '@nestjs/common/exceptions/unauthorized.exception';
-import { APP_EVENTS, SecurityAlertPayload } from '@common/events/app.events';
+import {
+  APP_EVENTS,
+  ArtisanRegisteredPayload,
+  SecurityAlertPayload,
+} from '@common/events/app.events';
+import { hashEmailForLog } from '@common/utils/log-identifier.util';
 
+const SELF_REGISTERABLE_ROLES = [Role.CUSTOMER, Role.ARTISAN];
+
+/**
+ * `meta.error` on every `/auth/social/*` refusal caused by a missing, unknown
+ * or expired pending signup. The complete-signup page matches on this (not on
+ * the 401 status or the message text) to send the user back through Google.
+ */
+export const SOCIAL_SIGNUP_EXPIRED_ERROR_CODE = 'SOCIAL_SIGNUP_EXPIRED';
 
 @Injectable()
 export class AuthService {
-    private readonly logger = new Logger(AuthService.name);
-    constructor(
-        private readonly userService: UsersService,
-        private readonly emmitter: EventEmitter2,
-        private readonly userTokenService: UserTokenService,
-        private readonly socialAuthStrategyFactory: SocialAuthStrategyFactory,
-        private readonly oauthStateService: OAuthStateService,
-        
-    ){}
+  private readonly logger = new Logger(AuthService.name);
+  constructor(
+    private readonly userService: UsersService,
+    private readonly emmitter: EventEmitter2,
+    private readonly userTokenService: UserTokenService,
+    private readonly socialAuthStrategyFactory: SocialAuthStrategyFactory,
+    private readonly oauthStateService: OAuthStateService,
+    private readonly pendingSocialSignupService: PendingSocialSignupService,
+  ) {}
 
-    /**
-     * Register a new user
-     * @param createUserDto - Data Transfer Object for creating a user
-     * @returns UserResponseDto - Registered user details
-     */
-    async registerUser(createUserDto: CreateUserDto): Promise<UserResponseDto>{
-        let user;
-        const email = createUserDto.email;
-        if(!email){
-            throw new BadRequestException("Provide user email!");
-        }
-        this.logger.log(`Registering User with email ${email}`);
+  /**
+   * Register a new user
+   * @param createUserDto - Data Transfer Object for creating a user
+   * @returns UserResponseDto - Registered user details
+   */
+  async registerUser(createUserDto: CreateUserDto): Promise<UserResponseDto> {
+    const email = createUserDto.email;
+    if (!email) {
+      throw new BadRequestException('Provide user email!');
+    }
+    // G5 fix: CreateUserDto.password is now @IsOptional() (to accurately
+    // reflect that AuthService.registerSocialUser()'s social-signup path
+    // never supplies one), but THIS public self-registration path must still
+    // hard-require a real password — it's the only route to creating an
+    // account with no other way to ever sign in (no social provider, no
+    // accountVerified-trust precedent). Enforced explicitly here as
+    // defense-in-depth now that the DTO-level constraint alone no longer
+    // guarantees it. See docs/team/google-oauth-fix/qa-report.md ([MINOR]).
+    if (!createUserDto.password) {
+      throw new BadRequestException('Provide a password!');
+    }
 
-        user = await this.userService.findUserByEmail(email);
-        if(user){
-            throw new UserAlreadyExists(ERROR_MESSAGES.USER.EMAIL_ALREADY_EXISTS(email))
-        }
-        const { data: createdUser } = await this.userService.createUser(createUserDto);
-        user = createdUser;
-        this.logger.log(`User registered with email ${user.email}`);
+    // S3: public self-registration may only create CUSTOMER or ARTISAN accounts.
+    // ADMIN accounts are seed-only and never travel through this validated,
+    // publicly-reachable path — silently downgrading a disallowed role would
+    // mask the attempt, so we reject it outright instead. `role` omitted
+    // entirely is a distinct, legitimate case — default it to CUSTOMER rather
+    // than rejecting, per S3's acceptance criteria.
+    createUserDto.role = createUserDto.role ?? Role.CUSTOMER;
+    if (!SELF_REGISTERABLE_ROLES.includes(createUserDto.role)) {
+      this.logger.warn(
+        `Rejected self-registration attempt with disallowed role: ${createUserDto.role}`,
+      );
+      throw new BadRequestException(ERROR_MESSAGES.AUTH.ROLE_NOT_ALLOWED);
+    }
 
-        const verificationToken = await this.userTokenService.createToken(
-            user,
-            Token.EMAIL_VERIFICATION,
-            VARIABLES.EMAIL_VERIFICATION_TOKEN_EXPIRES_IN_MINUTES
+    this.logger.log(
+      `Registering user with email hash ${hashEmailForLog(email)}`,
+    );
+
+    // C1.6: the check spans soft-deleted rows on purpose. `findUserByEmail`
+    // excludes them, which meant a deleted address never hit this branch and
+    // was instead rejected downstream by the `users.email` unique constraint —
+    // a `409` with a different message and no `meta.error`, so a single
+    // unauthenticated register probe told an attacker whether an address was
+    // live, deleted, or free. Both cases now raise the identical
+    // `UserAlreadyExists`, which is what makes "taken" and "taken by a
+    // *deleted* account" indistinguishable.
+    if (await this.userService.isEmailRegistered(email)) {
+      throw new UserAlreadyExists(
+        ERROR_MESSAGES.USER.EMAIL_ALREADY_EXISTS(email),
+      );
+    }
+    const { data: user } = await this.userService.createUser(createUserDto);
+    this.logger.log(`User registered with id: ${user.id}`);
+
+    const verificationToken = await this.userTokenService.createToken(
+      user,
+      Token.EMAIL_VERIFICATION,
+      VARIABLES.EMAIL_VERIFICATION_TOKEN_EXPIRES_IN_MINUTES,
+    );
+
+    this.emmitter.emit(MailEvent.USER_REGISTERED, {
+      email: user.email,
+      firstname: user.firstname,
+      verificationToken: verificationToken.token,
+    });
+    this.logger.log(
+      `Emitted event for sending registration email to user with id: ${user.id}`,
+    );
+
+    this.emitIfArtisan(user);
+
+    // L3: `user` is the entity `createUser` just saved, which still carries the
+    // bcrypt hash in memory regardless of the column's `select: false` — so
+    // this response used to hand the caller back their own freshly-computed
+    // hash. `excludeExtraneousValues` keeps the body to the fields
+    // `UserResponseDto` actually declares (the DTO no longer declares
+    // `password` at all); see the DTO's own note for why both halves exist.
+    return plainToInstance(UserResponseDto, user, {
+      excludeExtraneousValues: true,
+    });
+  }
+
+  /**
+   * PR3: gives the admin "New Artisan Registered" toggle a real trigger.
+   * Called from both signup paths (password and social) rather than from
+   * `UsersService.createUser`, so seeding and admin-side user creation don't
+   * spam the admin queue — only a genuine public self-registration does.
+   *
+   * Best-effort by design: a notification concern must never fail a signup.
+   */
+  private emitIfArtisan(user: User): void {
+    if (user.role !== Role.ARTISAN) return;
+    try {
+      this.emmitter.emit(APP_EVENTS.ARTISAN_REGISTERED, {
+        artisanUserId: user.id,
+        artisanName: `${user.firstname} ${user.lastname}`,
+      } as ArtisanRegisteredPayload);
+    } catch (err) {
+      this.logger.error(
+        `Failed to emit ARTISAN_REGISTERED for user ${user.id}: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  /**
+   * Login a user
+   * @param loginDto - Data Transfer Object for user login
+   * @returns `{ result, refreshToken }` — the controller sets `refreshToken` as an
+   *   httpOnly cookie and returns only `result` (which never contains the refresh token).
+   */
+  async loginUser(loginDto: LoginDto): Promise<AuthTokenResult> {
+    const { email, password } = loginDto;
+    if (!email || !password) {
+      throw new BadRequestException('Provide user email and password!');
+    }
+    // M5: every line this method emits identifies the account by id, never by
+    // the submitted address — see `hashEmailForLog` for why this one line is
+    // the exception (no id exists until the lookup below returns) and why the
+    // hash is computed unconditionally, before any branch.
+    this.logger.log(
+      `Processing login request for email hash ${hashEmailForLog(email)}`,
+    );
+
+    const user = await this.userService.findUserByEmail(email);
+
+    if (!user) {
+      // C1.4: no *live* account with this email. Before settling on the
+      // generic rejection, work out whether this is instead a soft-deleted
+      // account its rightful owner could restore — but only ever after
+      // verifying the submitted password. Resolves to the distinguishable
+      // pending-deletion rejection, or to the same generic
+      // invalid-credentials error as every other login failure.
+      throw await this.resolveNoLiveAccountRejection(email, password);
+    }
+
+    // G10: an account created (or exclusively used) via Google sign-in has no
+    // usable password. Detect this BEFORE any bcrypt.compare call and
+    // short-circuit with a distinct, specific error — never fold this into
+    // the generic invalid-credentials case, and never let a null/placeholder
+    // hash reach bcrypt.
+    //
+    // Efficiency fix: this used to be two independent calls
+    // (hasUsablePassword() then validatePassword()), each running its own
+    // `SELECT ... WHERE id = ?` for the same password column — an avoidable
+    // extra DB round-trip on every single login attempt. Folded into one
+    // fetch via getPasswordCheckResult(). See
+    // docs/team/google-oauth-fix/qa-report.md ([MINOR]).
+    const { hasPassword, isValid } =
+      await this.userService.getPasswordCheckResult(password, user.id);
+
+    // QA SEC-14: a Google-only account used to get its own "signs in with
+    // Google" error for any password, which confirmed the email was
+    // registered without proving ownership. It now gets the same answer, in
+    // the same time, as a wrong password; the login page offers Google and
+    // "Forgot password" to everyone.
+    if (!hasPassword) {
+      this.logger.warn(
+        `Login refused for social-only account (no usable password): user ${user.id}`,
+      );
+      throw new InvalidCredentialsException(
+        ERROR_MESSAGES.AUTH.INVALID_CREDENTIALS,
+      );
+    }
+
+    if (!isValid) {
+      this.logger.warn(`Invalid credentials provided for user ${user.id}`);
+      throw new InvalidCredentialsException(
+        ERROR_MESSAGES.AUTH.INVALID_CREDENTIALS,
+      );
+    }
+
+    // QA AUTH-17: only after the password is proven, so a ban reveals nothing
+    // to someone guessing passwords.
+    if (user.isBanned) {
+      this.logger.warn(`Login blocked for banned account: user ${user.id}`);
+      throw new AccountBannedException();
+    }
+
+    // S4: block login until the account's email has been verified. Kept as a
+    // distinct 403 (not folded into the generic 401 invalid-credentials error)
+    // so the frontend can render a specific "please verify your email" message
+    // with a resend-verification path, per the acceptance criteria.
+    if (!user.accountVerified) {
+      this.logger.warn(`Login blocked for unverified account: user ${user.id}`);
+      throw new ForbiddenException(ERROR_MESSAGES.AUTH.EMAIL_NOT_VERIFIED);
+    }
+
+    this.logger.log(`Generating tokens for user ${user.id}`);
+    const { access_token, refresh_token, expires_at } =
+      await this.userTokenService.createJWTTokens(user);
+    this.logger.log(`Tokens generated for user ${user.id}`);
+
+    this.logger.log(`User ${user.id} logged in`);
+    const result = plainToInstance(LoginResponseDto, {
+      access_token,
+      expires_at,
+      message: SUCCESS_MESSAGES.AUTH.USER_LOGGED_IN,
+      data: plainToInstance(UserResponseDto, user, {
+        excludeExtraneousValues: true,
+      }),
+    });
+    return { result, refreshToken: refresh_token };
+  }
+
+  /**
+   * C1.4: decides what a login attempt against an address with no live
+   * account is told — the account-enumeration-critical branch of `loginUser`.
+   *
+   * **The ordering here is the security property, not an implementation
+   * detail.** The password is verified *before* the account's deletion state
+   * is allowed to affect the response. Every path that has not proven
+   * ownership resolves to the byte-identical generic invalid-credentials
+   * error, so all of the following are indistinguishable to a caller:
+   * an address that was never registered, a wrong password on a soft-deleted
+   * account, a soft-deleted account whose window has closed, and a purged
+   * account. Only a caller who submitted the correct password for an account
+   * that is genuinely still restorable learns anything.
+   *
+   * A soft-deleted Google-only account (no password hash) also resolves to the
+   * generic error rather than the "use Google instead" hint — that hint would
+   * disclose the existence of a deleted account to someone who hasn't proven
+   * anything. Those accounts restore through the Google callback instead.
+   *
+   * **Identical bodies are only half of it.** Every branch here spends exactly
+   * one bcrypt comparison, including the one that finds no row at all
+   * (see {@link UsersService.spendPasswordCheckCost}), so response time cannot
+   * separate "registered" from "never registered" either.
+   *
+   * @returns The exception the caller must throw. Never returns normally
+   *   without one, and never returns a token or a user.
+   */
+  private async resolveNoLiveAccountRejection(
+    email: string,
+    password: string,
+  ): Promise<HttpException> {
+    const genericRejection = new InvalidCredentialsException(
+      ERROR_MESSAGES.AUTH.INVALID_CREDENTIALS,
+    );
+
+    const deletedUser =
+      await this.userService.findSoftDeletedUserByEmail(email);
+    if (!deletedUser?.deletedAt) {
+      // No account of any kind for this address. Spend a bcrypt comparison
+      // anyway: without it this branch returns in single-digit milliseconds
+      // while every branch that found a row takes ~half a second, and that
+      // difference alone tells an unauthenticated caller whether an address is
+      // registered. The bodies were already identical; this makes the timing
+      // identical.
+      await this.userService.spendPasswordCheckCost(password);
+      this.logger.warn(`Rejected login for an unknown address`);
+      return genericRejection;
+    }
+
+    // Ownership check first — nothing below this line may run for a caller
+    // who cannot produce the account's password.
+    const { isValid } =
+      await this.userService.getSoftDeletedPasswordCheckResult(
+        password,
+        deletedUser.id,
+      );
+    if (!isValid) {
+      // The user ID, never the email: this line records "an address with a
+      // soft-deleted account was tried", so an email here would turn log read
+      // access into an enumeration oracle for accounts pending deletion — and
+      // would outlive the purge that scrubs the address from the database.
+      this.logger.warn(
+        `Invalid credentials provided for a soft-deleted account: user ${deletedUser.id}`,
+      );
+      return genericRejection;
+    }
+
+    if (!isWithinRecoveryWindow(deletedUser.deletedAt)) {
+      // C1.7: past the window there is no restore prompt and no hint that the
+      // account ever existed, even though the caller did prove ownership.
+      this.logger.warn(
+        `Login on a soft-deleted account past its recovery window: user ${deletedUser.id}`,
+      );
+      return genericRejection;
+    }
+
+    this.logger.log(
+      `Offering restore for soft-deleted account ${deletedUser.id}`,
+    );
+    return new AccountPendingDeletionException(
+      deletedUser.deletedAt,
+      purgeDateFor(deletedUser.deletedAt),
+    );
+  }
+
+  /**
+   * C1.4: restores a soft-deleted account inside its 30-day window and, when
+   * the account is verified, signs the user straight back in.
+   *
+   * Requires email **and** password (B5). Ownership is proven here in exactly
+   * the same order as in `loginUser`: resolve the soft-deleted row, verify the
+   * password, and only then act. A caller who fails that check gets a single
+   * generic message whether the address is unknown, live, already purged, or
+   * simply the wrong password — and every one of those branches spends the
+   * same single bcrypt comparison, so the four are indistinguishable by
+   * response time as well as by body. That matters more here than anywhere
+   * else: the bit this endpoint would otherwise leak is precisely "this
+   * address has a deleted account still inside its recovery window".
+   *
+   * Restoring is deliberately not conditional on `accountVerified`: C1.4 gives
+   * restore precedence over the verification gate. An unverified account is
+   * restored and then told to verify, rather than being left deleted with no
+   * way forward.
+   *
+   * @throws {InvalidCredentialsException} Ownership not proven (401).
+   * @throws {AccountNotRestorableException} Window closed, or already purged (410).
+   */
+  async restoreAccount(dto: RestoreAccountDto): Promise<RestoreAccountResult> {
+    const { email, password } = dto;
+
+    const deletedUser =
+      await this.userService.findSoftDeletedUserByEmail(email);
+    if (!deletedUser) {
+      // Unknown address, a live account, or an already-purged one — all four
+      // documented 401 cases must be indistinguishable, and until this call
+      // they were not. This branch returned without any bcrypt work while the
+      // wrong-password branch paid for a full comparison, so response time was
+      // a clean binary signal for the single most sensitive bit this endpoint
+      // holds: whether that address has a deleted account still inside its
+      // recovery window. One unauthenticated request per address, repeatable,
+      // and per-IP rate limiting only slows a sweep rather than closing it.
+      await this.userService.spendPasswordCheckCost(password);
+      this.logger.warn(`Restore requested for an unrestorable email`);
+      throw new InvalidCredentialsException(
+        ERROR_MESSAGES.AUTH.RESTORE_INVALID_CREDENTIALS,
+      );
+    }
+
+    const { isValid } =
+      await this.userService.getSoftDeletedPasswordCheckResult(
+        password,
+        deletedUser.id,
+      );
+    if (!isValid) {
+      this.logger.warn(
+        `Restore rejected for account ${deletedUser.id}: credentials not verified`,
+      );
+      throw new InvalidCredentialsException(
+        ERROR_MESSAGES.AUTH.RESTORE_INVALID_CREDENTIALS,
+      );
+    }
+
+    // The window check, the purged-row check and the purge race all resolve
+    // inside this call, under a row lock on the account.
+    const restored = await this.userService.restoreAccountById(deletedUser.id);
+
+    return this.completeRestore(restored);
+  }
+
+  /**
+   * C1.4: shared tail of both restore paths (password and Google). Sends the
+   * confirmation email and issues a session — unless the account never
+   * verified its email, in which case the restore stands but no session is
+   * issued and the caller is told to verify.
+   */
+  private async completeRestore(user: User): Promise<RestoreAccountResult> {
+    this.emmitter.emit(MailEvent.ACCOUNT_RESTORED, {
+      email: user.email,
+      firstname: user.firstname,
+    } satisfies AccountRestoredPayload);
+
+    if (!user.accountVerified) {
+      this.logger.log(
+        `Restored account ${user.id} is unverified — no session issued`,
+      );
+      return {
+        result: plainToInstance(RestoreAccountResponseDto, {
+          message: SUCCESS_MESSAGES.AUTH.ACCOUNT_RESTORED_VERIFY_EMAIL,
+          restored: true,
+          requiresEmailVerification: true,
+          data: plainToInstance(UserResponseDto, user, {
+            excludeExtraneousValues: true,
+          }),
+        }),
+      };
+    }
+
+    const { access_token, refresh_token, expires_at } =
+      await this.userTokenService.createJWTTokens(user);
+
+    this.logger.log(`Restored account ${user.id} and issued a new session`);
+
+    return {
+      result: plainToInstance(RestoreAccountResponseDto, {
+        message: SUCCESS_MESSAGES.AUTH.ACCOUNT_RESTORED,
+        restored: true,
+        requiresEmailVerification: false,
+        access_token,
+        expires_at,
+        data: plainToInstance(UserResponseDto, user, {
+          excludeExtraneousValues: true,
+        }),
+      }),
+      refreshToken: refresh_token,
+    };
+  }
+
+  /**
+   * Verify user email
+   * @param token - Email verification token
+   * @returns { message: string } - Verification result message
+   */
+  async verifyEmail(token: string): Promise<void> {
+    this.logger.log(`Verifying email with a one-time token`);
+    const userToken = await this.userTokenService.validateToken(
+      token,
+      Token.EMAIL_VERIFICATION,
+    );
+
+    if (!userToken) {
+      throw new BadRequestException('Invalid or expired token');
+    }
+
+    this.logger.log(`Email verified for user with id: ${userToken.id}`);
+    userToken.accountVerified = true;
+    userToken.verifiedAt = new Date();
+    await this.userService.updateUserData(userToken.id, userToken);
+    await this.userTokenService.revokeToken(token);
+    this.logger.log(
+      `Revoked email verification token for user with id: ${userToken.id}`,
+    );
+
+    this.emmitter.emit(MailEvent.WELCOME_USER, {
+      email: userToken.email,
+      firstname: userToken.firstname,
+    });
+  }
+
+  /**
+   * F1: (Re)issues a fresh email-verification token and resends the verification email.
+   *
+   * Always resolves successfully — whether the email doesn't exist, is already
+   * verified, or was just resent — so this endpoint cannot be used to enumerate
+   * accounts or their verification state. A short cooldown prevents email spam
+   * from repeated rapid calls for the same account.
+   *
+   * @param email - The account email to resend a verification link to.
+   */
+  async resendVerification(email: string): Promise<void> {
+    this.logger.log(`Processing resend-verification request`);
+    const user = await this.userService.findUserByEmail(email);
+    if (!user) {
+      this.logger.warn(
+        `Resend-verification requested for an email with no matching account`,
+      );
+      return;
+    }
+
+    if (user.accountVerified) {
+      this.logger.log(
+        `Resend-verification requested for an already-verified account: ${user.id}`,
+      );
+      return;
+    }
+
+    const recentToken = await this.userTokenService.getRecentToken(
+      user.id,
+      Token.EMAIL_VERIFICATION,
+    );
+    if (recentToken) {
+      const secondsSinceIssued =
+        (Date.now() - recentToken.createdAt.getTime()) / 1000;
+      if (secondsSinceIssued < VARIABLES.RESEND_VERIFICATION_COOLDOWN_SECONDS) {
+        this.logger.log(
+          `Resend-verification cooldown active for user ${user.id}; skipping resend`,
         );
-
-
-        this.emmitter.emit(MailEvent.USER_REGISTERED, {
-            email: user.email,
-            firstname: user.firstname,
-            verificationToken: verificationToken.token,
-        });
-        this.logger.log(`Emitted event for sending registration email to ${user.email}`);
-        return plainToInstance(UserResponseDto, user);
-
+        return;
+      }
     }
 
-    /**
-     * Login a user
-     * @param loginDto - Data Transfer Object for user login
-     * @returns LoginResponseDto - Logged in user details
-     */
-    async loginUser(loginDto: LoginDto): Promise<LoginResponseDto> {
-        let user;
-        const { email, password } = loginDto;
-        if(!email || !password){
-            throw new BadRequestException("Provide user email and password!");
-        }
-        this.logger.log(`Logging in User with email ${email}`);
+    const verificationToken = await this.userTokenService.createToken(
+      user,
+      Token.EMAIL_VERIFICATION,
+      VARIABLES.EMAIL_VERIFICATION_TOKEN_EXPIRES_IN_MINUTES,
+    );
 
-        user = await this.userService.findUserByEmail(email);
+    this.emmitter.emit(MailEvent.USER_REGISTERED, {
+      email: user.email,
+      firstname: user.firstname,
+      verificationToken: verificationToken.token,
+    });
+    this.logger.log(
+      `Re-emitted verification email event for user with id: ${user.id}`,
+    );
+  }
 
-        if(!user || !(await this.userService.validatePassword(password, user.id))){
-            this.logger.warn(`Invalid credentials provided for email ${email}`);
-            throw new InvalidCredentialsException(ERROR_MESSAGES.AUTH.INVALID_CREDENTIALS);
-        }
-
-        this.logger.log(`Generating tokens for user with email ${email}`);
-        const { access_token, refresh_token, expires_at } = await this.userTokenService.createJWTTokens(user);
-        this.logger.log(`Tokens generated for user with email ${email}`);
-
-
-        this.logger.log(`User logged in with email ${email}`);
-        return plainToInstance(LoginResponseDto, {
-            access_token,
-            refresh_token,
-            expires_at,
-            message: SUCCESS_MESSAGES.AUTH.USER_LOGGED_IN,
-            data: plainToInstance(UserResponseDto, user)
-        });
-
+  /**
+   * Request a password reset link.
+   *
+   * Always resolves successfully regardless of whether the email is registered —
+   * the controller returns the same generic message either way so this endpoint
+   * cannot be used to enumerate registered accounts.
+   *
+   * @param email - User's email address
+   */
+  async forgotPassword(email: string): Promise<void> {
+    this.logger.log(`Processing forgot password request`);
+    const user = await this.userService.findUserByEmail(email);
+    if (!user) {
+      this.logger.warn(
+        `Forgot-password requested for an email with no matching account`,
+      );
+      return;
     }
 
-    /**
-     * Verify user email
-     * @param token - Email verification token
-     * @returns { message: string } - Verification result message
-     */
-    async verifyEmail(token: string): Promise<void> {
-        this.logger.log(`Verifying email with token ${token}`);
-        const userToken = await this.userTokenService.validateToken(token, Token.EMAIL_VERIFICATION);
+    const existingToken =
+      await this.userTokenService.getValidPasswordResetToken(user.id);
 
-        if (!userToken) {
-            throw new BadRequestException("Invalid or expired token");
-        }
-        
-        this.logger.log(`Email verified for user with id: ${userToken.id}`);
-        userToken.accountVerified = true;
-        userToken.verifiedAt = new Date();
-        await this.userService.updateUserData(userToken.id, userToken);
-        await this.userTokenService.revokeToken(token);
-        this.logger.log(`Revoked email verification token for user with id: ${userToken.id}`);
-
-        this.emmitter.emit(MailEvent.WELCOME_USER, {
-            email: userToken.email,
-            firstname: userToken.firstname
-        });
+    if (existingToken) {
+      this.logger.log(
+        `Reusing existing valid password reset token for user with id: ${user.id}`,
+      );
+      this.emmitter.emit(MailEvent.PASSWORD_RESET, {
+        email: user.email,
+        firstname: user.firstname,
+        resetToken: existingToken.token,
+      });
+      return;
     }
 
-    /**
-     * Request a password reset link
-     * @param email - User's email address
-     * @returns { message: string } - Success message
-     */
-    async forgotPassword(email: string): Promise<void> {
-        this.logger.log(`Processing forgot password for email ${email}`);
-        const user = await this.userService.findUserByEmail(email);
-        if (!user) {
-            this.logger.warn(`No user found with email ${email}`);
-            throw new BadRequestException(ERROR_MESSAGES.USER.NOT_FOUND_WITH_EMAIL(email));
-        }
-        
-        const existingToken = await this.userTokenService.getValidPasswordResetToken(user.id);
+    this.logger.log(
+      `Creating password reset token for user with id: ${user.id}`,
+    );
+    const resetToken = await this.userTokenService.createToken(
+      user,
+      Token.PASSWORD_RESET,
+      VARIABLES.PASSWORD_RESET_TOKEN_EXPIRES_IN_MINUTES,
+    );
+    this.logger.log(
+      `Created password reset token for user with id: ${user.id}`,
+    );
 
-        if (existingToken) {
-            this.logger.log(`Reusing existing valid password reset token for user with id: ${user.id}`);
-            this.emmitter.emit(MailEvent.PASSWORD_RESET, {
-            email: user.email,
-            firstname: user.firstname,
-            resetToken: existingToken.token,
-        });
-            return;
-        }
+    this.emmitter.emit(MailEvent.PASSWORD_RESET, {
+      email: user.email,
+      firstname: user.firstname,
+      resetToken: resetToken.token,
+    });
+    this.logger.log(
+      `Emitted event for sending password reset email to user with id: ${user.id}`,
+    );
+  }
 
-        this.logger.log(`Creating password reset token for user with id: ${user.id}`);
-        const resetToken = await this.userTokenService.createToken(
-            user,
-            Token.PASSWORD_RESET,
-            VARIABLES.PASSWORD_RESET_TOKEN_EXPIRES_IN_MINUTES
-        );
-        this.logger.log(`Created password reset token for user with id: ${user.id}`);
-
-        this.emmitter.emit(MailEvent.PASSWORD_RESET, {
-            email: user.email,
-            firstname: user.firstname,
-            resetToken: resetToken.token,
-        });
-        this.logger.log(`Emitted event for sending password reset email to ${user.email}`);
+  /**
+   * Resets the password for a user using a valid password reset token.
+   *
+   * This method verifies that the provided new password and confirmation match,
+   * validates the reset token, hashes the new password, updates the user's record,
+   * and revokes the used token. After a successful password reset, it emits an event
+   * to notify the user via email.
+   *
+   * @param token - The password reset token used to verify the user's request.
+   * @param resetPasswordDto - The DTO containing the new and confirmed passwords.
+   * @throws {BadRequestException} If the passwords do not match or the token is invalid or expired.
+   * @returns {Promise<void>} Resolves when the password reset process is complete.
+   */
+  async resetPassword(
+    token: string,
+    resetPasswordDto: ResetPasswordDto,
+  ): Promise<void> {
+    const { newPassword, confirmNewPassword } = resetPasswordDto;
+    if (newPassword !== confirmNewPassword) {
+      throw new BadRequestException('Passwords do not match');
     }
 
-    /**
-     * Resets the password for a user using a valid password reset token.
-     *
-     * This method verifies that the provided new password and confirmation match,
-     * validates the reset token, hashes the new password, updates the user's record,
-     * and revokes the used token. After a successful password reset, it emits an event
-     * to notify the user via email.
-     *
-     * @param token - The password reset token used to verify the user's request.
-     * @param resetPasswordDto - The DTO containing the new and confirmed passwords.
-     * @throws {BadRequestException} If the passwords do not match or the token is invalid or expired.
-     * @returns {Promise<void>} Resolves when the password reset process is complete.
-     */
-    async resetPassword(token: string, resetPasswordDto: ResetPasswordDto): Promise<void> {
-        const { newPassword, confirmNewPassword } = resetPasswordDto;
-        if (newPassword !== confirmNewPassword) {
-            throw new BadRequestException("Passwords do not match");
-        }
-
-        this.logger.log(`Resetting password using token ${token}`);
-        const user = await this.userTokenService.validateToken(token, Token.PASSWORD_RESET);
-        if (!user) {
-            throw new BadRequestException("Invalid or expired token");
-        }
-
-        user.password = await bcrypt.hash(newPassword, VARIABLES.SALT_OR_ROUNDS);
-        await this.userService.updateUserData(user.id, user);
-        this.logger.log(`Password reset successfully for user with id: ${user.id}`);
-
-        await this.userTokenService.revokeToken(token);
-        await this.userTokenService.revokeRefreshTokenForUser(user.id);
-
-        this.logger.log(`Revoked password reset token and refresh tokens for user with id: ${user.id}`);
-        this.emmitter.emit(MailEvent.PASSWORD_RESET_SUCCESS, {
-            email: user.email,
-            firstname: user.firstname,
-        });
-        this.logger.log(`Emitted event for sending password reset success email to ${user.email}`);
-        this.emmitter.emit(APP_EVENTS.SECURITY_ALERT, {
-            userId: user.id,
-            event:  'PASSWORD_RESET',
-        } as SecurityAlertPayload);
+    this.logger.log('Resetting password with a reset token');
+    const user = await this.userTokenService.validateToken(
+      token,
+      Token.PASSWORD_RESET,
+    );
+    if (!user) {
+      throw new BadRequestException('Invalid or expired token');
     }
 
+    user.password = await bcrypt.hash(newPassword, VARIABLES.SALT_OR_ROUNDS);
+    await this.userService.updateUserData(user.id, user);
+    this.logger.log(`Password reset successfully for user with id: ${user.id}`);
 
+    await this.userTokenService.revokeToken(token);
+    await this.userTokenService.revokeRefreshTokenForUser(user.id);
 
-    /**
-     * Refreshes the user's authentication tokens using a valid refresh token.
-     *
-     * This method validates the provided refresh token, generates new access and
-     * refresh tokens for the user, and returns them along with user details in
-     * a structured response object.
-     *
-     * @param refreshToken - The refresh token used to authenticate and generate new tokens.
-     * @throws {BadRequestException} If the provided refresh token is invalid or expired.
-     * @returns {Promise<LoginResponseDto>} An object containing the new access and refresh tokens,
-     * a success message, and the user's information.
-     */
+    this.logger.log(
+      `Revoked password reset token and refresh tokens for user with id: ${user.id}`,
+    );
+    this.emmitter.emit(MailEvent.PASSWORD_RESET_SUCCESS, {
+      email: user.email,
+      firstname: user.firstname,
+    });
+    this.logger.log(
+      `Emitted event for sending password reset success email to user with id: ${user.id}`,
+    );
+    this.emmitter.emit(APP_EVENTS.SECURITY_ALERT, {
+      userId: user.id,
+      event: 'PASSWORD_RESET',
+    } as SecurityAlertPayload);
+  }
 
-    async refreshTokens(refreshToken: string): Promise<LoginResponseDto> {
-        this.logger.log('Refreshing tokens using refresh token ');
-        this.logger.log(`Provided refresh token: ${refreshToken}`);
-        const user = await this.userTokenService.validateToken(refreshToken, Token.REFRESH);
-        if (!user) {
-            throw new BadRequestException("Invalid or expired refresh token");
-        }
-
-        this.logger.log(`Generating new tokens for user with id: ${user.id}`);
-        const { access_token, refresh_token, expires_at } = await this.userTokenService.createJWTTokens(user);
-        this.logger.log(`New tokens generated for user with id: ${user.id}`);
-
-        return plainToInstance(LoginResponseDto, {
-            access_token,
-            refresh_token,
-            expires_at,
-            message: SUCCESS_MESSAGES.AUTH.TOKENS_REFRESHED,
-            data: plainToInstance(UserResponseDto, user)
-        });
+  /**
+   * Refreshes the user's authentication tokens using a valid refresh token.
+   *
+   * S5: the presented refresh token is atomically consumed (deleted) as part of
+   * validation — `UserTokenService.consumeRefreshToken` removes the row and only
+   * then verifies it — so a refresh token can never be redeemed twice. Replaying
+   * an already-rotated (or otherwise unknown/expired) refresh token is rejected.
+   *
+   * @param refreshToken - The refresh token used to authenticate and generate new tokens.
+   * @throws {BadRequestException} If the provided refresh token is invalid, unknown, already used, or expired.
+   * @returns `{ result, refreshToken }` — the controller sets the new `refreshToken` as an
+   *   httpOnly cookie and returns only `result` (which never contains the refresh token).
+   */
+  async refreshTokens(refreshToken: string): Promise<AuthTokenResult> {
+    this.logger.log('Refreshing tokens using refresh token');
+    const user = await this.userTokenService.consumeRefreshToken(refreshToken);
+    if (!user) {
+      throw new BadRequestException(ERROR_MESSAGES.AUTH.INVALID_REFRESH_TOKEN);
+    }
+    // The presented token is already consumed above, so a banned account's
+    // session ends here instead of being renewed for another 7 days.
+    if (user.isBanned) {
+      this.logger.warn(`Refresh refused for banned account: user ${user.id}`);
+      throw new AccountBannedException();
     }
 
-    async logout(token: string): Promise<void> {
-        this.logger.log('Logging out user and revoking token');
-        await this.userTokenService.revokeToken(token);
-        this.logger.log('Token revoked successfully');
+    this.logger.log(`Generating new tokens for user with id: ${user.id}`);
+    const { access_token, refresh_token, expires_at } =
+      await this.userTokenService.createJWTTokens(user);
+    this.logger.log(`New tokens generated for user with id: ${user.id}`);
+
+    const result = plainToInstance(LoginResponseDto, {
+      access_token,
+      expires_at,
+      message: SUCCESS_MESSAGES.AUTH.TOKENS_REFRESHED,
+      data: plainToInstance(UserResponseDto, user, {
+        excludeExtraneousValues: true,
+      }),
+    });
+    return { result, refreshToken: refresh_token };
+  }
+
+  async logout(token: string): Promise<void> {
+    this.logger.log('Logging out user and revoking token');
+    await this.userTokenService.revokeToken(token);
+    this.logger.log('Token revoked successfully');
+  }
+
+  async changePassword(
+    changePasswordDto: ChangePasswordDto,
+    userId: number,
+  ): Promise<AuthTokenResult> {
+    const user = await this.userService.findUserById(userId);
+    if (!user) {
+      throw new BadRequestException('User not found');
     }
 
-    async changePassword(changePasswordDto: ChangePasswordDto, userId: number): Promise<LoginResponseDto>{
-        const user = await this.userService.findUserById(userId);
-        if (!user) {
-            throw new BadRequestException("User not found");
-        }
-
-        const isMatch = await this.userService.validatePassword(changePasswordDto.currentPassword, userId);
-        if (!isMatch) {
-            throw new BadRequestException("Current password is incorrect");
-        }
-
-        user.password = await bcrypt.hash(changePasswordDto.newPassword, VARIABLES.SALT_OR_ROUNDS);
-        await this.userService.updateUserData(user.id, user);
-        this.logger.log(`Password changed successfully for user with id: ${user.id}`);
-
-        await this.userTokenService.revokeRefreshTokenForUser(user.id);
-        this.logger.log(`Revoked existing refresh tokens for user with id: ${user.id} after password change`);
-        const { access_token, refresh_token, expires_at } = await this.userTokenService.createJWTTokens(user);
-        this.logger.log(`New tokens generated for user with id: ${user.id} after password change`);
-
-        this.emmitter.emit(MailEvent.PASSWORD_CHANGED, {
-            email: user.email,
-            firstname: user.firstname,
-        });
-        this.logger.log(`Emitted event for sending password change notification email to ${user.email}`);
-        this.emmitter.emit(APP_EVENTS.SECURITY_ALERT, {
-            userId: user.id,
-            event:  'PASSWORD_CHANGED',
-        } as SecurityAlertPayload);
-
-        return plainToInstance(LoginResponseDto, {
-            access_token,
-            refresh_token,
-            expires_at,
-            message: SUCCESS_MESSAGES.AUTH.PASSWORD_CHANGED,
-            data: plainToInstance(UserResponseDto, user)
-        });
+    // QA AUTH-28: the confirmation was never compared, so a typo in the new
+    // password became the password. Same rule as resetPassword.
+    if (
+      changePasswordDto.newPassword !== changePasswordDto.confirmNewPassword
+    ) {
+      throw new BadRequestException('Passwords do not match');
     }
 
+    const isMatch = await this.userService.validatePassword(
+      changePasswordDto.currentPassword,
+      userId,
+    );
+    if (!isMatch) {
+      throw new BadRequestException('Current password is incorrect');
+    }
 
-    /**
+    user.password = await bcrypt.hash(
+      changePasswordDto.newPassword,
+      VARIABLES.SALT_OR_ROUNDS,
+    );
+    await this.userService.updateUserData(user.id, user);
+    this.logger.log(
+      `Password changed successfully for user with id: ${user.id}`,
+    );
+
+    await this.userTokenService.revokeRefreshTokenForUser(user.id);
+    this.logger.log(
+      `Revoked existing refresh tokens for user with id: ${user.id} after password change`,
+    );
+    const { access_token, refresh_token, expires_at } =
+      await this.userTokenService.createJWTTokens(user);
+    this.logger.log(
+      `New tokens generated for user with id: ${user.id} after password change`,
+    );
+
+    this.emmitter.emit(MailEvent.PASSWORD_CHANGED, {
+      email: user.email,
+      firstname: user.firstname,
+    });
+    this.logger.log(
+      `Emitted event for sending password change notification email to user with id: ${user.id}`,
+    );
+    this.emmitter.emit(APP_EVENTS.SECURITY_ALERT, {
+      userId: user.id,
+      event: 'PASSWORD_CHANGED',
+    } as SecurityAlertPayload);
+
+    const result = plainToInstance(LoginResponseDto, {
+      access_token,
+      expires_at,
+      message: SUCCESS_MESSAGES.AUTH.PASSWORD_CHANGED,
+      // L3: `user.password` was reassigned above with the hash of the password
+      // the caller just typed, and this is the object being serialised — the
+      // exclusion (plus the DTO no longer declaring `password`) is what keeps
+      // it out of the body.
+      data: plainToInstance(UserResponseDto, user, {
+        excludeExtraneousValues: true,
+      }),
+    });
+    return { result, refreshToken: refresh_token };
+  }
+
+  /**
+   * G9: normalizes the frontend's `role` query param to a safe signup role.
+   * Only `customer` and `artisan` are recognized; anything else — including a
+   * missing param, which is what the login page sends — is `undefined`, so
+   * the complete-signup page asks instead of guessing. This can never produce
+   * ADMIN, regardless of input.
+   */
+  private normalizeSignupRole(role?: string | null): Role | undefined {
+    switch (role?.toLowerCase()) {
+      case 'artisan':
+        return Role.ARTISAN;
+      case 'customer':
+        return Role.CUSTOMER;
+      default:
+        return undefined;
+    }
+  }
+
+  /**
    * Initiate OAuth flow - Redirects user to provider
    * @param provider - Social provider name (google, facebook, github)
+   * @param role - G9: raw `role` query param from the signup page's role
+   *   toggle (`customer` | `artisan`), normalized and embedded into the CSRF
+   *   `state` so it survives the round trip to the provider and back.
+   *   Ignored entirely if the callback resolves to an existing account (G6).
    * @returns Authorization URL to redirect to
    */
-  async initiateOAuthFlow(provider: string): Promise<string> {
+  initiateOAuthFlow(provider: string, role?: string): Promise<string> {
     this.logger.log(`Initiating OAuth flow for provider: ${provider}`);
 
     const strategy = this.socialAuthStrategyFactory.getStrategy(provider);
-    
-    const state = this.oauthStateService.generateState(provider);
+
+    const signupRole = this.normalizeSignupRole(role);
+    const state = this.oauthStateService.generateState(provider, signupRole);
     this.logger.log(`OAuth state generated for ${provider}: ${state}`);
     const authUrl = strategy.getAuthorizationUrl(state);
-    
+
     this.logger.log(`OAuth authorization URL generated for ${provider}`);
-    return authUrl;
+    return Promise.resolve(authUrl);
   }
 
   /**
    * Handle OAuth callback - Complete the OAuth flow
    * @param provider - Social provider name
    * @param callbackDto - Callback data from provider
-   * @returns Login response with tokens
+   * @returns For an existing (or restored) account, `{ result, refreshToken }`
+   *   — the controller sets `refreshToken` as an httpOnly cookie and returns
+   *   only `result`, exactly like `loginUser()` (G3). For a brand-new user,
+   *   `{ pendingSignupKey }`: nothing is written to the database and no
+   *   tokens are issued until `completeSocialSignup` succeeds.
    */
   async handleOAuthCallback(
     provider: string,
     callbackDto: OAuthCallbackDto,
-  ): Promise<LoginResponseDto> {
+  ): Promise<OAuthCallbackOutcome> {
     const { code, state, error, error_description } = callbackDto;
 
-    // Handle OAuth errors
+    // Handle OAuth errors (e.g. the user denied/cancelled Google's consent screen)
     if (error) {
-      this.logger.error(`OAuth error from ${provider}: ${error} - ${error_description}`);
+      this.logger.error(
+        `OAuth error from ${provider}: ${error} - ${error_description}`,
+      );
       throw new UnauthorizedException(
         error_description || `Authentication failed with ${provider}`,
       );
     }
 
-    // Validate state for CSRF protection
-    if (!this.oauthStateService.validateState(state, provider)) {
+    // Validate (and consume) state for CSRF protection. This also rejects a
+    // duplicate/replayed callback hit, since a state can only be consumed once.
+    const stateData = this.oauthStateService.consumeState(state, provider);
+    if (!stateData) {
       this.logger.error(`Invalid OAuth state for provider: ${provider}`);
       throw new UnauthorizedException('Invalid or expired OAuth state');
+    }
+
+    if (!code) {
+      this.logger.error(`Missing OAuth authorization code for ${provider}`);
+      throw new BadRequestException('Missing OAuth authorization code');
     }
 
     this.logger.log(`Processing OAuth callback for provider: ${provider}`);
@@ -357,7 +888,9 @@ export class AuthService {
     this.logger.log(`Access token obtained from ${provider}`);
 
     const socialProfile = await strategy.getUserProfile(accessToken);
-    this.logger.log(`User profile retrieved from ${provider}: ${socialProfile.email}`);
+    // PR6: no address in the log — the profile has no JinVa id yet, and the
+    // provider id is just as identifying, so the line names the provider only.
+    this.logger.log(`User profile retrieved from ${provider}`);
 
     if (!socialProfile.email) {
       throw new BadRequestException('Email not provided by social provider');
@@ -366,50 +899,357 @@ export class AuthService {
     let user = await this.userService.findUserByEmail(socialProfile.email);
 
     if (user) {
+      // G6: an existing account is found by email — the role param (if any)
+      // is ignored entirely; it can only ever affect a brand-new account.
+      if (user.isBanned) {
+        this.logger.warn(
+          `Google sign-in refused for banned account: user ${user.id}`,
+        );
+        throw new AccountBannedException();
+      }
       user = await this.updateSocialLoginInfo(user, socialProfile);
     } else {
-      user = await this.registerSocialUser(socialProfile);
+      // C1.4: the recovery path must not be password-only. A Google-only
+      // account has a null password hash, so `POST /auth/restore-account` can
+      // never work for it — completing this OAuth flow *is* the proof of
+      // ownership, so restore it here.
+      //
+      // This also prevents a much worse outcome than a missing feature: with
+      // no restore attempted, `registerSocialUser` would try to insert a
+      // second row with an email that a soft-deleted row still holds under a
+      // unique constraint spanning deleted rows, and the owner's Google
+      // sign-in would fail with a constraint violation instead of getting
+      // their account back.
+      const restored = await this.restoreSoftDeletedForSocialLogin(
+        socialProfile.email,
+      );
+      if (!restored) {
+        // A brand-new user. Creating the account here used to mean guessing
+        // the role — CUSTOMER whenever the flow started from the login page —
+        // so an artisan who tapped Google there silently became a customer.
+        // Nothing is written now: the profile is parked until the user picks
+        // a role and fills in their details on the complete-signup page. If
+        // they abandon it, the entry expires and the next Google sign-in asks
+        // again.
+        const pendingSignupKey = this.pendingSocialSignupService.create({
+          email: socialProfile.email,
+          firstname: socialProfile.firstname,
+          lastname: socialProfile.lastname,
+          profilePicture: socialProfile.profilePicture,
+          provider: socialProfile.provider,
+          providerId: socialProfile.providerId,
+          suggestedRole:
+            stateData.role && SELF_REGISTERABLE_ROLES.includes(stateData.role)
+              ? stateData.role
+              : undefined,
+        });
+        this.logger.log(
+          `No account for this ${provider} profile — pending signup stored, awaiting role and details`,
+        );
+        return { pendingSignupKey };
+      }
+      user = restored;
     }
 
-    this.logger.log(`Generating tokens for social login user: ${user.email}`);
-    const { access_token, refresh_token, expires_at } = await this.userTokenService.createJWTTokens(user);
+    this.logger.log(
+      `Generating tokens for social login user with id: ${user.id}`,
+    );
+    const { access_token, refresh_token, expires_at } =
+      await this.userTokenService.createJWTTokens(user);
 
-    this.logger.log(`Social login successful for user: ${user.email}`);
+    this.logger.log(`Social login successful for user with id: ${user.id}`);
 
-    return plainToInstance(LoginResponseDto, {
+    const result = plainToInstance(LoginResponseDto, {
       access_token,
-      refresh_token,
       expires_at,
       message: SUCCESS_MESSAGES.AUTH.USER_LOGGED_IN,
-      data: plainToInstance(UserResponseDto, user),
+      data: plainToInstance(UserResponseDto, user, {
+        excludeExtraneousValues: true,
+      }),
+    });
+    return { result, refreshToken: refresh_token };
+  }
+
+  /**
+   * C1.4: restores a soft-deleted account whose owner has just completed the
+   * Google OAuth flow for it.
+   *
+   * The completed OAuth flow is the ownership proof, which is why no password
+   * is involved — this is the recovery path for the accounts that have no
+   * password to give (G5/G10). It reuses the same row-locked restore as the
+   * password path, so the window check, the purged-row refusal and the
+   * purge-race resolution are all identical.
+   *
+   * **Only an account with no usable password restores this way** (L1). The
+   * completed OAuth flow proves control of the *mailbox*, which is the right
+   * proof for an account whose only credential ever was that Google identity —
+   * and the wrong proof for an account that has a password. Without this check,
+   * whoever controlled the Google account for an address (a compromised
+   * session, or a Workspace administrator) could un-delete a JinVa account
+   * that only ever had a password and land fully signed in, which is exactly
+   * the scenario someone who deleted their account *because* their Google
+   * session was compromised is protecting themselves from. It also made the
+   * documented property "possession of the mailbox alone can never un-delete
+   * an account" untrue as written.
+   *
+   * Gated on the password column, **not** on `isSocialLogin`. That flag does
+   * not mean "was ever a social-login account": `handleOAuthCallback` resolves
+   * a Google profile against `findUserByEmail` and calls
+   * `updateSocialLoginInfo` for *any* live row it matches, which sets
+   * `isSocialLogin: true` on a password-only account that has never had
+   * anything to do with Google. So one Google sign-in against a live
+   * password-only account permanently pre-flags it, and the flag gate then
+   * passes after the owner deletes the account — which is the same sequence
+   * the finding describes, since the unwanted sign-in is *why* the owner
+   * deletes. The password column has no such pre-flagging equivalent: no
+   * social path ever writes a hash.
+   *
+   * Nothing is stranded by the tightening. An account that has a usable
+   * password — including a Google account that has since added one — recovers
+   * through the unchanged `POST /auth/restore-account` (email + password), or
+   * by signing in and using the pending-deletion banner, which is exactly what
+   * the refusal message tells its owner to do. An account with no password has
+   * no such route, which is why this path exists at all.
+   *
+   * The password presence is read with a dedicated query rather than off
+   * `deletedUser`: `User.password` is `select: false`, so the entity's
+   * `password` is `undefined` regardless of the column, and testing it here
+   * would pass for every account. A row that is no longer a restorable
+   * soft-deleted row (purged or restored concurrently) is refused too, so a
+   * lifecycle race cannot widen what this allows.
+   *
+   * A refused account is not touched: nothing is restored, no session is
+   * issued, and `registerSocialUser` is never reached, so no duplicate row is
+   * created for an address a soft-deleted row still holds.
+   *
+   * @returns The restored user, or `null` when there is no soft-deleted
+   *   account for this address (in which case the caller registers a new one).
+   * @throws {UnauthorizedException} When the soft-deleted account has a usable
+   *   password, or is no longer restorable at all (L1).
+   * @throws {AccountNotRestorableException} When the window has closed or the
+   *   row was already purged. The controller turns any callback failure into a
+   *   redirect back to the frontend, so this surfaces as a failed sign-in
+   *   rather than a raw error — see api-contract.md, which flags that a
+   *   dedicated `?error=` code for this case is a deliberate follow-up.
+   */
+  private async restoreSoftDeletedForSocialLogin(
+    email: string,
+  ): Promise<User | null> {
+    const deletedUser =
+      await this.userService.findSoftDeletedUserByEmail(email);
+    if (!deletedUser) return null;
+
+    const { found, hasPassword } =
+      await this.userService.getSoftDeletedPasswordState(deletedUser.id);
+
+    if (!found || hasPassword) {
+      this.logger.warn(
+        `Refused a Google restore of account ${deletedUser.id}: ` +
+          (hasPassword
+            ? `the account has a usable password, so completing the Google ` +
+              `flow is not proof of ownership for it`
+            : `the account is no longer a restorable soft-deleted row`),
+      );
+      throw new UnauthorizedException(
+        ERROR_MESSAGES.AUTH.SOCIAL_RESTORE_NOT_AVAILABLE,
+      );
+    }
+
+    this.logger.log(
+      `Restoring soft-deleted account ${deletedUser.id} via completed Google sign-in`,
+    );
+    const restored = await this.userService.restoreAccountById(deletedUser.id);
+
+    // Confirmation email only. Tokens are issued by `handleOAuthCallback`
+    // itself, exactly as for any other social login, so the restore doesn't
+    // fork the session-issuing path.
+    this.emmitter.emit(MailEvent.ACCOUNT_RESTORED, {
+      email: restored.email,
+      firstname: restored.firstname,
+    } satisfies AccountRestoredPayload);
+
+    return restored;
+  }
+
+  /**
+   * `GET /auth/social/pending`: what the complete-signup page prefills.
+   * Read-only — the entry stays put for the submit that follows.
+   *
+   * @throws {UnauthorizedException} `SOCIAL_SIGNUP_EXPIRED` when the key is
+   *   missing, unknown or past its TTL.
+   */
+  getPendingSocialSignup(
+    key: string | undefined,
+  ): PendingSocialSignupResponseDto {
+    const pending = this.pendingSocialSignupService.peek(key);
+    if (!pending) throw this.socialSignupExpired();
+
+    return {
+      message: SUCCESS_MESSAGES.AUTH.SOCIAL_SIGNUP_PENDING,
+      data: {
+        email: pending.email,
+        firstname: pending.firstname,
+        lastname: pending.lastname,
+        profilePicture: pending.profilePicture ?? null,
+        suggestedRole: pending.suggestedRole ?? null,
+        provider: pending.provider,
+      },
+    };
+  }
+
+  /**
+   * `POST /auth/social/complete`: creates the account a brand-new social user
+   * has just described, and signs them in exactly like `loginUser()`.
+   *
+   * The body has already passed the `ValidationPipe` by the time this runs,
+   * and the one check it cannot do (do the chosen services exist) runs here
+   * **before** the pending entry is touched — so a fixable mistake never
+   * costs the user their session. Only then is the entry taken (read and
+   * removed in one step, so a double submit cannot create two accounts).
+   *
+   * @throws {UnauthorizedException} `SOCIAL_SIGNUP_EXPIRED` — no live pending
+   *   signup for this key.
+   * @throws {BadRequestException} A selected service does not exist.
+   * @throws {UserAlreadyExists} The address was registered since the Google
+   *   flow started (a parallel signup); nothing is created.
+   */
+  async completeSocialSignup(
+    key: string | undefined,
+    dto: CompleteSocialSignupDto,
+  ): Promise<AuthTokenResult> {
+    const isArtisan = dto.role === Role.ARTISAN;
+
+    if (isArtisan && !(await this.userService.servicesExist(dto.serviceIds!))) {
+      throw new BadRequestException('One or more services were not found.');
+    }
+
+    const pending = this.pendingSocialSignupService.take(key);
+    if (!pending) throw this.socialSignupExpired();
+
+    // C1.6: spans soft-deleted rows, like `registerUser`'s check.
+    if (await this.userService.isEmailRegistered(pending.email)) {
+      this.logger.warn(
+        `Social signup refused: the address was registered while the signup was pending`,
+      );
+      throw new UserAlreadyExists(
+        ERROR_MESSAGES.USER.EMAIL_ALREADY_EXISTS(pending.email),
+      );
+    }
+
+    let user: User;
+    try {
+      user = await this.registerSocialUser(pending, dto);
+    } catch (err) {
+      // Nothing was committed (one transaction). Put the entry back so a
+      // fixable failure — typically a phone number already in use — can be
+      // corrected and resubmitted rather than sending the user back to Google.
+      this.pendingSocialSignupService.restore(key!, pending);
+      throw err;
+    }
+
+    const { access_token, refresh_token, expires_at } =
+      await this.userTokenService.createJWTTokens(user);
+    this.logger.log(`Social signup completed for user ${user.id}`);
+
+    const result = plainToInstance(LoginResponseDto, {
+      access_token,
+      expires_at,
+      message: SUCCESS_MESSAGES.AUTH.SOCIAL_SIGNUP_COMPLETED,
+      data: plainToInstance(UserResponseDto, user, {
+        excludeExtraneousValues: true,
+      }),
+    });
+    return { result, refreshToken: refresh_token };
+  }
+
+  /** `POST /auth/social/cancel`: drops the pending signup, if any. Idempotent. */
+  cancelSocialSignup(key: string | undefined): void {
+    this.pendingSocialSignupService.discard(key);
+  }
+
+  private socialSignupExpired(): UnauthorizedException {
+    return new UnauthorizedException({
+      errorCode: SOCIAL_SIGNUP_EXPIRED_ERROR_CODE,
+      message: ERROR_MESSAGES.AUTH.SOCIAL_SIGNUP_EXPIRED,
     });
   }
 
   /**
-   * Register a new user from social provider - PRIVATE HELPER
+   * Creates the account for a completed social signup - PRIVATE HELPER.
+   *
+   * The role is the one the user explicitly picked on the complete-signup
+   * page — there is no default any more. `CompleteSocialSignupDto` only admits
+   * CUSTOMER or ARTISAN; re-checked here as defense in depth so this method
+   * can never produce an ADMIN account regardless of what reaches it (G9).
+   *
+   * The user row, its role profile and (for an artisan) the filled-in profile
+   * with its services are written in one transaction, so a failure leaves
+   * nothing behind.
    */
-  private async registerSocialUser(socialProfile: SocialUserProfile): Promise<User> {
-    this.logger.log(`Registering new social user: ${socialProfile.email}`);
+  private async registerSocialUser(
+    pending: PendingSocialSignup,
+    dto: CompleteSocialSignupDto,
+  ): Promise<User> {
+    if (!SELF_REGISTERABLE_ROLES.includes(dto.role)) {
+      throw new BadRequestException(ERROR_MESSAGES.AUTH.ROLE_NOT_ALLOWED);
+    }
+    this.logger.log(`Registering new social user from ${pending.provider}`);
 
-      const createUserDto = plainToInstance(CreateUserDto, {
-    email: socialProfile.email,
-    firstname: socialProfile.firstname,
-    lastname: socialProfile.lastname,
-    profilePicture: socialProfile.profilePicture,
-    socialProvider: socialProfile.provider,
-    socialProviderId: socialProfile.providerId,
-    isSocialLogin: true,
-  });
+    const createUserDto = plainToInstance(CreateUserDto, {
+      email: pending.email,
+      firstname: dto.firstname.trim(),
+      lastname: dto.lastname.trim(),
+      phoneNumber: dto.phoneNumber,
+      gender: dto.gender,
+      dateOfBirth: dto.dateOfBirth,
+      profilePicture: pending.profilePicture,
+      socialProvider: pending.provider,
+      socialProviderId: pending.providerId,
+      isSocialLogin: true,
+      role: dto.role,
+      // G5: no `password` — Google never supplies one, and the column is
+      // nullable. It stays null until the user sets a real one via
+      // change-password or the forgot/reset-password flow (G10).
+    });
 
-    const { data: user } = await this.userService.createUser(createUserDto);
+    const { data: user } = await this.userService.createUserInTransaction(
+      createUserDto,
+      {
+        // G10: Google already verifies the address as a condition of returning
+        // it in the OAuth profile, so trust it — consistent with G6. Passed as
+        // an option rather than a `CreateUserDto` field: that DTO is also bound
+        // to the public register endpoint, where an `accountVerified` override
+        // would let a normal signup skip email verification. Without it, a
+        // Google-only account would stay unverified forever (no verification
+        // email is ever sent for one), and the S4 gate would block password
+        // login even after the user set a password via Forgot Password.
+        verifiedAt: new Date(),
+        artisanProfile:
+          dto.role === Role.ARTISAN
+            ? {
+                // B1: optional; blank or absent is stored as null.
+                bio: dto.bio?.trim() || null,
+                hourlyRate: dto.hourlyRate!,
+                location: dto.location!.trim(),
+                serviceIds: dto.serviceIds!,
+                businessName: dto.businessName?.trim() || undefined,
+                // The column only admits positive values; "0 years" is the
+                // same thing as not saying.
+                experienceYears: dto.experienceYears || undefined,
+              }
+            : undefined,
+      },
+    );
 
-    this.logger.log(`Social user registered: ${user.email}`);
-    
+    this.logger.log(`Social user registered: user ${user.id}`);
+
     this.emmitter.emit(MailEvent.SOCIAL_USER_REGISTERED, {
       email: user.email,
       firstname: user.firstname,
-      provider: socialProfile.provider,
+      provider: pending.provider,
     });
+
+    this.emitIfArtisan(user);
 
     return user;
   }
@@ -423,14 +1263,32 @@ export class AuthService {
   ): Promise<User> {
     // Only update if not already a social user or if profile picture is missing
     if (!user.isSocialLogin || !user.profilePicture) {
-        this.userService.updateUserData(user.id, {
-        socialProvider: socialProfile.provider,
-        socialProviderId: socialProfile.providerId,
-        isSocialLogin: true,
-        profilePicture: user.profilePicture || socialProfile.profilePicture,
-      });
+      // Fixed: this write used to be fire-and-forget (no await, no .catch()).
+      // handleOAuthCallback() resolved (tokens issued, login "succeeds")
+      // before this settled, so a real rejection (DB blip, deadlock, etc.)
+      // became an unhandled promise rejection — which crashes the entire
+      // Node process by default (verified against this project's Node 22
+      // runtime), taking the whole API down for every user on any existing
+      // user's Google re-login, not just the one mid-login. Now awaited and
+      // log-and-swallowed: a failure here is a non-fatal profile-sync
+      // hiccup, never something that should block login or crash the
+      // process. See docs/team/google-oauth-fix/qa-report.md ([MAJOR]) and
+      // security-report.md ([LOW]).
+      try {
+        await this.userService.updateUserData(user.id, {
+          socialProvider: socialProfile.provider,
+          socialProviderId: socialProfile.providerId,
+          isSocialLogin: true,
+          profilePicture: user.profilePicture || socialProfile.profilePicture,
+        });
+      } catch (err) {
+        this.logger.warn(
+          `Non-fatal: failed to sync social login profile info for user ${user.id}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
     }
     return user;
   }
-
 }

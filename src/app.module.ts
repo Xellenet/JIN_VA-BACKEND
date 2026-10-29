@@ -18,7 +18,6 @@ import { JobsModule } from './jobs/jobs.module';
 import { ArtisansModule } from './artisans/artisans.module';
 import { FavouritesModule } from './favourites/favourites.module';
 import { MessagesModule } from './messages/messages.module';
-import { DirectMessagesModule } from './direct-messages/direct-messages.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { AvailabilityModule } from './availability/availability.module';
 import { VerificationModule } from './verification/verification.module';
@@ -29,12 +28,19 @@ import { UploadsModule } from './uploads/uploads.module';
 import { PushNotificationsModule } from './push-notifications/push-notifications.module';
 import { DisputesModule } from './disputes/disputes.module';
 import { PaymentsModule } from './payments/payments.module';
+import { PortfolioModule } from './portfolio/portfolio.module';
+import { AdminAuditModule } from './admin-audit/admin-audit.module';
+import { AnalyticsModule } from './analytics/analytics.module';
+import { LocationsModule } from './locations/locations.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      load: [appConfig]
+      load: [appConfig],
+      // Tests get their whole configuration from the test setup, never from a
+      // developer's .env, so they behave the same locally and in a pipeline.
+      ignoreEnvFile: process.env.NODE_ENV === 'test',
     }),
     TypeOrmModule.forRootAsync(typeOrmConfigAsync),
     WinstonModule.forRoot(winstonConfig),
@@ -48,8 +54,12 @@ import { PaymentsModule } from './payments/payments.module';
     JobsModule,
     ArtisansModule,
     FavouritesModule,
+    // MB1: `MessagesModule` is the platform's single messaging backend. The
+    // former `DirectMessagesModule` was retired here — running both meant the
+    // frontend talked to the one that emitted no events, so sending a message
+    // notified nobody. Re-registering a second messaging module would
+    // reintroduce exactly that bug.
     MessagesModule,
-    DirectMessagesModule,
     NotificationsModule,
     AvailabilityModule,
     VerificationModule,
@@ -60,6 +70,15 @@ import { PaymentsModule } from './payments/payments.module';
     PushNotificationsModule,
     DisputesModule,
     PaymentsModule,
+    PortfolioModule,
+    // AT5: leaf module owning the append-only `admin_actions` log. Imported by
+    // every module that performs an auditable admin action.
+    AdminAuditModule,
+    // AN1: PRD §7's AnalyticsModule — `GET /analytics/artisan` (own data only)
+    // and `GET /admin/analytics` (admin-only).
+    AnalyticsModule,
+    // LOC10: public `GET /locations/suggestions` (Photon proxy, no personal data).
+    LocationsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

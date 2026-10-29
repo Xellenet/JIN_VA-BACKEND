@@ -1,6 +1,8 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class CreateArtisanVerifications1782800000000 implements MigrationInterface {
+export class CreateArtisanVerifications1782800000000
+  implements MigrationInterface
+{
   name = 'CreateArtisanVerifications1782800000000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

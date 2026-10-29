@@ -1,4 +1,4 @@
-import { Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
+import { Injectable, BadGatewayException, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
 
@@ -25,7 +25,10 @@ export class PaystackService {
     };
   }
 
-  private async post<T>(path: string, body: Record<string, unknown>): Promise<T> {
+  private async post<T>(
+    path: string,
+    body: Record<string, unknown>,
+  ): Promise<T> {
     const res = await fetch(`${this.baseUrl}${path}`, {
       method: 'POST',
       headers: this.headers,
@@ -34,25 +37,51 @@ export class PaystackService {
     const json = (await res.json()) as PaystackResponse<T>;
     if (!json.status) {
       this.logger.error(`Paystack POST ${path} failed: ${json.message}`);
-      throw new InternalServerErrorException(`Payment provider error: ${json.message}`);
+      // QA PAY-13: a refusal by Paystack is an upstream failure (502), not a
+      // bug in JinVa (500); the message says what Paystack said.
+      throw new BadGatewayException(
+        `The payment provider couldn't complete this: ${json.message}`,
+      );
     }
     return json.data;
   }
 
   private async get<T>(path: string): Promise<T> {
-    const res = await fetch(`${this.baseUrl}${path}`, { headers: this.headers });
+    const res = await fetch(`${this.baseUrl}${path}`, {
+      headers: this.headers,
+    });
     const json = (await res.json()) as PaystackResponse<T>;
     if (!json.status) {
       this.logger.error(`Paystack GET ${path} failed: ${json.message}`);
-      throw new InternalServerErrorException(`Payment provider error: ${json.message}`);
+      // QA PAY-13: a refusal by Paystack is an upstream failure (502), not a
+      // bug in JinVa (500); the message says what Paystack said.
+      throw new BadGatewayException(
+        `The payment provider couldn't complete this: ${json.message}`,
+      );
     }
     return json.data;
   }
 
-  /** Verify that a webhook request genuinely came from Paystack */
+  /**
+   * Verify that a webhook request genuinely came from Paystack.
+   *
+   * security-report.md finding #7: uses `crypto.timingSafeEqual` rather than
+   * `===`, which short-circuits on the first differing character — a
+   * textbook timing side-channel shape for a signature comparison that MUST
+   * NOT be forgeable.
+   */
   verifyWebhookSignature(rawBody: string, signature: string): boolean {
-    const hash = crypto.createHmac('sha512', this.secretKey).update(rawBody).digest('hex');
-    return hash === signature;
+    const hash = crypto
+      .createHmac('sha512', this.secretKey)
+      .update(rawBody)
+      .digest('hex');
+
+    const expected = Buffer.from(hash, 'hex');
+    const provided = Buffer.from(signature ?? '', 'hex');
+    return (
+      expected.length === provided.length &&
+      crypto.timingSafeEqual(expected, provided)
+    );
   }
 
   /**

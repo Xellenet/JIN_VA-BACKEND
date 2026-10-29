@@ -1,6 +1,8 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class AddCompletionRequestedAtConstraint1781700001000 implements MigrationInterface {
+export class AddCompletionRequestedAtConstraint1781700001000
+  implements MigrationInterface
+{
   name = 'AddCompletionRequestedAtConstraint1781700001000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

@@ -25,6 +25,7 @@ import {
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { OptionalJwtAuthGuard } from '../auth/guards/optional-jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '@common/decorators/roles.decorator';
 import { Role } from '@common/types/enums';
@@ -33,6 +34,7 @@ import { GetArtisansQueryDto } from './dto/get-artisans-query.dto';
 import { ArtisanPublicResponseDto } from './dto/artisan-public-response.dto';
 import { UpdateArtisanProfileDto } from '@users/dto/update-artisan-profile.dto';
 import { ArtisanProfileResponseDto } from '@users/dto/artisan-profile-response.dto';
+import type { AuthenticatedRequest } from '@common/types/authenticated-request.type';
 
 /**
  * Public-facing artisan discovery and authenticated artisan self-management.
@@ -59,7 +61,10 @@ export class ArtisansController {
    */
   @Get()
   @ApiOperation({ summary: 'Search artisans (public)' })
-  @ApiOkResponse({ description: 'Paginated artisan profiles', type: [ArtisanPublicResponseDto] })
+  @ApiOkResponse({
+    description: 'Paginated artisan profiles',
+    type: [ArtisanPublicResponseDto],
+  })
   search(@Query() query: GetArtisansQueryDto) {
     return this.artisansService.search(query);
   }
@@ -73,10 +78,17 @@ export class ArtisansController {
    */
   @Get(':id')
   @ApiOperation({ summary: 'Get a public artisan profile by ID' })
-  @ApiOkResponse({ description: 'Artisan profile retrieved', type: ArtisanPublicResponseDto })
+  @ApiOkResponse({
+    description: 'Artisan profile retrieved',
+    type: ArtisanPublicResponseDto,
+  })
   @ApiNotFoundResponse({ description: 'Artisan profile not found' })
-  findById(@Param('id', ParseIntPipe) id: number) {
-    return this.artisansService.findById(id);
+  @UseGuards(OptionalJwtAuthGuard)
+  findById(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
+    return this.artisansService.findById(id, req.user);
   }
 
   // ─── Authenticated artisan self-management ─────────────────────────────────
@@ -99,10 +111,18 @@ export class ArtisansController {
   @Roles(Role.ARTISAN)
   @ApiBearerAuth()
   @ApiOperation({ summary: "Update the authenticated artisan's own profile" })
-  @ApiOkResponse({ description: 'Profile updated', type: ArtisanProfileResponseDto })
+  @ApiOkResponse({
+    description: 'Profile updated',
+    type: ArtisanProfileResponseDto,
+  })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
-  @ApiForbiddenResponse({ description: 'Caller does not have the ARTISAN role' })
-  updateMe(@Req() req: any, @Body() dto: UpdateArtisanProfileDto) {
+  @ApiForbiddenResponse({
+    description: 'Caller does not have the ARTISAN role',
+  })
+  updateMe(
+    @Req() req: AuthenticatedRequest,
+    @Body() dto: UpdateArtisanProfileDto,
+  ) {
     return this.artisansService.updateMe(req.user.id, dto);
   }
 
@@ -121,13 +141,21 @@ export class ArtisansController {
   @ApiBearerAuth()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Add a service to the artisan profile' })
-  @ApiOkResponse({ description: 'Service added', type: ArtisanProfileResponseDto })
+  @ApiOkResponse({
+    description: 'Service added',
+    type: ArtisanProfileResponseDto,
+  })
   @ApiCreatedResponse({ description: 'Service added to profile' })
   @ApiNotFoundResponse({ description: 'Artisan profile or service not found' })
   @ApiConflictResponse({ description: 'Service is already on the profile' })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
-  @ApiForbiddenResponse({ description: 'Caller does not have the ARTISAN role' })
-  addService(@Req() req: any, @Param('serviceId', ParseIntPipe) serviceId: number) {
+  @ApiForbiddenResponse({
+    description: 'Caller does not have the ARTISAN role',
+  })
+  addService(
+    @Req() req: AuthenticatedRequest,
+    @Param('serviceId', ParseIntPipe) serviceId: number,
+  ) {
     return this.artisansService.addService(req.user.id, serviceId);
   }
 
@@ -144,11 +172,19 @@ export class ArtisansController {
   @ApiBearerAuth()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Remove a service from the artisan profile' })
-  @ApiOkResponse({ description: 'Service removed', type: ArtisanProfileResponseDto })
+  @ApiOkResponse({
+    description: 'Service removed',
+    type: ArtisanProfileResponseDto,
+  })
   @ApiNotFoundResponse({ description: 'Artisan profile not found' })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
-  @ApiForbiddenResponse({ description: 'Caller does not have the ARTISAN role' })
-  removeService(@Req() req: any, @Param('serviceId', ParseIntPipe) serviceId: number) {
+  @ApiForbiddenResponse({
+    description: 'Caller does not have the ARTISAN role',
+  })
+  removeService(
+    @Req() req: AuthenticatedRequest,
+    @Param('serviceId', ParseIntPipe) serviceId: number,
+  ) {
     return this.artisansService.removeService(req.user.id, serviceId);
   }
 }

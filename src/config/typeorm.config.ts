@@ -1,5 +1,6 @@
-import { ConfigModule, ConfigService } from "@nestjs/config";
-import { TypeOrmModuleAsyncOptions } from "@nestjs/typeorm";
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { TypeOrmModuleAsyncOptions } from '@nestjs/typeorm';
+import { ParameterlessQueryLogger } from './typeorm-logger';
 
 export const typeOrmConfigAsync: TypeOrmModuleAsyncOptions = {
   imports: [ConfigModule],
@@ -15,6 +16,12 @@ export const typeOrmConfigAsync: TypeOrmModuleAsyncOptions = {
     synchronize: false,
     migrations: [__dirname + '/../migrations/*{.ts,.js}'],
     migrationsRun: true,
-    logging: config.get('NODE_ENV') !== 'production' ? ['error', 'warn', 'schema'] : false,
+    // Same levels as before; failed queries are logged without their
+    // parameter values (PR5/PR6).
+    logger: new ParameterlessQueryLogger(
+      config.get('NODE_ENV') !== 'production'
+        ? ['error', 'warn', 'schema']
+        : false,
+    ),
   }),
 };

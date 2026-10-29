@@ -13,8 +13,16 @@ export const winstonConfig = {
           format: winston.format.combine(
             winston.format.colorize({ all: true }),
             winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
-            winston.format.printf(({ level, message, timestamp, context }) => {
-              return `[${timestamp}] ${level} ${context ? `[${context}]` : ''}: ${message}`;
+            winston.format.printf((info) => {
+              const { level, message, timestamp, context } = info as {
+                level: string;
+                message: unknown;
+                timestamp: unknown;
+                context?: string;
+              };
+              return `[${String(timestamp)}] ${level} ${
+                context ? `[${context}]` : ''
+              }: ${String(message)}`;
             }),
           ),
         }),

@@ -7,6 +7,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import { Role } from '@common/types/enums';
 import { ROLES_KEY } from '@common/decorators/roles.decorator';
+import type { AuthenticatedRequest } from '@common/types/authenticated-request.type';
 
 /**
  * Guard that enforces role-based access control (RBAC) on route handlers.
@@ -39,7 +40,7 @@ export class RolesGuard implements CanActivate {
       return true;
     }
 
-    const { user } = context.switchToHttp().getRequest();
+    const { user } = context.switchToHttp().getRequest<AuthenticatedRequest>();
 
     if (!requiredRoles.some((role) => user?.role === role)) {
       throw new ForbiddenException(

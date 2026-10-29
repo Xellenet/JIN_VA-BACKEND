@@ -1,6 +1,8 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class AddVerificationRejectedNotificationColumn1782810000000 implements MigrationInterface {
+export class AddVerificationRejectedNotificationColumn1782810000000
+  implements MigrationInterface
+{
   name = 'AddVerificationRejectedNotificationColumn1782810000000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
