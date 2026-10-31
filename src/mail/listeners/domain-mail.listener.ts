@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { formatBookingDate } from '@common/utils/booking-date.util';
 import { OnEvent } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Not, Repository } from 'typeorm';
@@ -205,7 +206,7 @@ export class DomainMailListener {
       await this.mailService.sendMail(user.email, APP_EVENTS.BOOKING_RECEIVED, {
         firstname: user.firstname,
         customerName: payload.customerName,
-        scheduledDate: payload.scheduledDate,
+        scheduledDate: formatBookingDate(payload.scheduledDate),
         bookingId: payload.bookingId,
         dashboardUrl: this.dashboardUrl,
         appName: this.appName,
@@ -238,7 +239,7 @@ export class DomainMailListener {
         {
           firstname: user.firstname,
           artisanName: payload.artisanName,
-          scheduledDate: payload.scheduledDate,
+          scheduledDate: formatBookingDate(payload.scheduledDate),
           bookingId: payload.bookingId,
           dashboardUrl: this.dashboardUrl,
           appName: this.appName,
@@ -268,7 +269,7 @@ export class DomainMailListener {
       await this.mailService.sendMail(user.email, APP_EVENTS.BOOKING_DECLINED, {
         firstname: user.firstname,
         artisanName: payload.artisanName,
-        scheduledDate: payload.scheduledDate,
+        scheduledDate: formatBookingDate(payload.scheduledDate),
         bookingId: payload.bookingId,
         dashboardUrl: this.dashboardUrl,
         appName: this.appName,
@@ -302,7 +303,7 @@ export class DomainMailListener {
         {
           firstname: user.firstname,
           customerName: payload.customerName,
-          scheduledDate: payload.scheduledDate,
+          scheduledDate: formatBookingDate(payload.scheduledDate),
           bookingId: payload.bookingId,
           appName: this.appName,
           year: this.year,
@@ -335,7 +336,7 @@ export class DomainMailListener {
         APP_EVENTS.BOOKING_COMPLETED,
         {
           firstname: user.firstname,
-          scheduledDate: payload.scheduledDate,
+          scheduledDate: formatBookingDate(payload.scheduledDate),
           bookingId: payload.bookingId,
           appName: this.appName,
           year: this.year,
@@ -363,7 +364,7 @@ export class DomainMailListener {
       if (!user) return;
       await this.mailService.sendMail(user.email, APP_EVENTS.BOOKING_EXPIRED, {
         firstname: user.firstname,
-        scheduledDate: payload.scheduledDate,
+        scheduledDate: formatBookingDate(payload.scheduledDate),
         bookingId: payload.bookingId,
         appName: this.appName,
         year: this.year,
@@ -391,7 +392,7 @@ export class DomainMailListener {
       await this.mailService.sendMail(user.email, APP_EVENTS.BOOKING_NO_SHOW, {
         firstname: user.firstname,
         flaggedByName: payload.flaggedByName,
-        scheduledDate: payload.scheduledDate,
+        scheduledDate: formatBookingDate(payload.scheduledDate),
         bookingId: payload.bookingId,
         appName: this.appName,
         year: this.year,
@@ -435,7 +436,7 @@ export class DomainMailListener {
           : APP_EVENTS.BOOKING_REMINDER_2H;
       await this.mailService.sendMail(user.email, eventKey, {
         firstname: user.firstname,
-        scheduledDate: payload.scheduledDate,
+        scheduledDate: formatBookingDate(payload.scheduledDate),
         startTime: payload.startTime.slice(0, 5),
         bookingId: payload.bookingId,
         hoursOut: payload.milestone === '24H' ? '24 hours' : '2 hours',

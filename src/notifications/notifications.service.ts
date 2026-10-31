@@ -1,4 +1,5 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { formatBookingDate } from '@common/utils/booking-date.util';
 import { InjectRepository } from '@nestjs/typeorm';
 import { OnEvent } from '@nestjs/event-emitter';
 import { plainToInstance } from 'class-transformer';
@@ -382,7 +383,7 @@ export class NotificationsService {
       payload.artisanUserId,
       NotificationType.BOOKING_RECEIVED,
       'New Booking Request',
-      `${payload.customerName} has requested a booking on ${payload.scheduledDate}.`,
+      `${payload.customerName} has requested a booking on ${formatBookingDate(payload.scheduledDate)}.`,
       { bookingId: payload.bookingId },
     );
   }
@@ -393,7 +394,7 @@ export class NotificationsService {
       payload.customerId,
       NotificationType.BOOKING_CONFIRMED,
       'Booking Confirmed',
-      `Your booking on ${payload.scheduledDate} has been confirmed by ${payload.artisanName}.`,
+      `Your booking on ${formatBookingDate(payload.scheduledDate)} has been confirmed by ${payload.artisanName}.`,
       { bookingId: payload.bookingId },
     );
   }
@@ -404,7 +405,7 @@ export class NotificationsService {
       payload.customerId,
       NotificationType.BOOKING_DECLINED,
       'Booking Declined',
-      `Your booking request on ${payload.scheduledDate} was declined by ${payload.artisanName}.`,
+      `Your booking request on ${formatBookingDate(payload.scheduledDate)} was declined by ${payload.artisanName}.`,
       { bookingId: payload.bookingId },
     );
   }
@@ -415,7 +416,7 @@ export class NotificationsService {
       payload.artisanUserId,
       NotificationType.BOOKING_CANCELLED,
       'Booking Cancelled',
-      `${payload.customerName} cancelled the booking on ${payload.scheduledDate}.`,
+      `${payload.customerName} cancelled the booking on ${formatBookingDate(payload.scheduledDate)}.`,
       { bookingId: payload.bookingId },
     );
   }
@@ -426,7 +427,7 @@ export class NotificationsService {
       payload.artisanUserId,
       NotificationType.BOOKING_COMPLETED,
       'Booking Marked Complete',
-      `The booking on ${payload.scheduledDate} was marked as completed by the customer.`,
+      `The booking on ${formatBookingDate(payload.scheduledDate)} was marked as completed by the customer.`,
       { bookingId: payload.bookingId },
     );
   }
@@ -437,7 +438,7 @@ export class NotificationsService {
       payload.customerId,
       NotificationType.BOOKING_EXPIRED,
       'Booking Request Expired',
-      `Your booking request for ${payload.scheduledDate} expired without a response from the artisan.`,
+      `Your booking request for ${formatBookingDate(payload.scheduledDate)} expired without a response from the artisan.`,
       { bookingId: payload.bookingId },
     );
   }
@@ -448,7 +449,7 @@ export class NotificationsService {
       payload.recipientUserId,
       NotificationType.BOOKING_NO_SHOW,
       'No-Show Reported',
-      `${payload.flaggedByName} reported you as a no-show for the ${payload.scheduledDate} appointment.`,
+      `${payload.flaggedByName} reported you as a no-show for the ${formatBookingDate(payload.scheduledDate)} appointment.`,
       { bookingId: payload.bookingId },
     );
   }
@@ -469,7 +470,7 @@ export class NotificationsService {
       payload.recipientUserId,
       NotificationType.BOOKING_REMINDER,
       'Upcoming Appointment Reminder',
-      `Reminder: you have an appointment on ${payload.scheduledDate} at ${payload.startTime.slice(0, 5)}, in about ${hours}.`,
+      `Reminder: you have an appointment on ${formatBookingDate(payload.scheduledDate)} at ${payload.startTime.slice(0, 5)}, in about ${hours}.`,
       { bookingId: payload.bookingId, milestone: payload.milestone },
     );
   }

@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { formatBookingDate } from '@common/utils/booking-date.util';
 import { OnEvent } from '@nestjs/event-emitter';
 import { PushNotificationsService } from '../push-notifications.service';
 import { APP_EVENTS } from '@common/events/app.events';
@@ -47,7 +48,7 @@ export class PushNotificationsListener {
   async onBookingReceived(payload: BookingReceivedPayload): Promise<void> {
     await this.safe(payload.artisanUserId, {
       title: 'New Booking Request',
-      body: `${payload.customerName} wants to book you for ${payload.scheduledDate}`,
+      body: `${payload.customerName} wants to book you for ${formatBookingDate(payload.scheduledDate)}`,
       data: {
         type: APP_EVENTS.BOOKING_RECEIVED,
         bookingId: String(payload.bookingId),
@@ -59,7 +60,7 @@ export class PushNotificationsListener {
   async onBookingConfirmed(payload: BookingConfirmedPayload): Promise<void> {
     await this.safe(payload.customerId, {
       title: 'Booking Confirmed',
-      body: `${payload.artisanName} confirmed your booking for ${payload.scheduledDate}`,
+      body: `${payload.artisanName} confirmed your booking for ${formatBookingDate(payload.scheduledDate)}`,
       data: {
         type: APP_EVENTS.BOOKING_CONFIRMED,
         bookingId: String(payload.bookingId),
@@ -71,7 +72,7 @@ export class PushNotificationsListener {
   async onBookingDeclined(payload: BookingDeclinedPayload): Promise<void> {
     await this.safe(payload.customerId, {
       title: 'Booking Declined',
-      body: `${payload.artisanName} could not accept your booking for ${payload.scheduledDate}`,
+      body: `${payload.artisanName} could not accept your booking for ${formatBookingDate(payload.scheduledDate)}`,
       data: {
         type: APP_EVENTS.BOOKING_DECLINED,
         bookingId: String(payload.bookingId),
@@ -83,7 +84,7 @@ export class PushNotificationsListener {
   async onBookingCancelled(payload: BookingCancelledPayload): Promise<void> {
     await this.safe(payload.artisanUserId, {
       title: 'Booking Cancelled',
-      body: `${payload.customerName} cancelled the booking scheduled for ${payload.scheduledDate}`,
+      body: `${payload.customerName} cancelled the booking scheduled for ${formatBookingDate(payload.scheduledDate)}`,
       data: {
         type: APP_EVENTS.BOOKING_CANCELLED,
         bookingId: String(payload.bookingId),
@@ -95,7 +96,7 @@ export class PushNotificationsListener {
   async onBookingCompleted(payload: BookingCompletedPayload): Promise<void> {
     await this.safe(payload.artisanUserId, {
       title: 'Booking Completed',
-      body: `Your booking on ${payload.scheduledDate} has been marked as completed.`,
+      body: `Your booking on ${formatBookingDate(payload.scheduledDate)} has been marked as completed.`,
       data: {
         type: APP_EVENTS.BOOKING_COMPLETED,
         bookingId: String(payload.bookingId),
