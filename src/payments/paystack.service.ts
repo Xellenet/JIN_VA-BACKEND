@@ -95,6 +95,11 @@ export class PaystackService {
     reference: string;
     callbackUrl?: string;
     metadata?: Record<string, unknown>;
+    /**
+     * B5c: the checkout channels in display order. Sent only when defined, so
+     * a customer with no saved preference gets exactly today's payload.
+     */
+    channels?: string[];
   }) {
     return this.post<{
       authorization_url: string;
@@ -107,6 +112,7 @@ export class PaystackService {
       currency: 'GHS',
       callback_url: params.callbackUrl,
       metadata: params.metadata ?? {},
+      ...(params.channels ? { channels: [...params.channels] } : {}),
     });
   }
 

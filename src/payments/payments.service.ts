@@ -21,6 +21,8 @@ import {
   PayoutType,
 } from '@common/types/enums';
 import { AdminAuditService } from '../admin-audit/admin-audit.service';
+import { CustomerPaymentSettings } from '../payment-settings/entities/customer-payment-settings.entity';
+import { orderCheckoutChannels } from '../payment-settings/checkout-channels';
 import { APP_EVENTS } from '@common/events/app.events';
 import type {
   PaymentReceiptPayload,
@@ -553,6 +555,33 @@ export class PaymentsService {
    * payment. Reusing the existing session avoids both risks entirely and
    * keeps `reference` a true 1:1, immutable key for the life of the row.
    */
+  /**
+   * B5c: the checkout channels for the customer's stored preference, with the
+   * preferred one first, or `undefined` when there is no preference. Reading
+   * the preference must never stop a payment: any error is logged without
+   * personal data and checkout proceeds as if nothing were saved (AC-5.6).
+   */
+  private async checkoutChannelsFor(
+    customerId: number,
+  ): Promise<string[] | undefined> {
+    try {
+      const settings = await this.dataSource
+        .getRepository(CustomerPaymentSettings)
+        .findOne({
+          where: { userId: customerId },
+          select: { id: true, preferredChannel: true },
+        });
+      return orderCheckoutChannels(settings?.preferredChannel ?? null);
+    } catch (err) {
+      this.logger.warn(
+        `Could not read checkout preference; using the default channels (${
+          (err as Error)?.name ?? 'Error'
+        })`,
+      );
+      return undefined;
+    }
+  }
+
   async initializePayment(customerId: number, jobId: number) {
     const payment = await this.repo.findOne({
       where: { jobId, customerId, status: PaymentStatus.PENDING },
@@ -581,6 +610,8 @@ export class PaymentsService {
       where: { id: customerId },
     });
 
+    const channels = await this.checkoutChannelsFor(customerId);
+
     let result: {
       authorization_url: string;
       access_code: string;
@@ -593,6 +624,9 @@ export class PaymentsService {
         reference: payment.reference,
         callbackUrl: this.config.get('PAYSTACK_CALLBACK_URL'),
         metadata: { jobId: payment.jobId, customerId, paymentId: payment.id },
+        // B5c: only when the customer saved a preference. Without one the
+        // Paystack payload carries no `channels` key, exactly as before.
+        ...(channels ? { channels } : {}),
       });
     } catch (err) {
       // requirements.md API-needs item #7 / qa-report.md's own suggested

@@ -37,4 +37,22 @@ export const THROTTLER_NAMES = {
    * practically huntable.
    */
   DISPUTE_WRITE: 'dispute-write',
+  /**
+   * Customer Experience v2: the customer's read-only aggregates (job summary,
+   * overview rail, spending analytics, paginated payment history and its
+   * filter options). Each query is a handful of aggregates scoped to the
+   * caller, so the limit only stops a script from hammering them.
+   */
+  CUSTOMER_ANALYTICS: 'customer-analytics',
+  /** `GET /payments/history/export.csv`: a streamed export of up to 10,000 rows. */
+  CUSTOMER_EXPORT: 'customer-export',
+  /** `PATCH /users/me/payment-settings`. */
+  PAYMENT_SETTINGS_WRITE: 'payment-settings-write',
+  /**
+   * The profile-photo writes: `POST /users/me/avatar`, `POST /uploads/avatar`
+   * and `DELETE /users/me/avatar`. Each upload costs storage and processing.
+   */
+  PROFILE_MEDIA_WRITE: 'profile-media-write',
+  /** `GET /notifications/:id`. */
+  NOTIFICATION_READ: 'notification-read',
 } as const;

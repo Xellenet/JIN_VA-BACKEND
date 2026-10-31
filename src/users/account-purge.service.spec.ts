@@ -391,9 +391,26 @@ describe('AccountPurgeService (C1.7/C1.8)', () => {
       expect(profilePayload!.isProfileComplete).toBe(false);
     });
 
-    it('deletes the residual tokens, push devices and saved addresses', async () => {
+    it('deletes the residual tokens, push devices, saved addresses, payment settings and security events', async () => {
       await runPurge();
-      expect(mockQueryBuilder.delete).toHaveBeenCalledTimes(3);
+      expect(mockQueryBuilder.delete).toHaveBeenCalledTimes(5);
+    });
+
+    // T-9 / SEC-37 (Customer Experience v2): both new tables are purged, by
+    // the raw `user_id` column like every other residual table.
+    it('deletes the customer payment settings and account security events', async () => {
+      await runPurge();
+
+      const deletedFrom = allArgs<{ name: string } | undefined>(
+        mockQueryBuilder.from,
+        0,
+      ).map((entity) => entity?.name);
+      expect(deletedFrom).toEqual(
+        expect.arrayContaining([
+          'CustomerPaymentSettings',
+          'AccountSecurityEvent',
+        ]),
+      );
     });
 
     /**
@@ -603,8 +620,10 @@ describe('AccountPurgeService (C1.7/C1.8)', () => {
       expect(touchedEntities).not.toContain('Job');
       expect(touchedEntities).not.toContain('Booking');
       expect(touchedEntities.sort()).toEqual([
+        'AccountSecurityEvent',
         'Address',
         'ArtisanProfile',
+        'CustomerPaymentSettings',
         'CustomerProfile',
         'DeviceToken',
         'UserToken',

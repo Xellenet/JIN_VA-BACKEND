@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  Header,
   HttpCode,
   Param,
   ParseIntPipe,
@@ -31,6 +32,9 @@ import { JobsService } from './jobs.service';
 import { CreateJobDto } from './dto/create-job.dto';
 import { UpdateJobDto } from './dto/update-job.dto';
 import { GetJobsQueryDto } from './dto/get-jobs-query.dto';
+import { GetMyJobsQueryDto } from './dto/get-my-jobs-query.dto';
+import { EmptyQueryDto } from '../customer-insights/dto/empty-query.dto';
+import { CustomerAnalyticsThrottlerGuard } from '@common/throttling/customer-throttler.guards';
 import { JobResponseDto } from './dto/job-response.dto';
 import { CreateApplicationDto } from './dto/create-application.dto';
 import { ApplicationResponseDto } from './dto/application-response.dto';
@@ -117,8 +121,36 @@ export class JobsController {
   @ApiForbiddenResponse({
     description: 'Caller does not have the CUSTOMER role',
   })
-  findMine(@Req() req: AuthenticatedRequest, @Query() query: GetJobsQueryDto) {
+  findMine(
+    @Req() req: AuthenticatedRequest,
+    @Query() query: GetMyJobsQueryDto,
+  ) {
     return this.jobsService.findMine(req.user.id, query);
+  }
+
+  /**
+   * Customer experience v2 (B7a): account-wide counts of the caller's jobs by
+   * status and by Overview stage. Takes no query parameters; the owner is the
+   * JWT subject only.
+   */
+  @Get('mine/summary')
+  @UseGuards(RolesGuard, CustomerAnalyticsThrottlerGuard)
+  @Roles(Role.CUSTOMER)
+  @Header('Cache-Control', 'private, no-store')
+  @ApiOperation({
+    summary:
+      "Counts of the authenticated customer's jobs by status and stage (CUSTOMER only)",
+  })
+  @ApiOkResponse({ description: 'Job summary retrieved' })
+  @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT' })
+  @ApiForbiddenResponse({
+    description: 'Caller does not have the CUSTOMER role',
+  })
+  getMySummary(
+    @Req() req: AuthenticatedRequest,
+    @Query() _query: EmptyQueryDto,
+  ) {
+    return this.jobsService.getMySummary(req.user.id);
   }
 
   /**

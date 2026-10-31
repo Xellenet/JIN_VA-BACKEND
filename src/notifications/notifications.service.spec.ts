@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { NotFoundException } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { NotificationsService } from './notifications.service';
 import { Notification } from './entities/notification.entity';
@@ -95,6 +96,44 @@ describe('NotificationsService', () => {
     }).compile();
 
     service = module.get<NotificationsService>(NotificationsService);
+  });
+
+  /** B8: `GET /notifications/:id`. */
+  describe('findOne', () => {
+    it("returns the caller's notification, scoped by owner in the query, without marking it read", async () => {
+      notificationsRepo.findOne.mockResolvedValueOnce({
+        id: 9021,
+        type: NotificationType.DISPUTE_RESOLVED,
+        title: 'Dispute resolved',
+        body: 'Your dispute was resolved.',
+        isRead: false,
+        payload: { jobId: 812 },
+        createdAt: new Date('2026-10-30T14:14:00.000Z'),
+        user: { id: 5, email: 'ama.owusu@example.com' },
+      });
+
+      const result = await service.findOne(5, 9021);
+
+      expect(notificationsRepo.findOne).toHaveBeenCalledWith({
+        where: { id: 9021, user: { id: 5 } },
+      });
+      expect(notificationsRepo.save).not.toHaveBeenCalled();
+      expect(result.message).toBe('Notification retrieved');
+      expect(result.data).toMatchObject({
+        id: 9021,
+        title: 'Dispute resolved',
+        isRead: false,
+        payload: { jobId: 812 },
+      });
+      expect(JSON.stringify(result.data)).not.toContain('ama.owusu');
+    });
+
+    it("gives the same 404 for someone else's and a missing notification", async () => {
+      notificationsRepo.findOne.mockResolvedValueOnce(null);
+      await expect(service.findOne(5, 1)).rejects.toThrow(
+        new NotFoundException('Notification not found.'),
+      );
+    });
   });
 
   describe('preferences shape by role (PR3)', () => {

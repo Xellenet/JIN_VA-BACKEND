@@ -10,6 +10,7 @@ export const SUCCESS_MESSAGES = {
     UPDATED: 'User profile updated successfully',
     DELETED: 'Account deleted successfully.',
     AVATAR_UPLOADED: 'Profile picture updated successfully.',
+    AVATAR_REMOVED: 'Profile photo removed',
     ADDRESS_ADDED: 'Address added successfully.',
     ADDRESS_UPDATED: 'Address updated successfully.',
     ADDRESS_REMOVED: 'Address removed successfully.',
@@ -83,6 +84,11 @@ export const SUCCESS_MESSAGES = {
     ALL_RETRIEVED: 'Notifications retrieved.',
     MARKED_READ: 'Notification marked as read.',
     ALL_MARKED_READ: 'All notifications marked as read.',
+    RETRIEVED: 'Notification retrieved',
+  },
+  PAYMENT_SETTINGS: {
+    RETRIEVED: 'Payment settings retrieved',
+    UPDATED: 'Payment preferences saved',
   },
   NOTIFICATION_PREFERENCES: {
     RETRIEVED: 'Notification preferences retrieved.',

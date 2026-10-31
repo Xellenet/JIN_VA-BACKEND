@@ -338,25 +338,33 @@ export class MessagesService {
    * touched, and a concurrent second call is a harmless no-op (last write
    * wins), which is the documented accepted behaviour for two tabs/devices.
    *
+   * M1 (Customer Experience v2): with `upToMessageId`, only messages up to
+   * and including that id are marked read. Without it, unchanged.
+   *
    * @param userId         - Authenticated user's ID.
    * @param conversationId - The conversation to mark as read.
+   * @param upToMessageId  - Optional upper bound on the message id.
    */
   async markRead(
     userId: number,
     conversationId: number,
+    upToMessageId?: number,
   ): Promise<{ message: string }> {
     const conversation = await this.loadConversationOrFail(conversationId);
     this.assertParticipant(conversation, userId);
 
-    await this.messagesRepository
+    const qb = this.messagesRepository
       .createQueryBuilder()
       .update(Message)
       .set({ isRead: true })
       .where(
         'conversation_id = :conversationId AND sender_id != :userId AND is_read = false',
         { conversationId, userId },
-      )
-      .execute();
+      );
+    if (upToMessageId !== undefined) {
+      qb.andWhere('id <= :upToMessageId', { upToMessageId });
+    }
+    await qb.execute();
 
     return { message: SUCCESS_MESSAGES.MESSAGE.MARKED_READ };
   }

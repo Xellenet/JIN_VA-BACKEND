@@ -107,6 +107,10 @@ export class AuthService {
     // mask the attempt, so we reject it outright instead. `role` omitted
     // entirely is a distinct, legitimate case — default it to CUSTOMER rather
     // than rejecting, per S3's acceptance criteria.
+    // SEC-5: a self-registered account never starts with a free-text avatar
+    // URL (RegisterUserDto refuses the field; this covers any other caller).
+    delete createUserDto.profilePicture;
+
     createUserDto.role = createUserDto.role ?? Role.CUSTOMER;
     if (!SELF_REGISTERABLE_ROLES.includes(createUserDto.role)) {
       this.logger.warn(

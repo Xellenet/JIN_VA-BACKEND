@@ -18,6 +18,12 @@ import { AccountCommitmentsService } from './account-commitments.service';
 import { AccountPurgeService } from './account-purge.service';
 import { ArtisanVerification } from '../verification/entities/artisan-verification.entity';
 import { DeviceToken } from '../push-notifications/entities/device-token.entity';
+import { ThrottlingModule } from '@common/throttling/throttling.module';
+import { ProfileMediaWriteThrottlerGuard } from '@common/throttling/customer-throttler.guards';
+import { AccountSecurityModule } from '../account-security/account-security.module';
+import { AccountSecurityEvent } from '../account-security/entities/account-security-event.entity';
+import { PaymentSettingsModule } from '../payment-settings/payment-settings.module';
+import { CustomerPaymentSettings } from '../payment-settings/entities/customer-payment-settings.entity';
 
 @Module({
   imports: [
@@ -45,8 +51,17 @@ import { DeviceToken } from '../push-notifications/entities/device-token.entity'
       // module's own use of the entity should not depend on
       // `PushNotificationsModule` happening to register it.
       DeviceToken,
+      // Customer Experience v2 (SEC-37): the purge deletes the account's
+      // payment settings and security events.
+      CustomerPaymentSettings,
+      AccountSecurityEvent,
     ]),
     UploadsModule,
+    ThrottlingModule,
+    AccountSecurityModule,
+    // B5 `GET/PATCH /users/me/payment-settings`, reached through this module
+    // so `AppModule` is not edited.
+    PaymentSettingsModule,
   ],
   controllers: [UsersController],
   providers: [
@@ -54,6 +69,7 @@ import { DeviceToken } from '../push-notifications/entities/device-token.entity'
     UserTokenService,
     AccountCommitmentsService,
     AccountPurgeService,
+    ProfileMediaWriteThrottlerGuard,
   ],
   exports: [
     UsersService,

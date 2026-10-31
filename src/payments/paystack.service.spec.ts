@@ -123,6 +123,34 @@ describe('PaystackService', () => {
       });
     });
 
+    it('B5c: sends no channels key at all when none are given (E-5.9)', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        reply({ status: true, message: 'ok', data: {} }),
+      );
+      await service.initializeTransaction({
+        email: 'kofi@example.com',
+        amountGhs: 10,
+        reference: 'jinva-1-2-4',
+      });
+      expect(Object.keys(lastCall().body as object)).not.toContain('channels');
+    });
+
+    it('B5c: sends the channels in the given order when provided', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        reply({ status: true, message: 'ok', data: {} }),
+      );
+      const channels = ['mobile_money', 'card', 'bank'];
+      await service.initializeTransaction({
+        email: 'kofi@example.com',
+        amountGhs: 10,
+        reference: 'jinva-1-2-5',
+        channels,
+      });
+      expect(lastCall().body).toMatchObject({
+        channels: ['mobile_money', 'card', 'bank'],
+      });
+    });
+
     it('defaults metadata to an empty object', async () => {
       fetchSpy.mockResolvedValueOnce(
         reply({ status: true, message: 'ok', data: {} }),

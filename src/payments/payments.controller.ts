@@ -2,12 +2,14 @@ import {
   Body,
   Controller,
   Get,
+  Header,
   Headers,
   Param,
   ParseIntPipe,
   Post,
   Query,
   Req,
+  Res,
   UseGuards,
   ParseEnumPipe,
 } from '@nestjs/common';
@@ -27,12 +29,27 @@ import { SetupPayoutMethodDto } from './dto/setup-payout-method.dto';
 import { AdminRefundDto } from './dto/admin-refund.dto';
 import { FraudFlagDto } from './dto/fraud-flag.dto';
 import type { AuthenticatedRequest } from '@common/types/authenticated-request.type';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
+import { CustomerPaymentHistoryService } from './customer-payment-history.service';
+import {
+  PaymentHistoryExportQueryDto,
+  PaymentHistoryQueryDto,
+} from './dto/payment-history-query.dto';
+import { PaymentHistoryThrottlerGuard } from './payment-history-throttler.guard';
+import {
+  CustomerAnalyticsThrottlerGuard,
+  CustomerExportThrottlerGuard,
+} from '@common/throttling/customer-throttler.guards';
+import { securityContextFrom } from '../account-security/account-security.service';
+import { EmptyQueryDto } from '../customer-insights/dto/empty-query.dto';
 
 @ApiTags('Payments')
 @Controller('payments')
 export class PaymentsController {
-  constructor(private readonly paymentsService: PaymentsService) {}
+  constructor(
+    private readonly paymentsService: PaymentsService,
+    private readonly history: CustomerPaymentHistoryService,
+  ) {}
 
   // ─── Public — no auth (Paystack calls this directly) ──────────────────────────
 
@@ -67,13 +84,66 @@ export class PaymentsController {
     return this.paymentsService.initializePayment(req.user.id, dto.jobId);
   }
 
+  /**
+   * B3: with no query parameters, today's unpaginated list (unthrottled, used
+   * by the job and pay pages). With any parameter, the Spending page's
+   * filtered, paginated history (`meta.pagination`).
+   */
   @Get('history')
-  @UseGuards(JwtAuthGuard, RolesGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, PaymentHistoryThrottlerGuard)
+  @Roles(Role.CUSTOMER)
+  @Header('Cache-Control', 'private, no-store')
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'My payment history: unpaginated with no parameters, paginated and filtered with any',
+  })
+  getHistory(
+    @Req() req: AuthenticatedRequest,
+    @Query() query: PaymentHistoryQueryDto,
+  ) {
+    if (Object.keys(req.query ?? {}).length === 0) {
+      return this.history.getLegacyHistory(req.user.id);
+    }
+    return this.history.getHistoryPage(req.user.id, query);
+  }
+
+  /** B3f: the services and artisans the caller has paid, for the filters. */
+  @Get('history/filters')
+  @UseGuards(JwtAuthGuard, RolesGuard, CustomerAnalyticsThrottlerGuard)
+  @Roles(Role.CUSTOMER)
+  @Header('Cache-Control', 'private, no-store')
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Services and artisans in my payment history (filter options)',
+  })
+  getHistoryFilters(
+    @Req() req: AuthenticatedRequest,
+    @Query() _query: EmptyQueryDto,
+  ) {
+    return this.history.getFilterOptions(req.user.id);
+  }
+
+  /**
+   * B10: the filtered history as a CSV download, streamed in batches. Limits
+   * (24 months, 10,000 rows) answer 400 with `meta.error` before streaming.
+   */
+  @Get('history/export.csv')
+  @UseGuards(JwtAuthGuard, RolesGuard, CustomerExportThrottlerGuard)
   @Roles(Role.CUSTOMER)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'My payment history' })
-  getHistory(@Req() req: AuthenticatedRequest) {
-    return this.paymentsService.getMyHistory(req.user.id);
+  @ApiOperation({ summary: 'Download my payment history as CSV' })
+  async exportHistory(
+    @Req() req: AuthenticatedRequest,
+    @Query() query: PaymentHistoryExportQueryDto,
+    @Res() res: Response,
+  ): Promise<void> {
+    await this.history.streamExport(
+      req.user.id,
+      query,
+      res,
+      securityContextFrom(req as unknown as Request),
+    );
   }
 
   @Get('verify/:reference')

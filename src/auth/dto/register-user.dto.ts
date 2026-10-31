@@ -25,6 +25,10 @@ import { CreateUserDto, INPUT_GENDERS } from '@users/dto/create-user.dto';
 export class RegisterUserDto extends OmitType(CreateUserDto, [
   'phoneNumber',
   'gender',
+  // SEC-5: no free-text avatar URL at signup. A photo is only ever set by
+  // uploading one (`POST /users/me/avatar`), so a new account can never
+  // point at another user's avatar file.
+  'profilePicture',
 ] as const) {
   @ApiProperty({
     example: '+233241234567',

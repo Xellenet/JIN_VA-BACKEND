@@ -20,6 +20,11 @@ import { INPUT_GENDERS } from './create-user.dto';
  * DTO for a user updating their own base profile via `PATCH /users/me`.
  * Email, password, and role are intentionally excluded — they each require
  * dedicated, security-sensitive flows.
+ *
+ * `profilePicture` is excluded too (Customer Experience v2, SEC-5): accepting
+ * any string let a client point its avatar at a third-party tracker. Sending it
+ * now gives 400 through `forbidNonWhitelisted`; the only setter is
+ * `POST /users/me/avatar` and the only clearer is `DELETE /users/me/avatar`.
  */
 export class UpdateMeDto {
   @ApiPropertyOptional({
@@ -79,14 +84,6 @@ export class UpdateMeDto {
   @IsOptional()
   @IsIn(INPUT_GENDERS, { message: VALIDATION_MESSAGES.GENDER_INVALID })
   gender?: Gender;
-
-  @ApiPropertyOptional({
-    example: 'https://cdn.example.com/avatar.jpg',
-    description: 'Profile picture URL',
-  })
-  @IsOptional()
-  @IsString()
-  profilePicture?: string;
 
   @ApiPropertyOptional({
     example: 'GHA-123456789-0',

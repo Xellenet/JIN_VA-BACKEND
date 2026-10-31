@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  Header,
   HttpCode,
   HttpStatus,
   Logger,
@@ -28,6 +29,7 @@ import {
   ApiOkResponse,
   ApiOperation,
   ApiTags,
+  ApiTooManyRequestsResponse,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -53,6 +55,12 @@ import type { AuthenticatedRequest } from '@common/types/authenticated-request.t
 import { clearRefreshTokenCookie } from '../auth/utils/refresh-cookie.util';
 import { clearAuthSessionCookie } from '../auth/utils/session-cookie.util';
 import { maxFileSizeMb } from '../uploads/max-file-size';
+import { NotSuspendedGuard } from '@common/guards/not-suspended.guard';
+import { ProfileMediaWriteThrottlerGuard } from '@common/throttling/customer-throttler.guards';
+import {
+  AccountSecurityService,
+  securityContextFrom,
+} from '../account-security/account-security.service';
 
 /**
  * Handles user management and self-service profile operations.
@@ -69,6 +77,7 @@ export class UsersController {
   constructor(
     private readonly usersService: UsersService,
     private readonly uploadsService: UploadsService,
+    private readonly accountSecurity: AccountSecurityService,
   ) {}
 
   /**
@@ -250,7 +259,7 @@ export class UsersController {
    * @returns The updated {@link UserResponseDto} with the new `profilePicture` URL.
    */
   @Post('me/avatar')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, ProfileMediaWriteThrottlerGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary: "Upload or replace the authenticated user's profile picture",
@@ -286,6 +295,54 @@ export class UsersController {
   ) {
     const upload = await this.uploadsService.uploadAvatar(file);
     return this.usersService.updateAvatar(req.user.id, upload.url);
+  }
+
+  /**
+   * B1: removes the caller's profile photo. Any signed-in user may call it;
+   * the owner is always the JWT subject.
+   *
+   * The stored file is deleted (best effort) only when it is one of our own
+   * avatar files that no other account references; a Google photo URL is
+   * never touched. A storage failure is
+   * logged and never surfaced. Calling it with no photo still succeeds.
+   */
+  @Delete('me/avatar')
+  @UseGuards(JwtAuthGuard, NotSuspendedGuard, ProfileMediaWriteThrottlerGuard)
+  @ApiBearerAuth()
+  @HttpCode(HttpStatus.OK)
+  @Header('Cache-Control', 'private, no-store')
+  @ApiOperation({
+    summary: "Remove the authenticated user's profile photo",
+    description:
+      'Clears `profilePicture` and returns the same shape as `GET /users/me`. ' +
+      'Idempotent. Rate limited per user (`PROFILE_MEDIA_RATE_LIMIT_EXCEEDED`).',
+  })
+  @ApiOkResponse({
+    description: 'Profile photo removed',
+    type: UserResponseDto,
+  })
+  @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
+  @ApiForbiddenResponse({ description: 'The account is suspended' })
+  @ApiTooManyRequestsResponse({
+    description: '`meta.error: "PROFILE_MEDIA_RATE_LIMIT_EXCEEDED"`',
+  })
+  async removeAvatar(@Req() req: AuthenticatedRequest) {
+    const { previous, deleteStoredFile, result } =
+      await this.usersService.clearAvatar(req.user.id);
+    if (previous !== null) {
+      // SEC-5: only a file no other account references is deleted.
+      if (deleteStoredFile) {
+        await this.uploadsService.deleteOwnAvatar(previous);
+      }
+      const context = securityContextFrom(req);
+      await this.accountSecurity.recordBestEffort({
+        userId: req.user.id,
+        event: 'profile_photo.removed',
+        ip: context.ip,
+        userAgent: context.userAgent,
+      });
+    }
+    return result;
   }
 
   /**

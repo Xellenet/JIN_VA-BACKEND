@@ -36,7 +36,12 @@ describe('PaymentsService', () => {
       return fallback;
     }),
   };
-  const mockDataSource = { transaction: jest.fn() };
+  /** B5c: the checkout preference is read through `getRepository`. */
+  const mockSettingsRepo = { findOne: jest.fn() };
+  const mockDataSource = {
+    transaction: jest.fn(),
+    getRepository: jest.fn(() => mockSettingsRepo),
+  };
   /** PD1–PD3: PaymentsService now emits notification events. */
   const mockEventEmitter = { emit: jest.fn() };
   /** AT5: admin refunds and fraud flags now append an admin audit row. */
@@ -107,6 +112,74 @@ describe('PaymentsService', () => {
       expect(result.data.authorizationUrl).toBe(
         'https://checkout.paystack.com/abc',
       );
+    });
+
+    describe('B5c checkout channel order', () => {
+      const fresh = () => {
+        const payment = basePayment();
+        paymentRepo.findOne.mockResolvedValueOnce(payment);
+        userRepo.findOneOrFail.mockResolvedValueOnce({
+          id: 22,
+          email: 'ama@example.com',
+        });
+        mockPaystack.initializeTransaction.mockResolvedValueOnce({
+          authorization_url: 'https://checkout.paystack.com/abc',
+          access_code: 'code_abc',
+          reference: payment.reference,
+        });
+      };
+
+      it('puts the preferred channel first (E-5.8 at unit level)', async () => {
+        fresh();
+        mockSettingsRepo.findOne.mockResolvedValueOnce({
+          id: 1,
+          preferredChannel: 'mobile_money',
+        });
+
+        await service.initializePayment(22, 35);
+
+        expect(mockSettingsRepo.findOne).toHaveBeenCalledWith(
+          expect.objectContaining({ where: { userId: 22 } }),
+        );
+        const params = (
+          mockPaystack.initializeTransaction.mock.calls as unknown[][]
+        )[0][0] as {
+          channels?: string[];
+        };
+        expect(params.channels?.[0]).toBe('mobile_money');
+        expect(params.channels).toEqual(
+          expect.arrayContaining(['card', 'bank', 'ussd']),
+        );
+      });
+
+      it('sends no channels key without a preference (E-5.9)', async () => {
+        fresh();
+        mockSettingsRepo.findOne.mockResolvedValueOnce(null);
+
+        await service.initializePayment(22, 35);
+
+        const params = (
+          mockPaystack.initializeTransaction.mock.calls as unknown[][]
+        )[0][0] as Record<string, unknown>;
+        expect(Object.keys(params)).not.toContain('channels');
+      });
+
+      it('BU-5.2: still initialises when the settings read fails', async () => {
+        fresh();
+        mockSettingsRepo.findOne.mockRejectedValueOnce(
+          new Error('relation does not exist'),
+        );
+
+        const result = await service.initializePayment(22, 35);
+
+        expect(result.data.authorizationUrl).toBe(
+          'https://checkout.paystack.com/abc',
+        );
+        const params = (
+          mockPaystack.initializeTransaction.mock.calls as unknown[][]
+        )[0][0] as Record<string, unknown>;
+        expect(Object.keys(params)).not.toContain('channels');
+      });
     });
 
     it('reuses the existing session and never re-calls Paystack when one already exists (the qa-report.md fix)', async () => {

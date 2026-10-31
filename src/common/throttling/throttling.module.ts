@@ -1,10 +1,13 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
+import type { ThrottlerOptions } from '@nestjs/throttler';
 import { THROTTLER_NAMES } from './throttler-names';
 
-/** Every limit in this module is expressed per rolling 60 seconds. */
+/** Most limits in this module are expressed per rolling 60 seconds. */
 const ONE_MINUTE_MS = 60_000;
+const TEN_MINUTES_MS = 10 * ONE_MINUTE_MS;
+const ONE_HOUR_MS = 60 * ONE_MINUTE_MS;
 
 /** RL1: default when `MESSAGE_RATE_LIMIT_PER_MINUTE` is unset. */
 const DEFAULT_MESSAGE_RATE_LIMIT = 25;
@@ -38,6 +41,18 @@ const DEFAULT_AUTH_EMAIL_RATE_LIMIT = 5;
 const DEFAULT_DISPUTE_WRITE_RATE_LIMIT = 20;
 
 /**
+ * Customer Experience v2 defaults, each per authenticated user and per route
+ * (`generateKey` includes the handler, so every route has its own bucket).
+ */
+export const CUSTOMER_THROTTLER_DEFAULTS = {
+  CUSTOMER_ANALYTICS: { limit: 30, ttl: ONE_MINUTE_MS },
+  CUSTOMER_EXPORT: { limit: 5, ttl: TEN_MINUTES_MS },
+  PAYMENT_SETTINGS_WRITE: { limit: 5, ttl: ONE_MINUTE_MS },
+  PROFILE_MEDIA_WRITE: { limit: 10, ttl: ONE_HOUR_MS },
+  NOTIFICATION_READ: { limit: 60, ttl: ONE_MINUTE_MS },
+} as const;
+
+/**
  * Reads a positive-integer limit from configuration, falling back to the
  * compiled-in default for anything unset, non-numeric or <= 0 — a typo'd env
  * var must not silently become "limit 0" (which would reject every request) or
@@ -50,6 +65,100 @@ function readLimit(
 ): number {
   const parsed = Number(config.get<string | number>(envVar, fallback));
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
+/**
+ * The throttler configuration, exported so the limits and windows can be
+ * unit-tested without booting the module.
+ */
+export function buildThrottlerOptions(config: ConfigService): {
+  throttlers: ThrottlerOptions[];
+} {
+  return {
+    throttlers: [
+      {
+        name: THROTTLER_NAMES.MESSAGE_SEND,
+        ttl: ONE_MINUTE_MS,
+        limit: readLimit(
+          config,
+          'MESSAGE_RATE_LIMIT_PER_MINUTE',
+          DEFAULT_MESSAGE_RATE_LIMIT,
+        ),
+      },
+      {
+        name: THROTTLER_NAMES.AUTH_CREDENTIALS,
+        ttl: ONE_MINUTE_MS,
+        limit: readLimit(
+          config,
+          'AUTH_RATE_LIMIT_PER_MINUTE',
+          DEFAULT_AUTH_CREDENTIALS_RATE_LIMIT,
+        ),
+      },
+      {
+        name: THROTTLER_NAMES.AUTH_EMAIL,
+        ttl: ONE_MINUTE_MS,
+        limit: readLimit(
+          config,
+          'AUTH_EMAIL_RATE_LIMIT_PER_MINUTE',
+          DEFAULT_AUTH_EMAIL_RATE_LIMIT,
+        ),
+      },
+      {
+        name: THROTTLER_NAMES.DISPUTE_WRITE,
+        ttl: ONE_MINUTE_MS,
+        limit: readLimit(
+          config,
+          'DISPUTE_WRITE_RATE_LIMIT_PER_MINUTE',
+          DEFAULT_DISPUTE_WRITE_RATE_LIMIT,
+        ),
+      },
+      {
+        name: THROTTLER_NAMES.CUSTOMER_ANALYTICS,
+        ttl: CUSTOMER_THROTTLER_DEFAULTS.CUSTOMER_ANALYTICS.ttl,
+        limit: readLimit(
+          config,
+          'CUSTOMER_ANALYTICS_RATE_LIMIT_PER_MINUTE',
+          CUSTOMER_THROTTLER_DEFAULTS.CUSTOMER_ANALYTICS.limit,
+        ),
+      },
+      {
+        name: THROTTLER_NAMES.CUSTOMER_EXPORT,
+        ttl: CUSTOMER_THROTTLER_DEFAULTS.CUSTOMER_EXPORT.ttl,
+        limit: readLimit(
+          config,
+          'CUSTOMER_EXPORT_RATE_LIMIT_PER_10_MINUTES',
+          CUSTOMER_THROTTLER_DEFAULTS.CUSTOMER_EXPORT.limit,
+        ),
+      },
+      {
+        name: THROTTLER_NAMES.PAYMENT_SETTINGS_WRITE,
+        ttl: CUSTOMER_THROTTLER_DEFAULTS.PAYMENT_SETTINGS_WRITE.ttl,
+        limit: readLimit(
+          config,
+          'PAYMENT_SETTINGS_WRITE_RATE_LIMIT_PER_MINUTE',
+          CUSTOMER_THROTTLER_DEFAULTS.PAYMENT_SETTINGS_WRITE.limit,
+        ),
+      },
+      {
+        name: THROTTLER_NAMES.PROFILE_MEDIA_WRITE,
+        ttl: CUSTOMER_THROTTLER_DEFAULTS.PROFILE_MEDIA_WRITE.ttl,
+        limit: readLimit(
+          config,
+          'PROFILE_MEDIA_WRITE_RATE_LIMIT_PER_HOUR',
+          CUSTOMER_THROTTLER_DEFAULTS.PROFILE_MEDIA_WRITE.limit,
+        ),
+      },
+      {
+        name: THROTTLER_NAMES.NOTIFICATION_READ,
+        ttl: CUSTOMER_THROTTLER_DEFAULTS.NOTIFICATION_READ.ttl,
+        limit: readLimit(
+          config,
+          'NOTIFICATION_READ_RATE_LIMIT_PER_MINUTE',
+          CUSTOMER_THROTTLER_DEFAULTS.NOTIFICATION_READ.limit,
+        ),
+      },
+    ],
+  };
 }
 
 /**
@@ -77,46 +186,7 @@ function readLimit(
     ThrottlerModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
-      useFactory: (config: ConfigService) => ({
-        throttlers: [
-          {
-            name: THROTTLER_NAMES.MESSAGE_SEND,
-            ttl: ONE_MINUTE_MS,
-            limit: readLimit(
-              config,
-              'MESSAGE_RATE_LIMIT_PER_MINUTE',
-              DEFAULT_MESSAGE_RATE_LIMIT,
-            ),
-          },
-          {
-            name: THROTTLER_NAMES.AUTH_CREDENTIALS,
-            ttl: ONE_MINUTE_MS,
-            limit: readLimit(
-              config,
-              'AUTH_RATE_LIMIT_PER_MINUTE',
-              DEFAULT_AUTH_CREDENTIALS_RATE_LIMIT,
-            ),
-          },
-          {
-            name: THROTTLER_NAMES.AUTH_EMAIL,
-            ttl: ONE_MINUTE_MS,
-            limit: readLimit(
-              config,
-              'AUTH_EMAIL_RATE_LIMIT_PER_MINUTE',
-              DEFAULT_AUTH_EMAIL_RATE_LIMIT,
-            ),
-          },
-          {
-            name: THROTTLER_NAMES.DISPUTE_WRITE,
-            ttl: ONE_MINUTE_MS,
-            limit: readLimit(
-              config,
-              'DISPUTE_WRITE_RATE_LIMIT_PER_MINUTE',
-              DEFAULT_DISPUTE_WRITE_RATE_LIMIT,
-            ),
-          },
-        ],
-      }),
+      useFactory: buildThrottlerOptions,
     }),
   ],
   exports: [ThrottlerModule],

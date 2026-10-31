@@ -780,6 +780,26 @@ export class NotificationsService {
     return { count };
   }
 
+  /**
+   * B8: one of the caller's notifications. Someone else's and a missing one
+   * give the same 404. Read-only: it does not mark the notification read.
+   */
+  async findOne(
+    userId: number,
+    notificationId: number,
+  ): Promise<{ message: string; data: NotificationResponseDto }> {
+    const notification = await this.notificationsRepository.findOne({
+      where: { id: notificationId, user: { id: userId } },
+    });
+    if (!notification) throw new NotFoundException('Notification not found.');
+    return {
+      message: SUCCESS_MESSAGES.NOTIFICATION.RETRIEVED,
+      data: plainToInstance(NotificationResponseDto, notification, {
+        excludeExtraneousValues: true,
+      }),
+    };
+  }
+
   async markRead(
     userId: number,
     notificationId: number,

@@ -1,9 +1,18 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { PaymentsController } from './payments.controller';
 import { PaymentsService } from './payments.service';
-import { PaymentStatus } from '@common/types/enums';
+import { CustomerPaymentHistoryService } from './customer-payment-history.service';
+import { PaymentHistoryThrottlerGuard } from './payment-history-throttler.guard';
+import {
+  CustomerAnalyticsThrottlerGuard,
+  CustomerExportThrottlerGuard,
+} from '@common/throttling/customer-throttler.guards';
+import { PaymentStatus, Role } from '@common/types/enums';
 import type { AuthenticatedRequest } from '@common/types/authenticated-request.type';
 import type { Request } from 'express';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { ROLES_KEY } from '@common/decorators/roles.decorator';
 
 describe('PaymentsController', () => {
   let controller: PaymentsController;
@@ -23,6 +32,13 @@ describe('PaymentsController', () => {
     clearFraudFlag: jest.fn(),
   };
 
+  const history = {
+    getLegacyHistory: jest.fn(),
+    getHistoryPage: jest.fn(),
+    getFilterOptions: jest.fn(),
+    streamExport: jest.fn(),
+  };
+
   const user = {
     id: 22,
     firstname: 'Ama',
@@ -35,11 +51,22 @@ describe('PaymentsController', () => {
   beforeEach(async () => {
     jest.clearAllMocks();
     Object.values(service).forEach((fn) => fn.mockResolvedValue(result));
+    Object.values(history).forEach((fn) => fn.mockResolvedValue(result));
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [PaymentsController],
-      providers: [{ provide: PaymentsService, useValue: service }],
-    }).compile();
+      providers: [
+        { provide: PaymentsService, useValue: service },
+        { provide: CustomerPaymentHistoryService, useValue: history },
+      ],
+    })
+      .overrideGuard(PaymentHistoryThrottlerGuard)
+      .useValue({ canActivate: () => true })
+      .overrideGuard(CustomerAnalyticsThrottlerGuard)
+      .useValue({ canActivate: () => true })
+      .overrideGuard(CustomerExportThrottlerGuard)
+      .useValue({ canActivate: () => true })
+      .compile();
 
     controller = module.get(PaymentsController);
   });
@@ -75,10 +102,62 @@ describe('PaymentsController', () => {
     expect(service.initializePayment).toHaveBeenCalledWith(22, 35);
   });
 
-  it('getHistory returns the customer history', async () => {
-    await expect(controller.getHistory(req)).resolves.toBe(result);
-    expect(service.getMyHistory).toHaveBeenCalledWith(22);
+  describe('getHistory (B3)', () => {
+    it('serves the legacy unpaginated list when there are no query parameters', async () => {
+      const legacyReq = { user, query: {} } as unknown as AuthenticatedRequest;
+      await expect(controller.getHistory(legacyReq, {})).resolves.toBe(result);
+      expect(history.getLegacyHistory).toHaveBeenCalledWith(22);
+      expect(history.getHistoryPage).not.toHaveBeenCalled();
+    });
+
+    it('serves the paginated form when any parameter is present', async () => {
+      const pagedReq = {
+        user,
+        query: { page: '2' },
+      } as unknown as AuthenticatedRequest;
+      await controller.getHistory(pagedReq, { page: 2 });
+      expect(history.getHistoryPage).toHaveBeenCalledWith(22, { page: 2 });
+      expect(history.getLegacyHistory).not.toHaveBeenCalled();
+    });
   });
+
+  it("getHistoryFilters returns the caller's filter options (B3f)", async () => {
+    await expect(controller.getHistoryFilters(req, {})).resolves.toBe(result);
+    expect(history.getFilterOptions).toHaveBeenCalledWith(22);
+  });
+
+  it('exportHistory streams to the response with the caller id and request context (B10)', async () => {
+    const res = {} as never;
+    const exportReq = {
+      user,
+      ip: '198.51.100.4',
+      headers: { 'user-agent': 'Test agent' },
+    } as unknown as AuthenticatedRequest;
+    await controller.exportHistory(exportReq, { range: '12m' }, res);
+    expect(history.streamExport).toHaveBeenCalledWith(
+      22,
+      { range: '12m' },
+      res,
+      { ip: '198.51.100.4', userAgent: 'Test agent' },
+    );
+  });
+
+  it.each([
+    ['getHistory', PaymentHistoryThrottlerGuard],
+    ['getHistoryFilters', CustomerAnalyticsThrottlerGuard],
+    ['exportHistory', CustomerExportThrottlerGuard],
+  ] as const)(
+    'S-2 / T-6 %s has Jwt, Roles, its throttle and CUSTOMER',
+    (name, throttle) => {
+      const handler = PaymentsController.prototype[name];
+      expect(Reflect.getMetadata('__guards__', handler)).toEqual([
+        JwtAuthGuard,
+        RolesGuard,
+        throttle,
+      ]);
+      expect(Reflect.getMetadata(ROLES_KEY, handler)).toEqual([Role.CUSTOMER]);
+    },
+  );
 
   it('verify passes the customer id and reference', async () => {
     await expect(controller.verify(req, 'jinva-35-22-111')).resolves.toBe(

@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Header,
   HttpCode,
   HttpStatus,
   Param,
@@ -18,6 +19,7 @@ import {
   ApiOkResponse,
   ApiOperation,
   ApiTags,
+  ApiTooManyRequestsResponse,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -29,6 +31,7 @@ import { ArtisanNotificationPreferencesResponseDto } from './dto/artisan-notific
 import { AdminNotificationPreferencesResponseDto } from './dto/admin-notification-preferences-response.dto';
 import { UpdateNotificationPreferencesDto } from './dto/update-notification-preferences.dto';
 import type { AuthenticatedRequest } from '@common/types/authenticated-request.type';
+import { NotificationReadThrottlerGuard } from '@common/throttling/customer-throttler.guards';
 
 /**
  * In-app notification feed for the authenticated user.
@@ -167,6 +170,32 @@ export class NotificationsController {
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
   markAllRead(@Req() req: AuthenticatedRequest) {
     return this.notificationsService.markAllRead(req.user.id);
+  }
+
+  /**
+   * B8: one of the caller's notifications. Declared after `unread-count`,
+   * `preferences` and `read-all` so those are never parsed as an id.
+   * Someone else's and a missing id give the same 404. It does not mark the
+   * notification read.
+   */
+  @Get(':id')
+  @UseGuards(NotificationReadThrottlerGuard)
+  @Header('Cache-Control', 'private, no-store')
+  @ApiOperation({ summary: 'Get one of your notifications' })
+  @ApiOkResponse({
+    description: 'Notification retrieved',
+    type: NotificationResponseDto,
+  })
+  @ApiNotFoundResponse({ description: 'Notification not found' })
+  @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT token' })
+  @ApiTooManyRequestsResponse({
+    description: '`meta.error: "NOTIFICATION_READ_RATE_LIMIT_EXCEEDED"`',
+  })
+  findOne(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
+    return this.notificationsService.findOne(req.user.id, id);
   }
 
   /**

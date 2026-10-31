@@ -12,6 +12,7 @@ import { AdminAnalyticsController } from './admin-analytics.controller';
 import { AdminAnalyticsService } from './admin-analytics.service';
 import { ArtisanAnalyticsService } from './artisan-analytics.service';
 import { PlatformAnalyticsCacheService } from './platform-analytics-cache.service';
+import { CustomerInsightsModule } from '../customer-insights/customer-insights.module';
 
 /**
  * AN1: PRD §7's `AnalyticsModule` ("artisan stats, admin platform stats"),
@@ -39,6 +40,8 @@ import { PlatformAnalyticsCacheService } from './platform-analytics-cache.servic
     // DR6/AP3: reuses DisputesService.getResolutionMetrics rather than
     // re-deriving the dispute SLA aggregate a second time.
     DisputesModule,
+    // Customer experience v2: B2 `/analytics/customer` and B6 overview.
+    CustomerInsightsModule,
   ],
   controllers: [AnalyticsController, AdminAnalyticsController],
   providers: [
