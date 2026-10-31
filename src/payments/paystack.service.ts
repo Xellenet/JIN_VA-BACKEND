@@ -171,6 +171,22 @@ export class PaystackService {
   }
 
   /**
+   * Artisan fixes (B6): the banks Paystack supports in a country, for the
+   * payout bank picker. Cached by `BankListService`; never called per user.
+   */
+  async listBanks(country: 'ghana' = 'ghana') {
+    return this.get<
+      Array<{
+        name?: string;
+        code?: string;
+        type?: string;
+        active?: boolean;
+        is_deleted?: boolean | null;
+      }>
+    >(`/bank?country=${encodeURIComponent(country)}&perPage=100`);
+  }
+
+  /**
    * Send money from your Paystack balance to an artisan.
    * Requires Transfers to be enabled on your Paystack dashboard.
    */

@@ -16,6 +16,12 @@ import {
 } from '@common/throttling/customer-throttler.guards';
 import { CustomerPaymentHistoryService } from './customer-payment-history.service';
 import { PaymentHistoryThrottlerGuard } from './payment-history-throttler.guard';
+import {
+  ArtisanExportThrottlerGuard,
+  ArtisanInsightsThrottlerGuard,
+} from '@common/throttling/artisan-throttler.guards';
+import { ArtisanEarningsService } from './artisan-earnings.service';
+import { BankListService } from './bank-list';
 
 @Module({
   imports: [
@@ -34,6 +40,11 @@ import { PaymentHistoryThrottlerGuard } from './payment-history-throttler.guard'
     PaymentHistoryThrottlerGuard,
     CustomerAnalyticsThrottlerGuard,
     CustomerExportThrottlerGuard,
+    // Artisan fixes: B2 statement/CSV and B6 bank list.
+    ArtisanEarningsService,
+    BankListService,
+    ArtisanInsightsThrottlerGuard,
+    ArtisanExportThrottlerGuard,
   ],
   exports: [PaymentsService],
 })

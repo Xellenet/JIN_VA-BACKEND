@@ -13,6 +13,9 @@ import { AdminAnalyticsService } from './admin-analytics.service';
 import { ArtisanAnalyticsService } from './artisan-analytics.service';
 import { PlatformAnalyticsCacheService } from './platform-analytics-cache.service';
 import { CustomerInsightsModule } from '../customer-insights/customer-insights.module';
+import { ArtisanInsightsModule } from '../artisan-insights/artisan-insights.module';
+import { ThrottlingModule } from '@common/throttling/throttling.module';
+import { ArtisanInsightsThrottlerGuard } from '@common/throttling/artisan-throttler.guards';
 
 /**
  * AN1: PRD §7's `AnalyticsModule` ("artisan stats, admin platform stats"),
@@ -42,12 +45,17 @@ import { CustomerInsightsModule } from '../customer-insights/customer-insights.m
     DisputesModule,
     // Customer experience v2: B2 `/analytics/customer` and B6 overview.
     CustomerInsightsModule,
+    // Artisan fixes: B1 `/artisans/me/overview`.
+    ArtisanInsightsModule,
+    // B3: `/analytics/artisan` is rate-limited per user.
+    ThrottlingModule,
   ],
   controllers: [AnalyticsController, AdminAnalyticsController],
   providers: [
     AdminAnalyticsService,
     ArtisanAnalyticsService,
     PlatformAnalyticsCacheService,
+    ArtisanInsightsThrottlerGuard,
   ],
 })
 export class AnalyticsModule {}

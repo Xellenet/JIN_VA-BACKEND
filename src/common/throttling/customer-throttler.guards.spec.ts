@@ -14,6 +14,11 @@ import {
   UserKeyedThrottlerGuard,
 } from './customer-throttler.guards';
 import { THROTTLER_NAMES } from './throttler-names';
+import {
+  ARTISAN_RATE_LIMIT_ERROR_CODES,
+  ArtisanExportThrottlerGuard,
+  ArtisanInsightsThrottlerGuard,
+} from './artisan-throttler.guards';
 
 type GuardClass = new (...args: never[]) => UserKeyedThrottlerGuard;
 
@@ -46,6 +51,16 @@ const CASES: Array<{
     Guard: NotificationReadThrottlerGuard,
     name: THROTTLER_NAMES.NOTIFICATION_READ,
     code: CUSTOMER_RATE_LIMIT_ERROR_CODES.NOTIFICATION_READ,
+  },
+  {
+    Guard: ArtisanInsightsThrottlerGuard,
+    name: THROTTLER_NAMES.ARTISAN_INSIGHTS,
+    code: ARTISAN_RATE_LIMIT_ERROR_CODES.ARTISAN_INSIGHTS,
+  },
+  {
+    Guard: ArtisanExportThrottlerGuard,
+    name: THROTTLER_NAMES.ARTISAN_EXPORT,
+    code: ARTISAN_RATE_LIMIT_ERROR_CODES.ARTISAN_EXPORT,
   },
 ];
 

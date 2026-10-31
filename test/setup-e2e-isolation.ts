@@ -81,6 +81,7 @@ for (const name of [
   'createRefund',
   'createTransferRecipient',
   'initiateTransfer',
+  'listBanks',
 ]) {
   patch(PaystackService.prototype, name, refuse(`Paystack ${name}`));
 }

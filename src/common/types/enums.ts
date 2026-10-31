@@ -301,6 +301,8 @@ export enum AnalyticsRange {
   LAST_30_DAYS = '30d',
   LAST_90_DAYS = '90d',
   LAST_YEAR = '1y',
+  /** Artisan fixes (B3): calendar months, as on the customer Spending page. */
+  LAST_12_MONTHS = '12m',
   ALL_TIME = 'all',
 }
 

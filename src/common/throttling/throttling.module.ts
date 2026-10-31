@@ -52,6 +52,12 @@ export const CUSTOMER_THROTTLER_DEFAULTS = {
   NOTIFICATION_READ: { limit: 60, ttl: ONE_MINUTE_MS },
 } as const;
 
+/** Artisan fixes defaults, per authenticated user and per route. */
+export const ARTISAN_THROTTLER_DEFAULTS = {
+  ARTISAN_INSIGHTS: { limit: 30, ttl: ONE_MINUTE_MS },
+  ARTISAN_EXPORT: { limit: 5, ttl: TEN_MINUTES_MS },
+} as const;
+
 /**
  * Reads a positive-integer limit from configuration, falling back to the
  * compiled-in default for anything unset, non-numeric or <= 0 — a typo'd env
@@ -155,6 +161,24 @@ export function buildThrottlerOptions(config: ConfigService): {
           config,
           'NOTIFICATION_READ_RATE_LIMIT_PER_MINUTE',
           CUSTOMER_THROTTLER_DEFAULTS.NOTIFICATION_READ.limit,
+        ),
+      },
+      {
+        name: THROTTLER_NAMES.ARTISAN_INSIGHTS,
+        ttl: ARTISAN_THROTTLER_DEFAULTS.ARTISAN_INSIGHTS.ttl,
+        limit: readLimit(
+          config,
+          'ARTISAN_INSIGHTS_RATE_LIMIT_PER_MINUTE',
+          ARTISAN_THROTTLER_DEFAULTS.ARTISAN_INSIGHTS.limit,
+        ),
+      },
+      {
+        name: THROTTLER_NAMES.ARTISAN_EXPORT,
+        ttl: ARTISAN_THROTTLER_DEFAULTS.ARTISAN_EXPORT.ttl,
+        limit: readLimit(
+          config,
+          'ARTISAN_EXPORT_RATE_LIMIT_PER_10_MINUTES',
+          ARTISAN_THROTTLER_DEFAULTS.ARTISAN_EXPORT.limit,
         ),
       },
     ],

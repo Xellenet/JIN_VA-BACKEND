@@ -214,8 +214,48 @@ export class DisputesService {
     return {
       message:
         'Dispute raised. Our team will review and respond within 48 hours.',
-      data: this.toPartyDto(dispute, userId),
+      data: this.toPartyDto(
+        dispute,
+        userId,
+        (await this.jobIdsForBookings([dispute.bookingId])).get(
+          Number(dispute.bookingId),
+        ) ?? null,
+      ),
     };
+  }
+
+  /**
+   * Artisan fixes (B5): booking id → job id for the given bookings, in one
+   * query. Deleted jobs still link (the dispute is about the work).
+   */
+  private async jobIdsForBookings(
+    bookingIds: Array<number | null | undefined>,
+  ): Promise<Map<number, number>> {
+    const ids = [
+      ...new Set(
+        bookingIds
+          .filter((id): id is number => id != null)
+          .map((id) => Number(id)),
+      ),
+    ];
+    const map = new Map<number, number>();
+    if (ids.length === 0) return map;
+    const rows: Array<{ jobId: number | string; bookingId: number | string }> =
+      await this.jobRepo
+        .createQueryBuilder('j')
+        .withDeleted()
+        .select('j.id', 'jobId')
+        .addSelect('j.booking_id', 'bookingId')
+        .where('j.booking_id IN (:...ids)', { ids })
+        .getRawMany();
+    for (const r of rows) map.set(Number(r.bookingId), Number(r.jobId));
+    return map;
+  }
+
+  /** The booking id behind a loaded dispute. */
+  private bookingIdOf(dispute: Dispute): number | null {
+    const id = dispute.booking?.id ?? dispute.bookingId;
+    return id == null ? null : Number(id);
   }
 
   /**
@@ -226,14 +266,23 @@ export class DisputesService {
    * respond, which they cannot do if they cannot read the dispute. This is a
    * superset of the previous behaviour, never a narrower one.
    */
-  async getMyDisputes(userId: number) {
+  async getMyDisputes(userId: number, opts: { responseDue?: boolean } = {}) {
     const disputes = await this.participantQb(userId)
       .orderBy('d.createdAt', 'DESC')
       .getMany();
 
+    const jobIds = await this.jobIdsForBookings(
+      disputes.map((d) => this.bookingIdOf(d)),
+    );
+    let data = disputes.map((d) =>
+      this.toPartyDto(d, userId, jobIds.get(this.bookingIdOf(d) ?? -1) ?? null),
+    );
+    // B5: `?responseDue=true` narrows to the disputes waiting on my response.
+    if (opts.responseDue) data = data.filter((d) => d.responseDue);
+
     return {
       message: 'Your disputes retrieved.',
-      data: disputes.map((d) => this.toPartyDto(d, userId)),
+      data,
     };
   }
 
@@ -245,9 +294,14 @@ export class DisputesService {
     // theirs — never confirm to a stranger that an id is real.
     if (!dispute) throw new NotFoundException('Dispute not found.');
 
+    const jobIds = await this.jobIdsForBookings([this.bookingIdOf(dispute)]);
     return {
       message: 'Dispute retrieved.',
-      data: this.toPartyDto(dispute, userId),
+      data: this.toPartyDto(
+        dispute,
+        userId,
+        jobIds.get(this.bookingIdOf(dispute) ?? -1) ?? null,
+      ),
     };
   }
 
@@ -325,7 +379,13 @@ export class DisputesService {
 
     return {
       message: 'Your response has been recorded. Our team can now see it.',
-      data: this.toPartyDto(dispute, userId),
+      data: this.toPartyDto(
+        dispute,
+        userId,
+        (await this.jobIdsForBookings([this.bookingIdOf(dispute)])).get(
+          this.bookingIdOf(dispute) ?? -1,
+        ) ?? null,
+      ),
     };
   }
 
@@ -1729,6 +1789,7 @@ export class DisputesService {
   private toPartyDto(
     dispute: Dispute,
     viewerId: number,
+    jobId: number | null = null,
   ): PartyDisputeResponseDto {
     const dto = plainToInstance(PartyDisputeResponseDto, dispute, {
       excludeExtraneousValues: true,
@@ -1740,6 +1801,8 @@ export class DisputesService {
       dto.viewerRole === 'COUNTERPARTY' &&
       !dispute.response &&
       ACTIVE_STATUSES.includes(dispute.status);
+    dto.responseDue = dto.canRespond;
+    dto.jobId = jobId;
     return dto;
   }
 }

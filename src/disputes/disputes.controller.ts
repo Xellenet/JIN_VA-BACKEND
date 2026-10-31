@@ -5,6 +5,7 @@ import {
   Param,
   ParseIntPipe,
   Post,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -21,6 +22,7 @@ import {
 import { DisputesService } from './disputes.service';
 import { CreateDisputeDto } from './dto/create-dispute.dto';
 import { RespondToDisputeDto } from './dto/respond-dispute.dto';
+import { MyDisputesQueryDto } from './dto/my-disputes-query.dto';
 import { DisputeWriteThrottlerGuard } from './guards/dispute-write-throttler.guard';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -51,10 +53,16 @@ export class DisputesController {
       'DP2: the disputes I raised **and** the ones filed against me. Widened from ' +
       '"disputes I raised" this round — DR4 lets the counterparty respond, which they ' +
       'cannot do if they cannot read the dispute. Strictly a superset of the previous ' +
-      'behaviour. Admin-internal notes are never included.',
+      'behaviour. Admin-internal notes are never included. Each dispute carries `jobId` ' +
+      'and `responseDue`; `?responseDue=true` keeps only those waiting on my response.',
   })
-  getMyDisputes(@Req() req: AuthenticatedRequest) {
-    return this.disputesService.getMyDisputes(req.user.id);
+  getMyDisputes(
+    @Req() req: AuthenticatedRequest,
+    @Query() query: MyDisputesQueryDto = {},
+  ) {
+    return this.disputesService.getMyDisputes(req.user.id, {
+      responseDue: query?.responseDue === 'true',
+    });
   }
 
   @Get('my/:id')

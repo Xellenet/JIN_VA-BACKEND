@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Header,
   HttpCode,
   HttpStatus,
   Param,
@@ -36,6 +37,9 @@ import { FlagReviewDto } from './dto/flag-review.dto';
 import { GetReviewsQueryDto } from './dto/get-reviews-query.dto';
 import { ReviewResponseDto } from './dto/review-response.dto';
 import type { AuthenticatedRequest } from '@common/types/authenticated-request.type';
+import { ArtisanInsightsThrottlerGuard } from '@common/throttling/artisan-throttler.guards';
+import { EmptyQueryDto } from '../customer-insights/dto/empty-query.dto';
+import { ReviewSummaryService } from './review-summary.service';
 
 /**
  * Manages reviews left by customers after a job is completed.
@@ -49,7 +53,33 @@ import type { AuthenticatedRequest } from '@common/types/authenticated-request.t
 @ApiTags('Reviews')
 @Controller('reviews')
 export class ReviewsController {
-  constructor(private readonly reviewsService: ReviewsService) {}
+  constructor(
+    private readonly reviewsService: ReviewsService,
+    private readonly summaryService: ReviewSummaryService,
+  ) {}
+
+  /**
+   * Artisan fixes (B7): the artisan's own review counts (by star, 4★+ share,
+   * awaiting reply excluding rating-only reviews). Owner from the JWT only.
+   */
+  @Get('me/summary')
+  @UseGuards(JwtAuthGuard, RolesGuard, ArtisanInsightsThrottlerGuard)
+  @Roles(Role.ARTISAN)
+  @Header('Cache-Control', 'private, no-store')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'My review summary (artisan)' })
+  @ApiOkResponse({ description: 'Review summary retrieved' })
+  @ApiForbiddenResponse({ description: 'Caller is not an artisan' })
+  @ApiNotFoundResponse({ description: 'No artisan profile' })
+  async getMySummary(
+    @Req() req: AuthenticatedRequest,
+    @Query() _query: EmptyQueryDto,
+  ) {
+    return {
+      message: 'Review summary retrieved',
+      data: await this.summaryService.getMySummary(req.user.id),
+    };
+  }
 
   /**
    * Submits a review for the artisan on a completed job.

@@ -24,9 +24,10 @@ describe('CustomerAnalyticsQueryDto (BU-4.6)', () => {
     ).toHaveLength(0);
   });
 
-  it('leaves the artisan and admin ranges unchanged', async () => {
+  it('leaves the admin ranges unchanged; artisans gain 12m (artisan fixes B3)', async () => {
     expect(await errorsFor(ArtisanAnalyticsQueryDto, '7d')).toHaveLength(0);
-    expect(await errorsFor(ArtisanAnalyticsQueryDto, '12m')).toHaveLength(1);
+    expect(await errorsFor(ArtisanAnalyticsQueryDto, '12m')).toHaveLength(0);
+    expect(await errorsFor(ArtisanAnalyticsQueryDto, '1y')).toHaveLength(1);
     expect(await errorsFor(AdminAnalyticsQueryDto, '1y')).toHaveLength(0);
     expect(await errorsFor(AdminAnalyticsQueryDto, '12m')).toHaveLength(1);
   });

@@ -285,13 +285,37 @@ export class JobsService {
       .take(limit)
       .getMany();
 
+    const data = plainToInstance(JobResponseDto, jobs, {
+      excludeExtraneousValues: true,
+    });
+    await this.attachHasApplied(data, viewer);
     return {
       message: SUCCESS_MESSAGES.JOB.ALL_RETRIEVED,
-      data: plainToInstance(JobResponseDto, jobs, {
-        excludeExtraneousValues: true,
-      }),
+      data,
       pagination: this.paginate(total, page, limit),
     };
+  }
+
+  /**
+   * Artisan fixes (B4): sets `hasApplied` on each job for an ARTISAN caller,
+   * from one query bound to the caller's own id. Other roles get no field.
+   */
+  private async attachHasApplied(
+    jobs: JobResponseDto[],
+    viewer: JobViewer,
+  ): Promise<void> {
+    if (viewer.role !== Role.ARTISAN || jobs.length === 0) return;
+    const rows: Array<{ jobId: number | string }> =
+      await this.applicationsRepository
+        .createQueryBuilder('a')
+        .select('a.job_id', 'jobId')
+        .where('a.artisan_id = :me', { me: viewer.id })
+        .andWhere('a.job_id IN (:...jobIds)', {
+          jobIds: jobs.map((j) => j.id),
+        })
+        .getRawMany();
+    const applied = new Set(rows.map((r) => Number(r.jobId)));
+    for (const job of jobs) job.hasApplied = applied.has(Number(job.id));
   }
 
   /**
@@ -392,9 +416,11 @@ export class JobsService {
     if (!(await this.canViewJob(job, viewer))) {
       throw new NotFoundException(`Job with id ${id} not found.`);
     }
+    const data = await this.loadJobDto(id, true);
+    await this.attachHasApplied([data], viewer);
     return {
       message: SUCCESS_MESSAGES.JOB.RETRIEVED,
-      data: await this.loadJobDto(id, true),
+      data,
     };
   }
 

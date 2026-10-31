@@ -13,6 +13,12 @@ import type { Request } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { ROLES_KEY } from '@common/decorators/roles.decorator';
+import { ArtisanEarningsService } from './artisan-earnings.service';
+import { BankListService } from './bank-list';
+import {
+  ArtisanExportThrottlerGuard,
+  ArtisanInsightsThrottlerGuard,
+} from '@common/throttling/artisan-throttler.guards';
 
 describe('PaymentsController', () => {
   let controller: PaymentsController;
@@ -39,6 +45,13 @@ describe('PaymentsController', () => {
     streamExport: jest.fn(),
   };
 
+  const earnings = {
+    getStatement: jest.fn(),
+    streamExport: jest.fn(),
+  };
+
+  const banks = { list: jest.fn() };
+
   const user = {
     id: 22,
     firstname: 'Ama',
@@ -52,12 +65,16 @@ describe('PaymentsController', () => {
     jest.clearAllMocks();
     Object.values(service).forEach((fn) => fn.mockResolvedValue(result));
     Object.values(history).forEach((fn) => fn.mockResolvedValue(result));
+    Object.values(earnings).forEach((fn) => fn.mockResolvedValue(result));
+    banks.list.mockResolvedValue([{ code: '280100', name: 'Access Bank' }]);
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [PaymentsController],
       providers: [
         { provide: PaymentsService, useValue: service },
         { provide: CustomerPaymentHistoryService, useValue: history },
+        { provide: ArtisanEarningsService, useValue: earnings },
+        { provide: BankListService, useValue: banks },
       ],
     })
       .overrideGuard(PaymentHistoryThrottlerGuard)
@@ -65,6 +82,10 @@ describe('PaymentsController', () => {
       .overrideGuard(CustomerAnalyticsThrottlerGuard)
       .useValue({ canActivate: () => true })
       .overrideGuard(CustomerExportThrottlerGuard)
+      .useValue({ canActivate: () => true })
+      .overrideGuard(ArtisanInsightsThrottlerGuard)
+      .useValue({ canActivate: () => true })
+      .overrideGuard(ArtisanExportThrottlerGuard)
       .useValue({ canActivate: () => true })
       .compile();
 
@@ -186,6 +207,54 @@ describe('PaymentsController', () => {
   it('getMyEarnings returns the artisan earnings', async () => {
     await expect(controller.getMyEarnings(req)).resolves.toBe(result);
     expect(service.getMyEarnings).toHaveBeenCalledWith(22);
+  });
+
+  describe('artisan earnings (B2) and banks (B6)', () => {
+    it('getMyEarningsStatement passes the caller id and query', async () => {
+      await expect(
+        controller.getMyEarningsStatement(req, { period: '30d' }),
+      ).resolves.toBe(result);
+      expect(earnings.getStatement).toHaveBeenCalledWith(22, {
+        period: '30d',
+      });
+    });
+
+    it('exportMyEarnings streams with the caller id and request context', async () => {
+      const res = {} as never;
+      const exportReq = {
+        user,
+        ip: '198.51.100.9',
+        headers: { 'user-agent': 'Agent' },
+      } as unknown as AuthenticatedRequest;
+      await controller.exportMyEarnings(exportReq, { period: 'all' }, res);
+      expect(earnings.streamExport).toHaveBeenCalledWith(
+        22,
+        { period: 'all' },
+        res,
+        { ip: '198.51.100.9', userAgent: 'Agent' },
+      );
+    });
+
+    it('listBanks wraps the cached list', async () => {
+      await expect(controller.listBanks({})).resolves.toEqual({
+        message: 'Banks retrieved',
+        data: [{ code: '280100', name: 'Access Bank' }],
+      });
+    });
+
+    it.each([
+      ['getMyEarningsStatement', ArtisanInsightsThrottlerGuard],
+      ['exportMyEarnings', ArtisanExportThrottlerGuard],
+      ['listBanks', ArtisanInsightsThrottlerGuard],
+    ] as const)('%s has Jwt, Roles, its throttle and ARTISAN', (name, t) => {
+      const handler = PaymentsController.prototype[name];
+      expect(Reflect.getMetadata('__guards__', handler)).toEqual([
+        JwtAuthGuard,
+        RolesGuard,
+        t,
+      ]);
+      expect(Reflect.getMetadata(ROLES_KEY, handler)).toEqual([Role.ARTISAN]);
+    });
   });
 
   describe('adminList', () => {

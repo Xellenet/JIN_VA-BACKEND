@@ -10,12 +10,13 @@ import { JobAttachment } from './entities/job-attachment.entity';
 import { ServiceEntity } from '@services/entities/service.entity';
 import { User } from '@users/entities/user.entity';
 import { PaymentsService } from '../payments/payments.service';
-import { Status } from '@common/types/enums';
+import { Role, Status } from '@common/types/enums';
 import { qbMock } from '../customer-insights/testing/qb-mock';
 
 describe('JobsService', () => {
   let service: JobsService;
-  let jobsRepo: { createQueryBuilder: jest.Mock };
+  let jobsRepo: { createQueryBuilder: jest.Mock; findOne: jest.Mock };
+  let appsRepo: { createQueryBuilder: jest.Mock };
 
   const mockRepo = () => ({
     create: jest.fn(),
@@ -53,6 +54,7 @@ describe('JobsService', () => {
 
     service = module.get<JobsService>(JobsService);
     jobsRepo = module.get(getRepositoryToken(Job));
+    appsRepo = module.get(getRepositoryToken(JobApplication));
   });
 
   it('should be defined', () => {
@@ -145,6 +147,52 @@ describe('JobsService', () => {
       });
       const none = await run(undefined);
       expect(none.qb.sql()).not.toContain('job.status');
+    });
+  });
+
+  describe('hasApplied (B4)', () => {
+    const jobs = [
+      { id: 1, status: Status.OPEN },
+      { id: 2, status: Status.OPEN },
+    ];
+
+    it('flags the jobs the artisan applied to, from a query bound to the caller', async () => {
+      jobsRepo.createQueryBuilder.mockReturnValue(
+        qbMock({ getCount: 2, getMany: jobs }),
+      );
+      const apps = qbMock({ getRawMany: [{ jobId: '2' }] });
+      appsRepo.createQueryBuilder.mockReturnValue(apps);
+      const res = await service.findAll({}, { id: 9, role: Role.ARTISAN });
+      expect(res.data.map((j) => j.hasApplied)).toEqual([false, true]);
+      expect(apps.params()).toMatchObject({ me: 9, jobIds: [1, 2] });
+    });
+
+    it('adds nothing for a customer', async () => {
+      jobsRepo.createQueryBuilder.mockReturnValue(
+        qbMock({ getCount: 2, getMany: jobs }),
+      );
+      const res = await service.findAll({}, { id: 3, role: Role.CUSTOMER });
+      expect(res.data.every((j) => j.hasApplied === undefined)).toBe(true);
+      expect(appsRepo.createQueryBuilder).not.toHaveBeenCalled();
+    });
+
+    it('sets it on the detail for an artisan viewing an open job', async () => {
+      jobsRepo.findOne.mockResolvedValue({
+        id: 1,
+        status: Status.OPEN,
+        customer: { id: 3 },
+      });
+      const svc = service as unknown as {
+        historyRepository: { find: jest.Mock };
+        attachmentsRepository: { find: jest.Mock };
+      };
+      svc.historyRepository.find.mockResolvedValue([]);
+      svc.attachmentsRepository.find.mockResolvedValue([]);
+      appsRepo.createQueryBuilder.mockReturnValue(
+        qbMock({ getRawMany: [{ jobId: 1 }] }),
+      );
+      const res = await service.findOne(1, { id: 9, role: Role.ARTISAN });
+      expect(res.data.hasApplied).toBe(true);
     });
   });
 });

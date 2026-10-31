@@ -42,6 +42,16 @@ import {
 } from '@common/throttling/customer-throttler.guards';
 import { securityContextFrom } from '../account-security/account-security.service';
 import { EmptyQueryDto } from '../customer-insights/dto/empty-query.dto';
+import {
+  ArtisanExportThrottlerGuard,
+  ArtisanInsightsThrottlerGuard,
+} from '@common/throttling/artisan-throttler.guards';
+import { ArtisanEarningsService } from './artisan-earnings.service';
+import {
+  ArtisanStatementExportQueryDto,
+  ArtisanStatementQueryDto,
+} from './dto/artisan-statement-query.dto';
+import { BankListService } from './bank-list';
 
 @ApiTags('Payments')
 @Controller('payments')
@@ -49,6 +59,8 @@ export class PaymentsController {
   constructor(
     private readonly paymentsService: PaymentsService,
     private readonly history: CustomerPaymentHistoryService,
+    private readonly earnings: ArtisanEarningsService,
+    private readonly banks: BankListService,
   ) {}
 
   // ─── Public — no auth (Paystack calls this directly) ──────────────────────────
@@ -202,6 +214,53 @@ export class PaymentsController {
   })
   getMyEarnings(@Req() req: AuthenticatedRequest) {
     return this.paymentsService.getMyEarnings(req.user.id);
+  }
+
+  /**
+   * Artisan fixes (B2): the earnings statement — period totals, balances,
+   * monthly totals and a paginated list with gross, fee and payout per job.
+   */
+  @Get('my-earnings/statement')
+  @UseGuards(JwtAuthGuard, RolesGuard, ArtisanInsightsThrottlerGuard)
+  @Roles(Role.ARTISAN)
+  @Header('Cache-Control', 'private, no-store')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'My earnings statement (paginated)' })
+  getMyEarningsStatement(
+    @Req() req: AuthenticatedRequest,
+    @Query() query: ArtisanStatementQueryDto,
+  ) {
+    return this.earnings.getStatement(req.user.id, query);
+  }
+
+  /** Artisan fixes (B2): the statement as a capped, formula-safe CSV. */
+  @Get('my-earnings/export.csv')
+  @UseGuards(JwtAuthGuard, RolesGuard, ArtisanExportThrottlerGuard)
+  @Roles(Role.ARTISAN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Download my earnings statement as CSV' })
+  async exportMyEarnings(
+    @Req() req: AuthenticatedRequest,
+    @Query() query: ArtisanStatementExportQueryDto,
+    @Res() res: Response,
+  ): Promise<void> {
+    await this.earnings.streamExport(
+      req.user.id,
+      query,
+      res,
+      securityContextFrom(req as unknown as Request),
+    );
+  }
+
+  /** Artisan fixes (B6): Ghana banks for the payout bank picker. */
+  @Get('banks')
+  @UseGuards(JwtAuthGuard, RolesGuard, ArtisanInsightsThrottlerGuard)
+  @Roles(Role.ARTISAN)
+  @Header('Cache-Control', 'private, max-age=3600')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Ghana banks for payouts (cached)' })
+  async listBanks(@Query() _query: EmptyQueryDto) {
+    return { message: 'Banks retrieved', data: await this.banks.list() };
   }
 
   // ─── Admin routes (also in admin.controller for admin prefix) ─────────────────

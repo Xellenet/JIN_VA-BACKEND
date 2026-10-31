@@ -51,6 +51,26 @@ describe('ThrottlingModule configuration', () => {
     expect(CUSTOMER_THROTTLER_DEFAULTS.CUSTOMER_EXPORT.ttl).toBe(600_000);
   });
 
+  it('configures the artisan throttlers with their defaults and overrides', () => {
+    const defaults = byName(configWith());
+    expect(defaults.get(THROTTLER_NAMES.ARTISAN_INSIGHTS)).toMatchObject({
+      limit: 30,
+      ttl: 60_000,
+    });
+    expect(defaults.get(THROTTLER_NAMES.ARTISAN_EXPORT)).toMatchObject({
+      limit: 5,
+      ttl: 600_000,
+    });
+    const overridden = byName(
+      configWith({
+        ARTISAN_INSIGHTS_RATE_LIMIT_PER_MINUTE: '4',
+        ARTISAN_EXPORT_RATE_LIMIT_PER_10_MINUTES: '0',
+      }),
+    );
+    expect(overridden.get(THROTTLER_NAMES.ARTISAN_INSIGHTS)?.limit).toBe(4);
+    expect(overridden.get(THROTTLER_NAMES.ARTISAN_EXPORT)?.limit).toBe(5);
+  });
+
   it('keeps the existing limits unchanged', () => {
     const map = byName(configWith());
     expect(map.get(THROTTLER_NAMES.MESSAGE_SEND)).toMatchObject({

@@ -21,6 +21,63 @@ import {
   resolveWindow,
   truncUnit,
 } from './analytics.util';
+import {
+  isoDate,
+  monthBucketsBetween,
+  startOfDay,
+  startOfIsoWeek,
+} from '../customer-insights/customer-range';
+import { moneyString } from '../customer-insights/spend.util';
+import { AnalyticsBucket } from '@common/types/enums';
+
+const DAY_MS = 86_400_000;
+
+/** One zero-filled earnings bucket, money as a 2-decimal string. */
+export interface FilledEarningsPoint {
+  bucketStart: string;
+  net: string;
+  payouts: number;
+}
+
+/**
+ * Artisan fixes (B3): every bucket in the window, oldest first, so the chart
+ * and its table never skip an empty period. For `all` the series starts at
+ * the first payout's bucket (empty when there is none).
+ */
+export function fillEarningsSeries(
+  points: Array<{ bucket: string; earnings: number; payouts: number }>,
+  w: Pick<AnalyticsWindow, 'from' | 'to' | 'bucket'>,
+): FilledEarningsPoint[] {
+  const byStart = new Map(
+    points.map((p) => [String(p.bucket).slice(0, 10), p] as const),
+  );
+  let first = w.from;
+  if (!first) {
+    const keys = [...byStart.keys()].sort();
+    if (keys.length === 0) return [];
+    first = new Date(`${keys[0]}T00:00:00.000Z`);
+  }
+  let starts: string[];
+  if (w.bucket === AnalyticsBucket.MONTH) {
+    starts = monthBucketsBetween(first, w.to);
+  } else {
+    const step = w.bucket === AnalyticsBucket.WEEK ? 7 * DAY_MS : DAY_MS;
+    const align =
+      w.bucket === AnalyticsBucket.WEEK ? startOfIsoWeek : startOfDay;
+    starts = [];
+    for (let t = align(first).getTime(); t <= w.to.getTime(); t += step) {
+      starts.push(isoDate(new Date(t)));
+    }
+  }
+  return starts.map((start) => {
+    const hit = byStart.get(start);
+    return {
+      bucketStart: start,
+      net: moneyString(hit?.earnings ?? 0),
+      payouts: hit?.payouts ?? 0,
+    };
+  });
+}
 
 /**
  * AA1: statuses whose `artisan_amount` counts as money the artisan has
@@ -125,7 +182,10 @@ export class ArtisanAnalyticsService {
       ratingTrend,
       topServices,
       overview,
-      series: { earnings: earningsSeries },
+      series: {
+        earnings: earningsSeries,
+        earningsFilled: fillEarningsSeries(earningsSeries, w),
+      },
     };
   }
 

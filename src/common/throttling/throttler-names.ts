@@ -55,4 +55,11 @@ export const THROTTLER_NAMES = {
   PROFILE_MEDIA_WRITE: 'profile-media-write',
   /** `GET /notifications/:id`. */
   NOTIFICATION_READ: 'notification-read',
+  /**
+   * Artisan fixes: the artisan's read-only aggregates (overview, earnings
+   * statement, analytics, review summary) and the cached bank list.
+   */
+  ARTISAN_INSIGHTS: 'artisan-insights',
+  /** `GET /payments/my-earnings/export.csv`: a streamed export of up to 10,000 rows. */
+  ARTISAN_EXPORT: 'artisan-export',
 } as const;
