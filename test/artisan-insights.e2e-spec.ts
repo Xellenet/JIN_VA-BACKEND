@@ -545,6 +545,45 @@ describe('Artisan insights (B1–B7)', () => {
     expect(body(asCustomer).data).not.toHaveProperty('hasApplied');
   });
 
+  it('the job list carries acceptedArtisan, and a location search is literal', async () => {
+    const list = await get('/jobs?status=IN_PROGRESS&limit=50');
+    expect(list.status).toBe(200);
+    const held = body<
+      Array<JobRow & { acceptedArtisan?: { id: number } | null }>
+    >(list).data.find((j) => j.id === jobId.held);
+    expect(held?.acceptedArtisan?.id).toBe(userId.K);
+
+    // "%" used to be a wildcard that matched every location.
+    const wild = await get(
+      `/jobs?status=OPEN&limit=50&location=${encodeURIComponent('%')}`,
+    );
+    expect(wild.status).toBe(200);
+    expect(body<JobRow[]>(wild).data.map((j) => j.id)).not.toContain(
+      jobId.openFresh,
+    );
+    const real = await get('/jobs?status=OPEN&limit=50&location=osu');
+    expect(body<JobRow[]>(real).data.map((j) => j.id)).toContain(
+      jobId.openFresh,
+    );
+  });
+
+  it('B2 statement can be narrowed to one job without changing the totals', async () => {
+    const all = body<ArtisanStatement>(
+      await get('/payments/my-earnings/statement?period=all'),
+    ).data;
+    const res = await get(
+      `/payments/my-earnings/statement?period=all&jobId=${jobId.held}`,
+    );
+    expect(res.status).toBe(200);
+    const one = body<ArtisanStatement>(res).data;
+    expect(one.items.length).toBeGreaterThan(0);
+    expect(one.items.every((i) => i.jobId === jobId.held)).toBe(true);
+    expect(one.summary).toEqual(all.summary);
+    expect(
+      (await get('/payments/my-earnings/statement?jobId=abc')).status,
+    ).toBe(400);
+  });
+
   it('B5 party disputes carry jobId and responseDue; others get 404', async () => {
     const res = await get('/disputes/my');
     expect(res.status).toBe(200);

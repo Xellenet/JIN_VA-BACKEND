@@ -42,6 +42,7 @@ import {
 import { VARIABLES } from '@common/constants/variables.constants';
 import { SUCCESS_MESSAGES } from '@common/constants/success-messages.constants';
 import { PaymentsService } from '../payments/payments.service';
+import { containsPattern } from '../payments/like-escape.util';
 import {
   APP_EVENTS,
   JobApplicationAcceptedPayload,
@@ -1168,11 +1169,15 @@ export class JobsService {
   // ─── Private helpers ─────────────────────────────────────────────────────────
 
   private buildJobsQb() {
-    return this.jobsRepository
-      .createQueryBuilder('job')
-      .leftJoinAndSelect('job.customer', 'customer')
-      .leftJoinAndSelect('job.service', 'service')
-      .orderBy('job.createdAt', 'DESC');
+    return (
+      this.jobsRepository
+        .createQueryBuilder('job')
+        .leftJoinAndSelect('job.customer', 'customer')
+        .leftJoinAndSelect('job.service', 'service')
+        // The list needs it too: artisans' actions depend on who was accepted.
+        .leftJoinAndSelect('job.acceptedArtisan', 'acceptedArtisan')
+        .orderBy('job.createdAt', 'DESC')
+    );
   }
 
   private applyJobFilters(
@@ -1184,8 +1189,8 @@ export class JobsService {
     if (query.serviceId)
       qb.andWhere('job.service = :serviceId', { serviceId: query.serviceId });
     if (query.location) {
-      qb.andWhere('LOWER(job.location) LIKE :loc', {
-        loc: `%${query.location.toLowerCase()}%`,
+      qb.andWhere("LOWER(job.location) LIKE :loc ESCAPE '\\'", {
+        loc: containsPattern(query.location.toLowerCase()),
       });
     }
   }

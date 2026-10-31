@@ -39,6 +39,17 @@ export class ArtisanStatementQueryDto {
   @IsIn(EARNING_STAGES as unknown as string[], { each: true })
   stage?: EarningStage[];
 
+  @ApiPropertyOptional({
+    minimum: 1,
+    description:
+      'Only rows for this job (the job detail page). Totals are unaffected.',
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  jobId?: number;
+
   @ApiPropertyOptional({ minimum: 1, maximum: 1000, default: 1 })
   @IsOptional()
   @Type(() => Number)

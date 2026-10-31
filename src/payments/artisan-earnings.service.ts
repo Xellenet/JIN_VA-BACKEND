@@ -192,7 +192,10 @@ export function artisanCsvRow(r: StatementItem): string {
   ]);
 }
 
-type StatementFilters = Pick<ArtisanStatementQueryDto, 'period' | 'stage'>;
+type StatementFilters = Pick<
+  ArtisanStatementQueryDto,
+  'period' | 'stage' | 'jobId'
+>;
 
 /**
  * Artisan fixes (B2): the artisan's earnings statement and its CSV.
@@ -242,7 +245,7 @@ export class ArtisanEarningsService {
       .addSelect(EARNING_DATE_SQL, 'earnedAt');
   }
 
-  /** Narrows to the period (and, when `withStage`, the stages). */
+  /** Narrows to the period (and, when `withStage`, the stages and job). */
   applyFilters(
     qb: SelectQueryBuilder<Payment>,
     q: StatementFilters,
@@ -260,6 +263,9 @@ export class ArtisanEarningsService {
     qb.andWhere(`${EARNING_DATE_SQL} <= :periodTo`, { periodTo: w.to });
     if (withStage && q.stage?.length) {
       qb.andWhere(`${STAGE_SQL} IN (:...stages)`, { stages: q.stage });
+    }
+    if (withStage && q.jobId) {
+      qb.andWhere('p.job_id = :jobId', { jobId: q.jobId });
     }
     return qb;
   }
