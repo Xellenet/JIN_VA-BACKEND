@@ -490,9 +490,11 @@ export class AccountPurgeService {
       .where('user_id = :userId', { userId })
       .execute();
 
-    // Saved payment methods: the encrypted numbers and card authorizations go
-    // with the account (hard delete). Charge attempts keep only a method id,
-    // which the foreign key sets to null.
+    // Saved payment methods are already deleted when the customer asks to
+    // close the account (removePaymentDataOnDeletionRequest, in the deletion
+    // request's transaction). This is the safety net for any that remain
+    // (hard delete). Charge attempts keep only a method id, which the
+    // foreign key sets to null.
     await manager
       .createQueryBuilder()
       .delete()

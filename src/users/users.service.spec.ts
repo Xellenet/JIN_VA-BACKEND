@@ -52,6 +52,10 @@ describe('UsersService', () => {
     findOne: jest.fn(),
     restore: jest.fn(),
     update: jest.fn(),
+    // deleteMe: saved payment methods, payment attempts, security event.
+    softDelete: jest.fn(),
+    delete: jest.fn(),
+    insert: jest.fn(),
   };
 
   /** Chainable query builder; `getOne`/`getExists` are set per test. */
@@ -535,10 +539,64 @@ describe('UsersService', () => {
       expect(
         mockUserTokenService.revokeRefreshTokenForUser,
       ).toHaveBeenCalledWith(mockUser.id);
-      expect(mockUsersRepository.softDelete).toHaveBeenCalledWith({
+      expect(mockTransactionalRepo.softDelete).toHaveBeenCalledWith({
         id: mockUser.id,
       });
       expect(result.message).toBe(SUCCESS_MESSAGES.USER.DELETED);
+    });
+
+    it('deletes saved payment methods and cancels attempts in the same transaction as the soft delete', async () => {
+      mockUsersRepository.findOne
+        .mockResolvedValueOnce(mockUser)
+        .mockResolvedValueOnce({ ...mockUser, deletedAt });
+      mockTransactionalRepo.delete.mockResolvedValueOnce({ affected: 2 });
+      mockTransactionalRepo.update
+        .mockResolvedValueOnce({ affected: 1 })
+        .mockResolvedValueOnce({ affected: 0 });
+
+      await service.deleteMe(mockUser.id);
+
+      expect(mockUsersRepository.manager.transaction).toHaveBeenCalledTimes(1);
+      // The user row is locked first.
+      expect(mockTransactionalRepo.findOne).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: mockUser.id },
+          lock: { mode: 'pessimistic_write' },
+        }),
+      );
+      expect(mockTransactionalRepo.delete).toHaveBeenCalledWith({
+        userId: mockUser.id,
+      });
+      expect(mockTransactionalRepo.insert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: mockUser.id,
+          event: 'payment_method.removed',
+          details: {
+            reason: 'account_deletion',
+            count: 2,
+            attemptsCancelled: 1,
+          },
+        }),
+      );
+      const order = [
+        mockTransactionalRepo.findOne.mock.invocationCallOrder[0],
+        mockTransactionalRepo.delete.mock.invocationCallOrder[0],
+        mockTransactionalRepo.softDelete.mock.invocationCallOrder[0],
+      ];
+      expect([...order].sort((a, b) => a - b)).toEqual(order);
+    });
+
+    it('records no security event when there was nothing to remove', async () => {
+      mockUsersRepository.findOne
+        .mockResolvedValueOnce(mockUser)
+        .mockResolvedValueOnce({ ...mockUser, deletedAt });
+      mockTransactionalRepo.delete.mockResolvedValueOnce({ affected: 0 });
+      mockTransactionalRepo.update.mockResolvedValue({ affected: 0 });
+
+      await service.deleteMe(mockUser.id);
+
+      expect(mockTransactionalRepo.insert).not.toHaveBeenCalled();
+      expect(mockTransactionalRepo.softDelete).toHaveBeenCalled();
     });
 
     // C1.2: the client must never compute the deadline itself.
@@ -588,6 +646,8 @@ describe('UsersService', () => {
       );
 
       expect(mockUsersRepository.softDelete).not.toHaveBeenCalled();
+      expect(mockTransactionalRepo.softDelete).not.toHaveBeenCalled();
+      expect(mockTransactionalRepo.delete).not.toHaveBeenCalled();
       expect(
         mockUserTokenService.revokeRefreshTokenForUser,
       ).not.toHaveBeenCalled();

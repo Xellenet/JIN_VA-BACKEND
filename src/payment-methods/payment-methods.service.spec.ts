@@ -312,6 +312,14 @@ describe('PaymentMethodsService', () => {
         'not_reusable',
       );
     });
+
+    it('never saves a card for a closed (soft-deleted) account', async () => {
+      userRepo.findOne.mockResolvedValueOnce(null);
+      expect(await service.saveCardFromAuthorization(1, auth())).toBe(
+        'account_closed',
+      );
+      expect(repo.rows).toHaveLength(0);
+    });
   });
 
   it('getChargeable decrypts only the caller’s method', async () => {
