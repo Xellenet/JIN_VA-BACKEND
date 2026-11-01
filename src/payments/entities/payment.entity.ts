@@ -158,6 +158,19 @@ export class Payment {
   @Column({ name: 'save_card_requested', type: 'boolean', default: false })
   saveCardRequested!: boolean;
 
+  /**
+   * The reference whose money this payment holds (the hosted checkout's or a
+   * saved-method charge's). Set on the move to HELD; never refunded as a
+   * duplicate. Null on payments that were never paid.
+   */
+  @Column({
+    name: 'paid_reference',
+    type: 'varchar',
+    length: 100,
+    nullable: true,
+  })
+  paidReference!: string | null;
+
   @Column({ name: 'paid_at', type: 'timestamptz', nullable: true })
   paidAt?: Date;
 

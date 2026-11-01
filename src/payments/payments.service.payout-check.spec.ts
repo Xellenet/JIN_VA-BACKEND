@@ -16,6 +16,8 @@ import { PaystackService } from './paystack.service';
 import { AdminAuditService } from '../admin-audit/admin-audit.service';
 import { PaymentCharge } from './entities/payment-charge.entity';
 import { PaymentMethodsService } from '../payment-methods/payment-methods.service';
+import { PaymentAttemptsService } from './payment-attempts.service';
+import { DuplicateRefundService } from './duplicate-refund.service';
 import { PaymentStatus } from '@common/types/enums';
 import { APP_EVENTS } from '@common/events/app.events';
 import {
@@ -164,6 +166,8 @@ describe('PaymentsService (payout name check)', () => {
           provide: PaymentMethodsService,
           useValue: { saveCardFromAuthorization: jest.fn() },
         },
+        { provide: PaymentAttemptsService, useValue: {} },
+        { provide: DuplicateRefundService, useValue: {} },
       ],
     }).compile();
     service = module.get(PaymentsService);

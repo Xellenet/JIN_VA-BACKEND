@@ -7,7 +7,7 @@ import type { DataSource, Repository } from 'typeorm';
 import type { User } from '@users/entities/user.entity';
 import { Payment } from './entities/payment.entity';
 import { PaymentCharge } from './entities/payment-charge.entity';
-import type { PaystackService } from './paystack.service';
+import { PaystackRequestError, type PaystackService } from './paystack.service';
 import type { PaymentsService } from './payments.service';
 import type { PaymentMethodsService } from '../payment-methods/payment-methods.service';
 import {
@@ -16,10 +16,23 @@ import {
   SavedMethodChargeService,
 } from './saved-method-charge.service';
 import { CHARGE_MESSAGES } from './charge-outcome';
+import { PaymentStatus } from '@common/types/enums';
+import {
+  ALREADY_PAID,
+  PAYMENT_ATTEMPT_ACTIVE,
+  PaymentAttemptsService,
+} from './payment-attempts.service';
 
 /** All values fictional. */
 describe('SavedMethodChargeService', () => {
-  const payment = { id: 7, jobId: 35, customerId: 22, amount: 350 } as Payment;
+  const payment = {
+    id: 7,
+    jobId: 35,
+    customerId: 22,
+    amount: 350,
+    reference: 'jinva-35-22-1',
+    status: PaymentStatus.PENDING,
+  } as Payment;
   let charges: Map<number, PaymentCharge>;
   let nextId: number;
 
@@ -28,6 +41,7 @@ describe('SavedMethodChargeService', () => {
     save: jest.fn(),
     create: jest.fn((v: Partial<PaymentCharge>) => v),
     update: jest.fn(),
+    count: jest.fn(() => Promise.resolve(0)),
   };
   const txPayments = { findOne: jest.fn() };
   const payments = { findOne: jest.fn() };
@@ -39,7 +53,7 @@ describe('SavedMethodChargeService', () => {
     verifyTransaction: jest.fn(),
   };
   const methods = { getChargeable: jest.fn() };
-  const paymentsService = { applySavedChargeSuccess: jest.fn() };
+  const paymentsService = { applyChargeSuccess: jest.fn() };
   let service: SavedMethodChargeService;
 
   const momo = {
@@ -85,6 +99,7 @@ describe('SavedMethodChargeService', () => {
     });
     chargeRepo.update.mockImplementation(
       (where: Record<string, unknown>, patch: Partial<PaymentCharge>) => {
+        let affected = 0;
         for (const c of charges.values()) {
           const hit = Object.entries(where).every(([k, v]) => {
             const val = (c as unknown as Record<string, unknown>)[k];
@@ -93,9 +108,12 @@ describe('SavedMethodChargeService', () => {
             }
             return val === v;
           });
-          if (hit) Object.assign(c, patch);
+          if (hit) {
+            Object.assign(c, patch);
+            affected++;
+          }
         }
-        return Promise.resolve();
+        return Promise.resolve({ affected });
       },
     );
     txPayments.findOne.mockResolvedValue(payment);
@@ -112,16 +130,23 @@ describe('SavedMethodChargeService', () => {
     const manager = {
       getRepository: (e: unknown) => (e === Payment ? txPayments : chargeRepo),
     };
-    service = new SavedMethodChargeService(
+    // The real attempt rules, over the same in-memory rows.
+    const attempts = new PaymentAttemptsService(
       payments as unknown as Repository<Payment>,
       chargeRepo as unknown as Repository<PaymentCharge>,
-      users as unknown as Repository<User>,
       {
         transaction: (cb: (m: unknown) => unknown) => cb(manager),
       } as unknown as DataSource,
       paystack as unknown as PaystackService,
+    );
+    service = new SavedMethodChargeService(
+      payments as unknown as Repository<Payment>,
+      chargeRepo as unknown as Repository<PaymentCharge>,
+      users as unknown as Repository<User>,
+      paystack as unknown as PaystackService,
       methods as unknown as PaymentMethodsService,
       paymentsService as unknown as PaymentsService,
+      attempts,
     );
   });
 
@@ -156,13 +181,100 @@ describe('SavedMethodChargeService', () => {
     expect(paystack.chargeMobileMoney).toHaveBeenCalledTimes(1);
   });
 
-  it('starts a new attempt once the active one is older than the window', async () => {
+  it('starts a new attempt once the active one is past its window and Paystack says it did not succeed', async () => {
     const first = await service.charge(22, 35, 4);
-    charges.get(1)!.createdAt = new Date(
-      Date.now() - CHARGE_ACTIVE_WINDOW_MS - 1,
-    );
+    charges.get(1)!.expiresAt = new Date(Date.now() - 1);
+    paystack.verifyTransaction.mockResolvedValue({ status: 'abandoned' });
     const second = await service.charge(22, 35, 4);
     expect(second.reference).not.toBe(first.reference);
+    expect(charges.get(1)!.status).toBe('failed');
+    expect(paystack.verifyTransaction).toHaveBeenCalledWith(first.reference);
+  });
+
+  it('a past-window attempt Paystack cannot confirm either way stays active', async () => {
+    const first = await service.charge(22, 35, 4);
+    charges.get(1)!.expiresAt = new Date(Date.now() - 1);
+    paystack.verifyTransaction.mockRejectedValue(new Error('ECONNRESET'));
+    // Same method: the same attempt comes back.
+    await expect(service.charge(22, 35, 4)).resolves.toMatchObject({
+      reference: first.reference,
+    });
+    // Another method: 409 with the attempt.
+    methods.getChargeable.mockResolvedValue({ ...momo, id: 6 });
+    await expect(service.charge(22, 35, 6)).rejects.toMatchObject({
+      response: expect.objectContaining({
+        errorCode: PAYMENT_ATTEMPT_ACTIVE,
+      }) as unknown,
+    });
+    expect(charges.get(1)!.status).toBe('pending');
+    expect(paystack.chargeMobileMoney).toHaveBeenCalledTimes(1);
+  });
+
+  it('a past-window attempt Paystack reports as paid is settled, never released', async () => {
+    await service.charge(22, 35, 4);
+    charges.get(1)!.expiresAt = new Date(Date.now() - 1);
+    paystack.verifyTransaction.mockResolvedValue({
+      status: 'success',
+      amount: 35000,
+      currency: 'GHS',
+      channel: 'mobile_money',
+      paid_at: '2026-11-01T10:00:00Z',
+    });
+    paymentsService.applyChargeSuccess.mockImplementation(() => {
+      charges.get(1)!.status = 'succeeded';
+      txPayments.findOne
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ ...payment, status: PaymentStatus.HELD });
+      return Promise.resolve();
+    });
+    await expect(service.charge(22, 35, 4)).rejects.toMatchObject({
+      response: expect.objectContaining({ errorCode: ALREADY_PAID }) as unknown,
+    });
+    expect(charges.get(1)!.status).toBe('succeeded');
+    expect(paystack.chargeMobileMoney).toHaveBeenCalledTimes(1);
+  });
+
+  it('another saved method while one is active is 409 PAYMENT_ATTEMPT_ACTIVE with the attempt', async () => {
+    const first = await service.charge(22, 35, 4);
+    methods.getChargeable.mockResolvedValue(card);
+    const err = await service.charge(22, 35, 5).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ConflictException);
+    expect((err as ConflictException).getResponse()).toMatchObject({
+      errorCode: PAYMENT_ATTEMPT_ACTIVE,
+      message: expect.stringContaining('approval on your phone') as unknown,
+      data: {
+        reference: first.reference,
+        kind: 'mobile_money',
+        status: 'pending',
+        paymentMethodId: 4,
+      },
+    });
+    expect(paystack.chargeAuthorization).not.toHaveBeenCalled();
+  });
+
+  it('an open hosted checkout blocks a saved-method charge', async () => {
+    charges.set(1, {
+      id: 1,
+      paymentId: 7,
+      customerId: 22,
+      reference: 'jinva-35-22-1',
+      methodType: 'hosted',
+      status: 'hosted_open',
+      authorizationUrl: 'https://checkout.paystack.test/x',
+      createdAt: new Date(),
+      expiresAt: new Date(Date.now() + 60_000),
+    } as PaymentCharge);
+    nextId = 2;
+    await expect(service.charge(22, 35, 4)).rejects.toMatchObject({
+      response: expect.objectContaining({
+        errorCode: PAYMENT_ATTEMPT_ACTIVE,
+        data: expect.objectContaining({
+          kind: 'hosted',
+          authorizationUrl: 'https://checkout.paystack.test/x',
+        }) as unknown,
+      }) as unknown,
+    });
+    expect(paystack.chargeMobileMoney).not.toHaveBeenCalled();
   });
 
   it('charges a card authorization; an expired card is 422 before anything', async () => {
@@ -198,14 +310,35 @@ describe('SavedMethodChargeService', () => {
     });
   });
 
-  it('409 when the job is already paid, 404 when nothing is due', async () => {
+  it('409 ALREADY_PAID (with the payment) when the job is paid, 404 when nothing is due', async () => {
+    txPayments.findOne.mockResolvedValueOnce(null).mockResolvedValueOnce({
+      ...payment,
+      status: PaymentStatus.RELEASED,
+      paidReference: 'jinva-ch-7-x',
+      paidAt: new Date('2026-11-01T10:00:00Z'),
+    });
+    const err = await service.charge(22, 35, 4).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ConflictException);
+    expect((err as ConflictException).getResponse()).toEqual({
+      errorCode: ALREADY_PAID,
+      message: 'This job is already paid.',
+      data: {
+        jobId: 35,
+        status: PaymentStatus.RELEASED,
+        amount: 350,
+        currency: undefined,
+        paidAt: '2026-11-01T10:00:00.000Z',
+        reference: 'jinva-ch-7-x',
+      },
+    });
+    txPayments.findOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+    await expect(service.charge(22, 35, 4)).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+    // A cancelled payment is not "paid": nothing is due.
     txPayments.findOne
       .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce({ id: 7 });
-    await expect(service.charge(22, 35, 4)).rejects.toBeInstanceOf(
-      ConflictException,
-    );
-    txPayments.findOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+      .mockResolvedValueOnce({ ...payment, status: PaymentStatus.CANCELLED });
     await expect(service.charge(22, 35, 4)).rejects.toBeInstanceOf(
       NotFoundException,
     );
@@ -255,6 +388,26 @@ describe('SavedMethodChargeService', () => {
         started.reference,
         '123456',
       );
+    });
+
+    it('409 ALREADY_PAID on the code step once the job is paid', async () => {
+      paystack.chargeMobileMoney.mockResolvedValue({
+        outcome: 'ok',
+        data: { status: 'send_otp' },
+      });
+      const started = await service.charge(22, 35, 4);
+      payments.findOne.mockResolvedValueOnce({
+        ...payment,
+        status: PaymentStatus.HELD,
+      });
+      await expect(
+        service.submitOtp(22, started.reference, '123456'),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({
+          errorCode: ALREADY_PAID,
+        }) as unknown,
+      });
+      expect(paystack.submitChargeOtp).not.toHaveBeenCalled();
     });
 
     it('409 when the charge is not waiting for a code; 404 for someone else', async () => {
@@ -321,7 +474,7 @@ describe('SavedMethodChargeService', () => {
         channel: 'mobile_money',
         paid_at: '2026-11-01T10:00:00Z',
       });
-      paymentsService.applySavedChargeSuccess.mockImplementation(() => {
+      paymentsService.applyChargeSuccess.mockImplementation(() => {
         charges.get(1)!.status = 'succeeded';
         return Promise.resolve();
       });
@@ -330,7 +483,7 @@ describe('SavedMethodChargeService', () => {
       ).resolves.toMatchObject({
         status: 'succeeded',
       });
-      expect(paymentsService.applySavedChargeSuccess).toHaveBeenCalledWith(
+      expect(paymentsService.applyChargeSuccess).toHaveBeenCalledWith(
         1,
         expect.objectContaining({
           reference: started.reference,
@@ -351,18 +504,67 @@ describe('SavedMethodChargeService', () => {
         status: 'failed',
       });
 
+      // Past the window: unreachable keeps it waiting; "not found" releases it.
       charges.get(1)!.status = 'pending';
       charges.get(1)!.lastVerifiedAt = null;
       charges.get(1)!.createdAt = new Date(
         Date.now() - CHARGE_ACTIVE_WINDOW_MS - 1,
       );
-      paystack.verifyTransaction.mockRejectedValue(new Error('404'));
+      charges.get(1)!.expiresAt = null;
+      paystack.verifyTransaction.mockRejectedValue(new Error('ETIMEDOUT'));
+      await expect(
+        service.status(22, started.reference),
+      ).resolves.toMatchObject({ status: 'pending' });
+
+      charges.get(1)!.lastVerifiedAt = null;
+      paystack.verifyTransaction.mockRejectedValue(
+        new PaystackRequestError('Transaction reference not found', 400),
+      );
       await expect(
         service.status(22, started.reference),
       ).resolves.toMatchObject({
         status: 'failed',
         message: CHARGE_MESSAGES.NOT_APPROVED,
       });
+      expect(charges.get(1)!.status).toBe('expired');
+    });
+
+    it('a pending charge Paystack still calls pending inside the window stays active', async () => {
+      const started = await service.charge(22, 35, 4);
+      charges.get(1)!.createdAt = new Date(
+        Date.now() - CHARGE_VERIFY_INTERVAL_MS - 1,
+      );
+      paystack.verifyTransaction.mockResolvedValue({ status: 'pending' });
+      await expect(
+        service.status(22, started.reference),
+      ).resolves.toMatchObject({ status: 'pending' });
+    });
+
+    it('reports cancelled, expired and hosted attempts in the charge shape', () => {
+      const base = {
+        reference: 'r',
+        methodType: 'mobile_money',
+        action: 'x',
+        message: null,
+      } as unknown as PaymentCharge;
+      expect(
+        SavedMethodChargeService.toResult(
+          { ...base, status: 'cancelled', message: CHARGE_MESSAGES.CANCELLED },
+          1,
+        ),
+      ).toMatchObject({ status: 'failed', message: CHARGE_MESSAGES.CANCELLED });
+      expect(
+        SavedMethodChargeService.toResult({ ...base, status: 'expired' }, 1),
+      ).toMatchObject({
+        status: 'failed',
+        message: CHARGE_MESSAGES.NOT_APPROVED,
+      });
+      expect(
+        SavedMethodChargeService.toResult(
+          { ...base, methodType: 'hosted', status: 'hosted_open' },
+          1,
+        ),
+      ).toMatchObject({ method: 'hosted', status: 'pending', action: null });
     });
 
     it('a duplicate attempt reads as succeeded with a review message', async () => {

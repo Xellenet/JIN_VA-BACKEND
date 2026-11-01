@@ -24,6 +24,9 @@ import {
   PayoutType,
 } from '@common/types/enums';
 import { APP_EVENTS } from '@common/events/app.events';
+import { PaymentAttemptsService } from './payment-attempts.service';
+import { DuplicateRefundService } from './duplicate-refund.service';
+import { chargeStore, type ChargeStore } from '../../test/support/charge-store';
 
 /**
  * Decision branches of PaymentsService beyond initializePayment's happy path:
@@ -53,6 +56,10 @@ describe('PaymentsService (flows)', () => {
   let txPaymentRepo: ReturnType<typeof mockRepo>;
   let txProfileRepo: ReturnType<typeof mockRepo>;
   let manager: { getRepository: jest.Mock };
+  /** Payment attempts, shared by the repository and the transaction. */
+  let charges: ChargeStore;
+  const attempts = { claim: jest.fn(), jobState: jest.fn() };
+  const refunds = { process: jest.fn() };
 
   const paystack = {
     initializeTransaction: jest.fn(),
@@ -112,18 +119,13 @@ describe('PaymentsService (flows)', () => {
         { provide: ConfigService, useValue: config },
         { provide: EventEmitter2, useValue: events },
         { provide: AdminAuditService, useValue: audit },
-        // Saved payment methods: no charge attempts, no card saving here.
-        {
-          provide: getRepositoryToken(PaymentCharge),
-          useValue: {
-            findOne: jest.fn().mockResolvedValue(null),
-            count: jest.fn().mockResolvedValue(0),
-          },
-        },
+        { provide: getRepositoryToken(PaymentCharge), useValue: charges },
         {
           provide: PaymentMethodsService,
           useValue: { saveCardFromAuthorization: jest.fn() },
         },
+        { provide: PaymentAttemptsService, useValue: attempts },
+        { provide: DuplicateRefundService, useValue: refunds },
       ],
     }).compile();
     return module.get(PaymentsService);
@@ -169,9 +171,14 @@ describe('PaymentsService (flows)', () => {
     profileRepo = mockRepo();
     txPaymentRepo = mockRepo();
     txProfileRepo = mockRepo();
+    charges = chargeStore();
     manager = {
       getRepository: jest.fn((entity: unknown) =>
-        entity === Payment ? txPaymentRepo : txProfileRepo,
+        entity === Payment
+          ? txPaymentRepo
+          : entity === PaymentCharge
+            ? charges
+            : txProfileRepo,
       ),
     };
     dataSource.transaction.mockImplementation(
@@ -469,10 +476,19 @@ describe('PaymentsService (flows)', () => {
   });
 
   describe('initializePayment', () => {
-    it('rethrows a Paystack error that is not a duplicate reference', async () => {
-      paymentRepo.findOne.mockResolvedValue(
-        payment({ status: PaymentStatus.PENDING }),
-      );
+    it('rethrows a Paystack error that is not a duplicate reference, releasing the attempt', async () => {
+      const p = payment({ status: PaymentStatus.PENDING });
+      const attempt = charges.add({
+        paymentId: 7,
+        reference: p.reference,
+        methodType: 'hosted',
+        status: 'hosted_open',
+      });
+      attempts.claim.mockResolvedValue({
+        outcome: 'created',
+        payment: p,
+        charge: attempt,
+      });
       userRepo.findOneOrFail.mockResolvedValue({ email: 'ama@example.com' });
       paystack.initializeTransaction.mockRejectedValue(
         new Error('Invalid key'),
@@ -486,9 +502,15 @@ describe('PaymentsService (flows)', () => {
           email: 'ama@example.com',
           amountGhs: 100,
           callbackUrl: 'https://app.example.com/pay',
-          metadata: { jobId: 35, customerId: 22, paymentId: 7 },
+          metadata: {
+            jobId: 35,
+            customerId: 22,
+            paymentId: 7,
+            chargeId: attempt.id,
+          },
         }),
       );
+      expect(charges.rows.get(attempt.id)?.status).toBe('failed');
     });
   });
 
@@ -538,6 +560,12 @@ describe('PaymentsService (flows)', () => {
       ...overrides,
     });
 
+    /** The payment row: unlocked reads and the locked read in the transaction. */
+    const arrange = (p: Payment) => {
+      paymentRepo.findOne.mockResolvedValue(p);
+      txPaymentRepo.findOne.mockResolvedValue(p);
+    };
+
     it("hides another customer's payment as not found", async () => {
       paymentRepo.findOne.mockResolvedValue(payment({ customerId: 99 }));
       await expect(service.verifyPayment(22, 'r')).rejects.toThrow(
@@ -555,7 +583,7 @@ describe('PaymentsService (flows)', () => {
 
     it('reconciles a matching success into HELD and notifies both sides', async () => {
       const p = payment({ status: PaymentStatus.PENDING });
-      paymentRepo.findOne.mockResolvedValue(p);
+      arrange(p);
       paystack.verifyTransaction.mockResolvedValue(remote());
       withArtisanContext({ id: 9, firstname: 'Kofi', lastname: 'Mensah' });
 
@@ -567,7 +595,16 @@ describe('PaymentsService (flows)', () => {
       });
       expect(p.channel).toBe('mobile_money');
       expect(p.paidAt).toEqual(new Date('2026-02-01T10:00:00Z'));
-      expect(paymentRepo.save).toHaveBeenCalledWith(p);
+      expect(p.paidReference).toBe(p.reference);
+      expect(txPaymentRepo.save).toHaveBeenCalledWith(p);
+      // The payment's own reference became its (succeeded) attempt.
+      expect([...charges.rows.values()]).toEqual([
+        expect.objectContaining({
+          reference: p.reference,
+          methodType: 'hosted',
+          status: 'succeeded',
+        }),
+      ]);
       expect(events.emit).toHaveBeenCalledWith(APP_EVENTS.PAYMENT_RECEIPT, {
         customerId: 22,
         jobId: 35,
@@ -585,7 +622,7 @@ describe('PaymentsService (flows)', () => {
 
     it('uses now as paidAt when Paystack omits it', async () => {
       const p = payment({ status: PaymentStatus.PENDING });
-      paymentRepo.findOne.mockResolvedValue(p);
+      arrange(p);
       paystack.verifyTransaction.mockResolvedValue(remote({ paid_at: null }));
       withArtisanContext(null);
 
@@ -607,25 +644,68 @@ describe('PaymentsService (flows)', () => {
       'leaves the payment PENDING on a %s mismatch',
       async (_label, overrides) => {
         const p = payment({ status: PaymentStatus.PENDING });
-        paymentRepo.findOne.mockResolvedValue(p);
+        arrange(p);
         paystack.verifyTransaction.mockResolvedValue(remote(overrides));
 
         const res = await service.verifyPayment(22, p.reference);
 
         expect(res.data.status).toBe(PaymentStatus.PENDING);
-        expect(paymentRepo.save).not.toHaveBeenCalled();
+        expect(txPaymentRepo.save).not.toHaveBeenCalled();
         expect(events.emit).not.toHaveBeenCalled();
       },
     );
 
-    it('does not touch an already-HELD payment', async () => {
-      paymentRepo.findOne.mockResolvedValue(payment());
+    it('does not touch an already-HELD payment paid by this reference', async () => {
+      const p = payment();
+      arrange(p);
       paystack.verifyTransaction.mockResolvedValue(remote());
 
-      const res = await service.verifyPayment(22, 'r');
+      const res = await service.verifyPayment(22, p.reference);
 
       expect(res.data.status).toBe(PaymentStatus.HELD);
-      expect(paymentRepo.save).not.toHaveBeenCalled();
+      expect(txPaymentRepo.save).not.toHaveBeenCalled();
+      expect(refunds.process).not.toHaveBeenCalled();
+    });
+
+    it('verifies a saved-method charge reference the customer owns', async () => {
+      const p = payment({ status: PaymentStatus.PENDING });
+      charges.add({
+        paymentId: 7,
+        customerId: 22,
+        reference: 'jinva-ch-7-1-aa',
+        methodType: 'mobile_money',
+        status: 'pending',
+      });
+      paymentRepo.findOne.mockResolvedValue(p);
+      txPaymentRepo.findOne.mockResolvedValue(p);
+      paystack.verifyTransaction.mockResolvedValue(remote());
+
+      const res = await service.verifyPayment(22, 'jinva-ch-7-1-aa');
+
+      expect(res.data).toMatchObject({
+        reference: 'jinva-ch-7-1-aa',
+        status: PaymentStatus.HELD,
+      });
+      expect(p.paidReference).toBe('jinva-ch-7-1-aa');
+    });
+
+    it('a success for a job already paid by another reference is refunded, not HELD again', async () => {
+      const p = payment({ paidReference: 'jinva-ch-7-1-aa' });
+      arrange(p);
+      paystack.verifyTransaction.mockResolvedValue(remote());
+
+      await service.verifyPayment(22, p.reference);
+
+      expect(txPaymentRepo.save).not.toHaveBeenCalled();
+      const dup = [...charges.rows.values()][0];
+      expect(dup).toMatchObject({
+        reference: p.reference,
+        status: 'duplicate',
+        refundStatus: 'pending',
+        refundAmount: 100,
+      });
+      expect(refunds.process).toHaveBeenCalledWith(dup.id);
+      expect(events.emit).not.toHaveBeenCalled();
     });
   });
 
@@ -1050,26 +1130,30 @@ describe('PaymentsService (flows)', () => {
         paid_at: '2026-02-01T10:00:00Z',
       };
 
+      const arrange = (p: Payment) => {
+        paymentRepo.findOne.mockResolvedValue(p);
+        txPaymentRepo.findOne.mockResolvedValue(p);
+      };
+
       it('ignores an unknown reference', async () => {
         paymentRepo.findOne.mockResolvedValue(null);
         await send('charge.success', charge);
-        expect(paymentRepo.save).not.toHaveBeenCalled();
+        expect(txPaymentRepo.save).not.toHaveBeenCalled();
+        expect(charges.rows.size).toBe(0);
       });
 
       it.each([
         ['amount', { amount: 9999 }],
         ['currency', { currency: 'USD' }],
       ])('refuses to reconcile a %s mismatch', async (_l, overrides) => {
-        paymentRepo.findOne.mockResolvedValue(
-          payment({ status: PaymentStatus.PENDING }),
-        );
+        arrange(payment({ status: PaymentStatus.PENDING }));
         await send('charge.success', { ...charge, ...overrides });
-        expect(paymentRepo.save).not.toHaveBeenCalled();
+        expect(txPaymentRepo.save).not.toHaveBeenCalled();
       });
 
       it('marks the payment HELD and notifies on the first delivery', async () => {
         const p = payment({ status: PaymentStatus.PENDING });
-        paymentRepo.findOne.mockResolvedValue(p);
+        arrange(p);
         withArtisanContext({ id: 9, firstname: 'Kofi', lastname: 'Mensah' });
         const { currency: _c, ...noCurrency } = charge;
 
@@ -1081,17 +1165,53 @@ describe('PaymentsService (flows)', () => {
         expect(events.emit).toHaveBeenCalledTimes(2);
       });
 
-      it('does not notify again on a redelivered webhook', async () => {
-        paymentRepo.findOne.mockResolvedValue(payment());
+      it('processes a redelivered webhook once: no second HELD, notice or refund', async () => {
+        const p = payment({ status: PaymentStatus.PENDING });
+        arrange(p);
+        withArtisanContext({ id: 9, firstname: 'Kofi', lastname: 'Mensah' });
         await send('charge.success', charge);
-        expect(paymentRepo.save).toHaveBeenCalled();
+        expect(events.emit).toHaveBeenCalledTimes(2);
+        events.emit.mockClear();
+        txPaymentRepo.save.mockClear();
+
+        await send('charge.success', charge);
+
+        expect(txPaymentRepo.save).not.toHaveBeenCalled();
+        expect(events.emit).not.toHaveBeenCalled();
+        expect(refunds.process).not.toHaveBeenCalled();
+      });
+
+      it('never moves a RELEASED payment back to HELD on a late redelivery', async () => {
+        const p = payment({ status: PaymentStatus.RELEASED });
+        arrange(p);
+        await send('charge.success', charge);
+        expect(p.status).toBe(PaymentStatus.RELEASED);
+        expect(txPaymentRepo.save).not.toHaveBeenCalled();
         expect(events.emit).not.toHaveBeenCalled();
       });
 
+      it('a refund that cannot start is left for the scheduler', async () => {
+        const p = payment({ paidReference: 'jinva-ch-7-1-aa' });
+        arrange(p);
+        refunds.process.mockRejectedValueOnce(new Error('db down'));
+        await expect(send('charge.success', charge)).resolves.toBeUndefined();
+        expect([...charges.rows.values()][0]).toMatchObject({
+          status: 'duplicate',
+          refundStatus: 'pending',
+        });
+      });
+
+      it('routes refund events to the duplicate refunds', async () => {
+        const onRefund = jest.fn();
+        (refunds as Record<string, unknown>).onRefundWebhook = onRefund;
+        await send('refund.processed', { transaction_reference: 'x' });
+        expect(onRefund).toHaveBeenCalledWith('refund.processed', {
+          transaction_reference: 'x',
+        });
+      });
+
       it('falls back to a generic job title when the job is gone', async () => {
-        paymentRepo.findOne.mockResolvedValue(
-          payment({ status: PaymentStatus.PENDING }),
-        );
+        arrange(payment({ status: PaymentStatus.PENDING }));
         jobRepo.findOne.mockResolvedValue(null);
         profileRepo.findOne.mockResolvedValue(null);
 

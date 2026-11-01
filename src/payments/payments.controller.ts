@@ -13,14 +13,17 @@ import {
   Req,
   Res,
   UseGuards,
+  UseInterceptors,
   ParseEnumPipe,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
+  ApiHeader,
   ApiOperation,
   ApiQuery,
   ApiTags,
 } from '@nestjs/swagger';
+import { IdempotencyInterceptor } from '@common/idempotency/idempotency.interceptor';
 import { PaymentsService } from './payments.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -68,6 +71,17 @@ import {
   SubmitChargeOtpDto,
 } from './dto/saved-method-charge.dto';
 
+/** Swagger: the optional header on the payment POSTs. */
+const IDEMPOTENCY_KEY_HEADER = {
+  name: 'Idempotency-Key',
+  required: false,
+  description:
+    'Optional. A UUID (or 16-64 URL-safe characters) per customer intent. The same key with ' +
+    'the same request replays the first response for 24 hours (header Idempotency-Replayed: true); ' +
+    'with a different request it is 422 IDEMPOTENCY_KEY_REUSED; while the first is still running ' +
+    'it is 409 IDEMPOTENCY_IN_PROGRESS.',
+};
+
 @ApiTags('Payments')
 @Controller('payments')
 export class PaymentsController {
@@ -101,10 +115,18 @@ export class PaymentsController {
 
   // ─── Customer routes ──────────────────────────────────────────────────────────
 
+  /**
+   * One active attempt per job: the same open checkout comes back while it
+   * is open; 409 `PAYMENT_ATTEMPT_ACTIVE` (with the attempt in `data`) while
+   * a saved-method charge is waiting; 409 `ALREADY_PAID` (with the payment)
+   * once the job is paid.
+   */
   @Post('initialize')
   @UseGuards(JwtAuthGuard, RolesGuard, RejectPinFieldsGuard)
+  @UseInterceptors(IdempotencyInterceptor)
   @Roles(Role.CUSTOMER)
   @ApiBearerAuth()
+  @ApiHeader(IDEMPOTENCY_KEY_HEADER)
   @ApiOperation({ summary: 'Get Paystack payment URL for an accepted job' })
   initialize(
     @Req() req: AuthenticatedRequest,
@@ -122,7 +144,9 @@ export class PaymentsController {
    * the network's approval prompt to the customer's phone (they approve with
    * their PIN there; no PIN is ever sent here). The payment becomes HELD
    * only via the webhook or a verify, exactly as with the hosted checkout.
-   * A second call while an attempt is active returns that attempt.
+   * A second call with the same method while an attempt is active returns
+   * that attempt; another kind is 409 `PAYMENT_ATTEMPT_ACTIVE`; a paid job
+   * is 409 `ALREADY_PAID`.
    */
   @Post(':jobId/charge')
   @HttpCode(HttpStatus.OK)
@@ -132,9 +156,11 @@ export class PaymentsController {
     RejectPinFieldsGuard,
     PaymentChargeThrottlerGuard,
   )
+  @UseInterceptors(IdempotencyInterceptor)
   @Roles(Role.CUSTOMER)
   @Header('Cache-Control', 'private, no-store')
   @ApiBearerAuth()
+  @ApiHeader(IDEMPOTENCY_KEY_HEADER)
   @ApiOperation({ summary: 'Pay a job with a saved payment method' })
   async chargeSavedMethod(
     @Req() req: AuthenticatedRequest,
@@ -160,9 +186,11 @@ export class PaymentsController {
     RejectPinFieldsGuard,
     PaymentChargeThrottlerGuard,
   )
+  @UseInterceptors(IdempotencyInterceptor)
   @Roles(Role.CUSTOMER)
   @Header('Cache-Control', 'private, no-store')
   @ApiBearerAuth()
+  @ApiHeader(IDEMPOTENCY_KEY_HEADER)
   @ApiOperation({ summary: 'Submit the one-time code for a pending charge' })
   async submitChargeOtp(
     @Req() req: AuthenticatedRequest,
@@ -191,6 +219,30 @@ export class PaymentsController {
     return {
       message: 'Payment status retrieved',
       data: await this.savedCharges.status(req.user.id, reference),
+    };
+  }
+
+  /**
+   * The job's payment state for the pay and job pages: whether it is paid,
+   * the active attempt to resume (checked with Paystack when due), and any
+   * duplicate payment refunded for it. 404 unless the caller is the job's
+   * customer.
+   */
+  @Get('jobs/:jobId/attempt')
+  @UseGuards(JwtAuthGuard, RolesGuard, PaymentChargeStatusThrottlerGuard)
+  @Roles(Role.CUSTOMER)
+  @Header('Cache-Control', 'private, no-store')
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: "My job's payment state and active payment attempt",
+  })
+  async jobPaymentState(
+    @Req() req: AuthenticatedRequest,
+    @Param('jobId', ParseIntPipe) jobId: number,
+  ) {
+    return {
+      message: 'Payment state retrieved',
+      data: await this.paymentsService.getJobPaymentState(req.user.id, jobId),
     };
   }
 

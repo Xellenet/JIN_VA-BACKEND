@@ -32,7 +32,8 @@ export const CHARGE_MESSAGES = {
   NOT_APPROVED:
     "This payment wasn't approved. You can try again or pay another way.",
   DUPLICATE:
-    'This job is already paid. Our team will review the extra payment.',
+    "This job is already paid. We're refunding the extra payment to you.",
+  CANCELLED: 'This payment was stopped because the account is being closed.',
 } as const;
 
 /** Paystack statuses that need a step only the hosted checkout can take. */

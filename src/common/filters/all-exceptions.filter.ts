@@ -39,6 +39,13 @@ interface StructuredErrorResponse {
    * decided is safe to hand the client — never load internals into it.
    */
   details?: Record<string, unknown>;
+  /**
+   * A resource the client needs to recover from a 4xx, surfaced as the
+   * envelope's top-level `data` (e.g. the active payment attempt with
+   * `PAYMENT_ATTEMPT_ACTIVE`, the paid payment with `ALREADY_PAID`). Opt-in,
+   * JSON-only, and dropped on every 5xx.
+   */
+  data?: unknown;
 }
 
 /** Only primitives cross the boundary — no nested objects, no functions. */
@@ -80,6 +87,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
     let errorCode: string | undefined;
     let retryAfterSeconds: number | undefined;
     let details: Record<string, string | number | boolean> | undefined;
+    let data: unknown;
 
     if (exception instanceof HttpException) {
       const rawResponse: unknown = exception.getResponse();
@@ -101,6 +109,9 @@ export class AllExceptionsFilter implements ExceptionFilter {
         retryAfterSeconds = structured.retryAfterSeconds;
       }
       details = sanitizeDetails(structured.details);
+      if (structured.data !== undefined && structured.data !== null) {
+        data = JSON.parse(JSON.stringify(structured.data)) as unknown;
+      }
     } else if (exception instanceof Error) {
       message = exception.message;
       errorName = exception.name;
@@ -122,6 +133,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
     let safeError: string | undefined;
     let safeRetryAfterSeconds: number | undefined;
     let safeDetails: Record<string, string | number | boolean> | undefined;
+    let safeData: unknown;
     const isClientError = status >= 400 && status < 500;
 
     if (isClientError) {
@@ -129,6 +141,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       safeError = errorCode ?? errorName;
       safeRetryAfterSeconds = retryAfterSeconds;
       safeDetails = details;
+      safeData = data;
     } else {
       // 5xx: never hand the client internals in production, including the code.
       safeMessage = isProduction
@@ -152,6 +165,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
           : {}),
         ...(safeDetails ? { details: safeDetails } : {}),
       },
+      ...(safeData !== undefined ? { data: safeData } : {}),
     };
 
     response.status(status).json(errorResponse);

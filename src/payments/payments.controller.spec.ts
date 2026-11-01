@@ -28,6 +28,10 @@ import {
 } from '@common/throttling/customer-throttler.guards';
 import { RejectPinFieldsGuard } from '@common/guards/reject-pin-fields.guard';
 
+import type { CallHandler } from '@nestjs/common';
+import { IdempotencyInterceptor } from '@common/idempotency/idempotency.interceptor';
+import { INTERCEPTORS_METADATA } from '@nestjs/common/constants';
+
 describe('PaymentsController', () => {
   let controller: PaymentsController;
 
@@ -44,6 +48,7 @@ describe('PaymentsController', () => {
     adminRefund: jest.fn(),
     setFraudFlag: jest.fn(),
     clearFraudFlag: jest.fn(),
+    getJobPaymentState: jest.fn(),
   };
 
   const history = {
@@ -109,6 +114,10 @@ describe('PaymentsController', () => {
       .useValue({ canActivate: () => true })
       .overrideGuard(PayoutAccountLookupThrottlerGuard)
       .useValue({ canActivate: () => true })
+      .overrideInterceptor(IdempotencyInterceptor)
+      .useValue({
+        intercept: (_c: unknown, next: CallHandler) => next.handle(),
+      })
       .compile();
 
     controller = module.get(PaymentsController);
@@ -422,5 +431,32 @@ describe('PaymentsController', () => {
         ).toEqual(['CUSTOMER']);
       },
     );
+
+    it.each(['chargeSavedMethod', 'submitChargeOtp', 'initialize'] as const)(
+      '%s takes an Idempotency-Key',
+      (handler) => {
+        expect(
+          Reflect.getMetadata(
+            INTERCEPTORS_METADATA,
+            PaymentsController.prototype[handler],
+          ),
+        ).toContain(IdempotencyInterceptor);
+      },
+    );
+
+    it('jobPaymentState passes the customer and job, is customer-only and never cached', async () => {
+      const state = { jobId: 35, paid: false };
+      service.getJobPaymentState.mockResolvedValue(state);
+      await expect(controller.jobPaymentState(req, 35)).resolves.toEqual({
+        message: 'Payment state retrieved',
+        data: state,
+      });
+      expect(service.getJobPaymentState).toHaveBeenCalledWith(22, 35);
+      const handler = PaymentsController.prototype.jobPaymentState;
+      expect(Reflect.getMetadata('roles', handler)).toEqual(['CUSTOMER']);
+      expect(Reflect.getMetadata('__guards__', handler) as unknown[]).toContain(
+        PaymentChargeStatusThrottlerGuard,
+      );
+    });
   });
 });
