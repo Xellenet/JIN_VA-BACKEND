@@ -73,8 +73,7 @@ export type CardSaveOutcome =
   | 'not_reusable'
   | 'limit'
   | 'disabled'
-  | 'invalid'
-  | 'account_closed';
+  | 'invalid';
 
 @Injectable()
 export class PaymentMethodsService {
@@ -325,14 +324,7 @@ export class PaymentMethodsService {
     const hashes = this.encryption.hashCandidates(signature);
 
     return this.dataSource.transaction(async (manager) => {
-      // A closed (soft-deleted) account never gets a card saved: the lock
-      // waits for a deletion request in progress, then finds no live user.
-      const owner = await manager.getRepository(User).findOne({
-        where: { id: userId },
-        select: { id: true },
-        lock: { mode: 'pessimistic_write' },
-      });
-      if (!owner) return 'account_closed' as const;
+      await this.lockOwner(manager, userId);
       const repo = manager.getRepository(CustomerPaymentMethod);
       const rows = await this.listRows(userId, manager);
       if (

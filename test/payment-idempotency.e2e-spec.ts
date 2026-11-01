@@ -4,8 +4,8 @@
  * vs saved method), expiry only after Paystack says no, paid is final, the
  * hosted and saved-method webhooks taking the same lock (a second success is
  * refunded automatically, a redelivery is processed once), refund webhooks
- * and retries, and saved methods deleted the moment an account deletion is
- * requested. Concurrency is real: two requests in flight at once
+ * and retries, and saved methods kept through the 30-day recovery window
+ * after an account deletion request. Concurrency is real: two requests in flight at once
  * (Promise.all) against PGlite.
  *
  * Paystack is mocked on the prototype; webhooks are signed with the
@@ -573,48 +573,18 @@ describe('Idempotent job payments', () => {
 
   // ─── Account deletion ────────────────────────────────────────────────────────
 
-  it('a deletion request removes saved methods at once and cancels attempts in flight', async () => {
+  it('a deletion request keeps saved methods for the 30-day recovery window', async () => {
     const add = await request(server())
       .post('/api/v1/users/me/payment-methods/mobile-money')
       .set(as('d'))
       .send({ network: 'MTN', accountNumber: '0240000002' });
     expect(add.status).toBe(201);
-    // An attempt left over on a job that was cancelled meanwhile.
-    const jobId = await acceptedJob('d', `Closing account ${uniq}`);
-    const ch = await request(server())
-      .post(`/api/v1/payments/${jobId}/charge`)
-      .set(as('d'))
-      .send({ paymentMethodId: Number(body(add).data.id) });
-    expect(ch.status).toBe(200);
-    await dataSource.query(
-      "UPDATE payments SET status = 'CANCELLED' WHERE job_id = $1",
-      [jobId],
-    );
-    await dataSource.query(
-      "UPDATE jobs SET status = 'CANCELLED' WHERE id = $1",
-      [jobId],
-    );
 
     const del = await request(server()).delete('/api/v1/users/me').set(as('d'));
     expect(del.status).toBe(200);
 
-    expect(await methodRows(ids.d)).toHaveLength(0);
-    expect((await chargeRows(jobId)).map((c) => c.status)).toEqual([
-      'cancelled',
-    ]);
-    const events = await dataSource.query<
-      Array<{ event: string; details: unknown }>
-    >(
-      "SELECT event, details FROM account_security_events WHERE user_id = $1 AND event = 'payment_method.removed'",
-      [ids.d],
-    );
-    expect(events).toEqual([
-      {
-        event: 'payment_method.removed',
-        details: { reason: 'account_deletion', count: 1, attemptsCancelled: 1 },
-      },
-    ]);
-    // The other customer's methods are untouched.
+    // Removed by the account purge once the window has passed, not now.
+    expect(await methodRows(ids.d)).toHaveLength(1);
     expect((await methodRows(ids.a)).length).toBeGreaterThan(0);
   });
 });

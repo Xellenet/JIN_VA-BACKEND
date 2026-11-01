@@ -46,7 +46,6 @@ import {
 } from '@common/utils/account-recovery.util';
 import { randomUUID } from 'node:crypto';
 import { hashEmailForLog } from '@common/utils/log-identifier.util';
-import { removePaymentDataOnDeletionRequest } from '../payment-methods/account-deletion';
 
 /**
  * A real bcrypt hash, at the application's configured cost factor, of a random
@@ -411,12 +410,9 @@ export class UsersService {
    * stranded on an account that is going to be purged.
    *
    * C1.6: nothing about the account's data is modified, anonymized or
-   * cascaded here beyond the one `deleted_at` stamp, with one exception:
-   * saved payment methods are deleted at once and active payment attempts
-   * cancelled, in the same transaction (a customer closing their account
-   * must not leave a chargeable card or number behind for 30 days). Apart
-   * from that the record set is frozen exactly as it was, so restoring is a
-   * single column going back to `NULL` (saved methods are added again).
+   * cascaded here beyond the one `deleted_at` stamp. That is precisely what
+   * makes the 30-day restore meaningful — the record set is frozen exactly as
+   * it was, so restoring is a single column going back to `NULL`.
    *
    * @param userId - The ID of the authenticated user (from `req.user.id`).
    * L4: also refused with a distinct 409 when the caller is an ADMIN and no
@@ -446,29 +442,8 @@ export class UsersService {
     await this.accountCommitments.assertDeletable(userId, user.role);
 
     await this.userTokenService.revokeRefreshTokenForUser(userId);
-    // Saved payment methods are deleted now, in the same transaction as the
-    // deletion request (not at the purge), and any payment attempt still in
-    // flight is cancelled. The user row is locked first, so a card being
-    // saved from a checkout at this moment either lands before (and is
-    // deleted here) or finds the account closed and is not saved.
-    const removal = await this.usersRepository.manager.transaction(
-      async (manager) => {
-        await manager.getRepository(User).findOne({
-          where: { id: userId },
-          select: { id: true },
-          lock: { mode: 'pessimistic_write' },
-        });
-        const removed = await removePaymentDataOnDeletionRequest(
-          manager,
-          userId,
-        );
-        await manager.getRepository(User).softDelete({ id: userId });
-        return removed;
-      },
-    );
-    this.logger.log(
-      `User ${userId} soft-deleted their account (saved payment methods removed: ${removal.methodsRemoved}, payment attempts cancelled: ${removal.attemptsCancelled})`,
-    );
+    await this.usersRepository.softDelete({ id: userId });
+    this.logger.log(`User ${userId} soft-deleted their account`);
 
     // Read back the timestamp Postgres actually wrote rather than assuming
     // `new Date()`: the purge job compares against this exact value, and the

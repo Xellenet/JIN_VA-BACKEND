@@ -181,9 +181,6 @@ export class UsersController {
     description:
       'Soft-deletes the account, revokes every refresh token, and emails a ' +
       'confirmation stating the exact date the account is permanently purged. ' +
-      'Saved payment methods are deleted immediately (not at the purge) and ' +
-      'any payment attempt still in flight is cancelled; restoring the account ' +
-      'does not bring them back. ' +
       'The account can be restored by signing in again (or completing Google ' +
       'sign-in) at any point up to `purgeAt`. ' +
       'Refused with 409 (`meta.error: ACCOUNT_HAS_LIVE_COMMITMENTS`) while the ' +
