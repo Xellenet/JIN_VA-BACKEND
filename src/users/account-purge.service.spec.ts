@@ -383,6 +383,7 @@ describe('AccountPurgeService (C1.7/C1.8)', () => {
         'payoutType',
         'paystackRecipientCode',
         'payoutAccountName',
+        'payoutAccountNameVerified',
         'payoutAccountNumber',
         'payoutBankCode',
       ]) {

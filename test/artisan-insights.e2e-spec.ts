@@ -113,7 +113,9 @@ describe('Artisan insights (B1–B7)', () => {
         amounts[2],
         status,
         `AI-${uniq}-${label}`,
-        extra.paid ? new Date(Date.now() - DAY) : null,
+        // A minute ago, not a day: "a day ago" falls in last month on the
+        // 1st, and the current-month assertions below would then fail.
+        extra.paid ? new Date(Date.now() - 60_000) : null,
         extra.released ? new Date() : null,
         extra.transferCode ?? null,
         extra.transferCode ? `TRF-${uniq}-${label}` : null,
@@ -514,6 +516,7 @@ describe('Artisan insights (B1–B7)', () => {
       label: 'Telecel Cash',
       last4: '1234',
       accountName: 'Kofi Asante',
+      accountNameVerified: null,
     });
     expect(JSON.stringify(res.body)).not.toContain('0201231234');
     expect(JSON.stringify(res.body)).not.toContain('RCP_');

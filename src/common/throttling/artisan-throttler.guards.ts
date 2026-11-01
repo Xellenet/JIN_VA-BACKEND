@@ -9,6 +9,7 @@ import { THROTTLER_NAMES } from './throttler-names';
 export const ARTISAN_RATE_LIMIT_ERROR_CODES = {
   ARTISAN_INSIGHTS: 'ARTISAN_INSIGHTS_RATE_LIMIT_EXCEEDED',
   ARTISAN_EXPORT: 'ARTISAN_EXPORT_RATE_LIMIT_EXCEEDED',
+  PAYOUT_ACCOUNT_LOOKUP: 'PAYOUT_ACCOUNT_LOOKUP_RATE_LIMIT_EXCEEDED',
 } as const;
 
 /**
@@ -27,4 +28,16 @@ export class ArtisanInsightsThrottlerGuard extends UserKeyedThrottlerGuard {
 export class ArtisanExportThrottlerGuard extends UserKeyedThrottlerGuard {
   protected readonly throttlerName = THROTTLER_NAMES.ARTISAN_EXPORT;
   protected readonly errorCode = ARTISAN_RATE_LIMIT_ERROR_CODES.ARTISAN_EXPORT;
+}
+
+/**
+ * Payout account name lookup and the payout save (each one a Paystack
+ * lookup): 10 per 600 s per user and route. The lookup reveals who owns a
+ * number, so enumeration has to be slow.
+ */
+@Injectable()
+export class PayoutAccountLookupThrottlerGuard extends UserKeyedThrottlerGuard {
+  protected readonly throttlerName = THROTTLER_NAMES.PAYOUT_ACCOUNT_LOOKUP;
+  protected readonly errorCode =
+    ARTISAN_RATE_LIMIT_ERROR_CODES.PAYOUT_ACCOUNT_LOOKUP;
 }

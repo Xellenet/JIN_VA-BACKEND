@@ -8,6 +8,43 @@ interface PaystackResponse<T> {
   data: T;
 }
 
+/**
+ * A refusal by Paystack, still the 502 every caller already handles, but
+ * carrying Paystack's own HTTP status so a caller that needs to (the account
+ * name lookup) can tell "this account doesn't exist" from "try later".
+ */
+export class PaystackRequestError extends BadGatewayException {
+  constructor(
+    message: string,
+    readonly upstreamStatus: number,
+  ) {
+    super(message);
+  }
+}
+
+/**
+ * The outcome of an account name lookup (`resolveAccount`):
+ * - `resolved`: Paystack named the account holder.
+ * - `unresolvable`: Paystack says the number/bank pair is wrong (400/422).
+ * - `unavailable`: the lookup could not be made right now (429, 5xx,
+ *   network, timeout, or an unexpected reply).
+ */
+export type ResolveAccountResult =
+  | { status: 'resolved'; accountName: string }
+  | { status: 'unresolvable' }
+  | { status: 'unavailable' };
+
+/** Paystack statuses meaning "the number and bank code don't match an account". */
+const UNRESOLVABLE_STATUSES = new Set([400, 422]);
+/** A name lookup that takes longer than this counts as unavailable. */
+export const RESOLVE_ACCOUNT_TIMEOUT_MS = 8_000;
+
+/** `••••1234`: only the last 4 characters, for logs. */
+export function maskForLog(value: string | null | undefined): string {
+  const v = (value ?? '').replace(/\s+/g, '');
+  return v.length <= 4 ? '••••' : `••••${v.slice(-4)}`;
+}
+
 @Injectable()
 export class PaystackService {
   private readonly logger = new Logger(PaystackService.name);
@@ -46,17 +83,28 @@ export class PaystackService {
     return json.data;
   }
 
-  private async get<T>(path: string): Promise<T> {
+  /**
+   * `logPath` replaces `path` in the error log when the path carries
+   * something that must not be logged (an account number).
+   */
+  private async get<T>(
+    path: string,
+    opts: { logPath?: string; signal?: AbortSignal } = {},
+  ): Promise<T> {
     const res = await fetch(`${this.baseUrl}${path}`, {
       headers: this.headers,
+      ...(opts.signal ? { signal: opts.signal } : {}),
     });
     const json = (await res.json()) as PaystackResponse<T>;
     if (!json.status) {
-      this.logger.error(`Paystack GET ${path} failed: ${json.message}`);
+      this.logger.error(
+        `Paystack GET ${opts.logPath ?? path} failed: ${json.message}`,
+      );
       // QA PAY-13: a refusal by Paystack is an upstream failure (502), not a
       // bug in JinVa (500); the message says what Paystack said.
-      throw new BadGatewayException(
+      throw new PaystackRequestError(
         `The payment provider couldn't complete this: ${json.message}`,
+        res.status,
       );
     }
     return json.data;
@@ -184,6 +232,54 @@ export class PaystackService {
         is_deleted?: boolean | null;
       }>
     >(`/bank?country=${encodeURIComponent(country)}&perPage=100`);
+  }
+
+  /**
+   * Account name lookup: the name Paystack has on a mobile money number
+   * (bank code `MTN` | `VOD` | `ATL`) or a bank account (its ghipss code).
+   *
+   * Never throws. A 400/422 from Paystack means the number and bank code
+   * don't match an account (`unresolvable`); anything else that goes wrong,
+   * a 429, a 5xx, a timeout, a network error or a reply without a name, is
+   * `unavailable`, so a caller can fall back instead of failing. The account
+   * number never appears in a log line.
+   */
+  async resolveAccount(
+    accountNumber: string,
+    bankCode: string,
+  ): Promise<ResolveAccountResult> {
+    const query =
+      `account_number=${encodeURIComponent(accountNumber)}` +
+      `&bank_code=${encodeURIComponent(bankCode)}`;
+    const logPath = `/bank/resolve (account ${maskForLog(accountNumber)}, bank ${bankCode})`;
+    try {
+      const data = await this.get<{
+        account_number?: string;
+        account_name?: string | null;
+      }>(`/bank/resolve?${query}`, {
+        logPath,
+        signal: AbortSignal.timeout(RESOLVE_ACCOUNT_TIMEOUT_MS),
+      });
+      const accountName =
+        typeof data?.account_name === 'string'
+          ? data.account_name.replace(/\s+/g, ' ').trim()
+          : '';
+      if (!accountName) return { status: 'unavailable' };
+      return { status: 'resolved', accountName };
+    } catch (err) {
+      if (
+        err instanceof PaystackRequestError &&
+        UNRESOLVABLE_STATUSES.has(err.upstreamStatus)
+      ) {
+        return { status: 'unresolvable' };
+      }
+      if (!(err instanceof PaystackRequestError)) {
+        this.logger.warn(
+          `Paystack GET ${logPath} failed: ${(err as Error)?.name ?? 'Error'}`,
+        );
+      }
+      return { status: 'unavailable' };
+    }
   }
 
   /**

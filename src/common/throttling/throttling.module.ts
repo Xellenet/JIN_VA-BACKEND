@@ -56,6 +56,7 @@ export const CUSTOMER_THROTTLER_DEFAULTS = {
 export const ARTISAN_THROTTLER_DEFAULTS = {
   ARTISAN_INSIGHTS: { limit: 30, ttl: ONE_MINUTE_MS },
   ARTISAN_EXPORT: { limit: 5, ttl: TEN_MINUTES_MS },
+  PAYOUT_ACCOUNT_LOOKUP: { limit: 10, ttl: TEN_MINUTES_MS },
 } as const;
 
 /**
@@ -179,6 +180,15 @@ export function buildThrottlerOptions(config: ConfigService): {
           config,
           'ARTISAN_EXPORT_RATE_LIMIT_PER_10_MINUTES',
           ARTISAN_THROTTLER_DEFAULTS.ARTISAN_EXPORT.limit,
+        ),
+      },
+      {
+        name: THROTTLER_NAMES.PAYOUT_ACCOUNT_LOOKUP,
+        ttl: ARTISAN_THROTTLER_DEFAULTS.PAYOUT_ACCOUNT_LOOKUP.ttl,
+        limit: readLimit(
+          config,
+          'PAYOUT_ACCOUNT_LOOKUP_RATE_LIMIT_PER_10_MINUTES',
+          ARTISAN_THROTTLER_DEFAULTS.PAYOUT_ACCOUNT_LOOKUP.limit,
         ),
       },
     ],

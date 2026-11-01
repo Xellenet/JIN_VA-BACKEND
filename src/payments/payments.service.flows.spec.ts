@@ -6,6 +6,7 @@ import {
   BadRequestException,
   NotFoundException,
   ServiceUnavailableException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import type { EntityManager } from 'typeorm';
 import { PaymentsService } from './payments.service';
@@ -55,6 +56,7 @@ describe('PaymentsService (flows)', () => {
     verifyTransaction: jest.fn(),
     createRefund: jest.fn(),
     createTransferRecipient: jest.fn(),
+    resolveAccount: jest.fn(),
     initiateTransfer: jest.fn(),
     verifyWebhookSignature: jest.fn(),
   };
@@ -1186,15 +1188,23 @@ describe('PaymentsService (flows)', () => {
       bankCode: 'MTN',
     };
 
+    beforeEach(() => {
+      paystack.resolveAccount.mockResolvedValue({
+        status: 'resolved',
+        accountName: 'KOFI ASANTE',
+      });
+    });
+
     it('throws NotFoundException without an artisan profile', async () => {
       profileRepo.findOne.mockResolvedValue(null);
       await expect(service.setupPayoutMethod(9, momo)).rejects.toThrow(
         NotFoundException,
       );
+      expect(paystack.resolveAccount).not.toHaveBeenCalled();
       expect(paystack.createTransferRecipient).not.toHaveBeenCalled();
     });
 
-    it('registers mobile money as a Paystack recipient and saves it', async () => {
+    it('stores the looked-up name, not the typed one, as verified', async () => {
       const profile: Record<string, unknown> = { id: 4 };
       profileRepo.findOne.mockResolvedValue(profile);
       paystack.createTransferRecipient.mockResolvedValue({
@@ -1203,11 +1213,13 @@ describe('PaymentsService (flows)', () => {
 
       await expect(service.setupPayoutMethod(9, momo)).resolves.toEqual({
         message: 'Payout method registered successfully.',
+        data: { accountName: 'KOFI ASANTE', accountNameVerified: true },
       });
 
+      expect(paystack.resolveAccount).toHaveBeenCalledWith('0240000000', 'MTN');
       expect(paystack.createTransferRecipient).toHaveBeenCalledWith({
         type: 'mobile_money',
-        name: 'Kofi Mensah',
+        name: 'KOFI ASANTE',
         accountNumber: '0240000000',
         bankCode: 'MTN',
       });
@@ -1215,11 +1227,78 @@ describe('PaymentsService (flows)', () => {
         id: 4,
         payoutType: PayoutType.MOBILE_MONEY,
         paystackRecipientCode: 'RCP_momo',
-        payoutAccountName: 'Kofi Mensah',
+        payoutAccountName: 'KOFI ASANTE',
+        payoutAccountNameVerified: true,
         payoutAccountNumber: '0240000000',
         payoutBankCode: 'MTN',
       });
     });
+
+    it('needs no typed name when the lookup succeeds', async () => {
+      profileRepo.findOne.mockResolvedValue({ id: 4 });
+      paystack.createTransferRecipient.mockResolvedValue({
+        recipient_code: 'RCP_momo',
+      });
+      const { accountName: _typed, ...withoutName } = momo;
+
+      await expect(
+        service.setupPayoutMethod(9, withoutName),
+      ).resolves.toMatchObject({ data: { accountNameVerified: true } });
+    });
+
+    it('refuses a number Paystack cannot resolve with 422 and saves nothing', async () => {
+      profileRepo.findOne.mockResolvedValue({ id: 4 });
+      paystack.resolveAccount.mockResolvedValue({ status: 'unresolvable' });
+
+      const err = await service
+        .setupPayoutMethod(9, momo)
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(UnprocessableEntityException);
+      expect((err as Error).message).toBe(
+        "We couldn't find the name on this account. Check the number and the network or bank.",
+      );
+      expect(paystack.createTransferRecipient).not.toHaveBeenCalled();
+      expect(profileRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('falls back to the typed name, not verified, when the lookup is unavailable', async () => {
+      profileRepo.findOne.mockResolvedValue({ id: 4 });
+      paystack.resolveAccount.mockResolvedValue({ status: 'unavailable' });
+      paystack.createTransferRecipient.mockResolvedValue({
+        recipient_code: 'RCP_momo',
+      });
+
+      await expect(
+        service.setupPayoutMethod(9, {
+          ...momo,
+          accountName: '  Kofi Mensah ',
+        }),
+      ).resolves.toMatchObject({
+        data: { accountName: 'Kofi Mensah', accountNameVerified: false },
+      });
+      expect(paystack.createTransferRecipient).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'Kofi Mensah' }),
+      );
+      expect(profileRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payoutAccountName: 'Kofi Mensah',
+          payoutAccountNameVerified: false,
+        }),
+      );
+    });
+
+    it.each([undefined, ' ', 'K'])(
+      'needs a typed name (%p) when the lookup is unavailable',
+      async (accountName) => {
+        profileRepo.findOne.mockResolvedValue({ id: 4 });
+        paystack.resolveAccount.mockResolvedValue({ status: 'unavailable' });
+
+        await expect(
+          service.setupPayoutMethod(9, { ...momo, accountName }),
+        ).rejects.toThrow(BadRequestException);
+        expect(paystack.createTransferRecipient).not.toHaveBeenCalled();
+      },
+    );
 
     it('maps a bank account to a ghipss recipient', async () => {
       profileRepo.findOne.mockResolvedValue({ id: 4 });
@@ -1234,6 +1313,10 @@ describe('PaymentsService (flows)', () => {
         bankCode: '280100',
       });
 
+      expect(paystack.resolveAccount).toHaveBeenCalledWith(
+        '1234567890',
+        '280100',
+      );
       expect(paystack.createTransferRecipient).toHaveBeenCalledWith(
         expect.objectContaining({ type: 'ghipss' }),
       );

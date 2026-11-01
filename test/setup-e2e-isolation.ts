@@ -80,6 +80,7 @@ for (const name of [
   'verifyTransaction',
   'createRefund',
   'createTransferRecipient',
+  'resolveAccount',
   'initiateTransfer',
   'listBanks',
 ]) {

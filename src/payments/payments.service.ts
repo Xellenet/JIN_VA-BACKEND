@@ -4,6 +4,7 @@ import {
   Logger,
   NotFoundException,
   ServiceUnavailableException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
@@ -24,6 +25,10 @@ import { AdminAuditService } from '../admin-audit/admin-audit.service';
 import { CustomerPaymentSettings } from '../payment-settings/entities/customer-payment-settings.entity';
 import { orderCheckoutChannels } from '../payment-settings/checkout-channels';
 import { APP_EVENTS } from '@common/events/app.events';
+import {
+  ACCOUNT_NAME_NOT_FOUND,
+  ACCOUNT_NAME_REQUIRED,
+} from './payout-account';
 import type {
   PaymentReceiptPayload,
   PaymentSecuredPayload,
@@ -1275,12 +1280,17 @@ export class PaymentsService {
   /**
    * Registers the artisan's mobile money or bank account with Paystack and
    * stores the recipient_code on their profile for future payouts.
+   *
+   * The account name is looked up on the server and the looked-up name is
+   * what is stored (never the client's): a number Paystack can't resolve is
+   * refused with 422; when the lookup is unavailable the typed name is used,
+   * stored as not verified, so a Paystack outage never blocks the save.
    */
   async setupPayoutMethod(
     artisanUserId: number,
     dto: {
       type: 'mobile_money' | 'bank';
-      accountName: string;
+      accountName?: string;
       accountNumber: string;
       bankCode: string;
     },
@@ -1290,11 +1300,26 @@ export class PaymentsService {
     });
     if (!profile) throw new NotFoundException('Artisan profile not found.');
 
+    const lookup = await this.paystack.resolveAccount(
+      dto.accountNumber,
+      dto.bankCode,
+    );
+    if (lookup.status === 'unresolvable') {
+      throw new UnprocessableEntityException(ACCOUNT_NAME_NOT_FOUND);
+    }
+    const verified = lookup.status === 'resolved';
+    const accountName = verified
+      ? lookup.accountName
+      : (dto.accountName ?? '').trim();
+    if (accountName.length < 2) {
+      throw new BadRequestException(ACCOUNT_NAME_REQUIRED);
+    }
+
     const paystackType =
       dto.type === 'mobile_money' ? 'mobile_money' : 'ghipss';
     const recipient = await this.paystack.createTransferRecipient({
       type: paystackType,
-      name: dto.accountName,
+      name: accountName,
       accountNumber: dto.accountNumber,
       bankCode: dto.bankCode,
     });
@@ -1302,12 +1327,16 @@ export class PaymentsService {
     profile.payoutType =
       dto.type === 'mobile_money' ? PayoutType.MOBILE_MONEY : PayoutType.BANK;
     profile.paystackRecipientCode = recipient.recipient_code;
-    profile.payoutAccountName = dto.accountName;
+    profile.payoutAccountName = accountName;
+    profile.payoutAccountNameVerified = verified;
     profile.payoutAccountNumber = dto.accountNumber;
     profile.payoutBankCode = dto.bankCode;
     await this.profileRepo.save(profile);
 
-    return { message: 'Payout method registered successfully.' };
+    return {
+      message: 'Payout method registered successfully.',
+      data: { accountName, accountNameVerified: verified },
+    };
   }
 
   async retryPendingTransfer(artisanUserId: number, jobId: number) {

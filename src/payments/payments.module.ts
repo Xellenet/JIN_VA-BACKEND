@@ -19,9 +19,11 @@ import { PaymentHistoryThrottlerGuard } from './payment-history-throttler.guard'
 import {
   ArtisanExportThrottlerGuard,
   ArtisanInsightsThrottlerGuard,
+  PayoutAccountLookupThrottlerGuard,
 } from '@common/throttling/artisan-throttler.guards';
 import { ArtisanEarningsService } from './artisan-earnings.service';
 import { BankListService } from './bank-list';
+import { PayoutAccountService } from './payout-account.service';
 
 @Module({
   imports: [
@@ -45,6 +47,9 @@ import { BankListService } from './bank-list';
     BankListService,
     ArtisanInsightsThrottlerGuard,
     ArtisanExportThrottlerGuard,
+    // Payout account name lookup.
+    PayoutAccountService,
+    PayoutAccountLookupThrottlerGuard,
   ],
   exports: [PaymentsService],
 })

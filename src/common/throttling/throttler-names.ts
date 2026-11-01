@@ -62,4 +62,10 @@ export const THROTTLER_NAMES = {
   ARTISAN_INSIGHTS: 'artisan-insights',
   /** `GET /payments/my-earnings/export.csv`: a streamed export of up to 10,000 rows. */
   ARTISAN_EXPORT: 'artisan-export',
+  /**
+   * `POST /payments/payout-method/resolve` and `POST /payments/payout-method`.
+   * Each call is a Paystack account name lookup, which reveals who owns a
+   * number, so the limit is low enough to make enumeration impractical.
+   */
+  PAYOUT_ACCOUNT_LOOKUP: 'payout-account-lookup',
 } as const;

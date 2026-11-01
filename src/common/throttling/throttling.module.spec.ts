@@ -71,6 +71,17 @@ describe('ThrottlingModule configuration', () => {
     expect(overridden.get(THROTTLER_NAMES.ARTISAN_EXPORT)?.limit).toBe(5);
   });
 
+  it('configures the payout account lookup at 10 per 10 minutes, overridable', () => {
+    expect(
+      byName(configWith()).get(THROTTLER_NAMES.PAYOUT_ACCOUNT_LOOKUP),
+    ).toMatchObject({ limit: 10, ttl: 600_000 });
+    expect(
+      byName(
+        configWith({ PAYOUT_ACCOUNT_LOOKUP_RATE_LIMIT_PER_10_MINUTES: '3' }),
+      ).get(THROTTLER_NAMES.PAYOUT_ACCOUNT_LOOKUP)?.limit,
+    ).toBe(3);
+  });
+
   it('keeps the existing limits unchanged', () => {
     const map = byName(configWith());
     expect(map.get(THROTTLER_NAMES.MESSAGE_SEND)).toMatchObject({

@@ -4,6 +4,8 @@ import {
   Get,
   Header,
   Headers,
+  HttpCode,
+  HttpStatus,
   Param,
   ParseIntPipe,
   Post,
@@ -45,6 +47,7 @@ import { EmptyQueryDto } from '../customer-insights/dto/empty-query.dto';
 import {
   ArtisanExportThrottlerGuard,
   ArtisanInsightsThrottlerGuard,
+  PayoutAccountLookupThrottlerGuard,
 } from '@common/throttling/artisan-throttler.guards';
 import { ArtisanEarningsService } from './artisan-earnings.service';
 import {
@@ -52,6 +55,8 @@ import {
   ArtisanStatementQueryDto,
 } from './dto/artisan-statement-query.dto';
 import { BankListService } from './bank-list';
+import { PayoutAccountService } from './payout-account.service';
+import { ResolvePayoutAccountDto } from './dto/resolve-payout-account.dto';
 
 @ApiTags('Payments')
 @Controller('payments')
@@ -61,6 +66,7 @@ export class PaymentsController {
     private readonly history: CustomerPaymentHistoryService,
     private readonly earnings: ArtisanEarningsService,
     private readonly banks: BankListService,
+    private readonly payoutAccounts: PayoutAccountService,
   ) {}
 
   // ─── Public — no auth (Paystack calls this directly) ──────────────────────────
@@ -175,12 +181,34 @@ export class PaymentsController {
 
   // ─── Artisan routes ───────────────────────────────────────────────────────────
 
-  @Post('payout-method')
-  @UseGuards(JwtAuthGuard, RolesGuard)
+  /**
+   * Payout account lookup: the name on a mobile money number or bank
+   * account, shown to the artisan to confirm before saving. POST so the
+   * number stays out of URLs and access logs. 422 when Paystack can't find
+   * the account, 503 when the lookup is unavailable (type the name instead).
+   */
+  @Post('payout-method/resolve')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, RolesGuard, PayoutAccountLookupThrottlerGuard)
   @Roles(Role.ARTISAN)
+  @Header('Cache-Control', 'private, no-store')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Look up the name on a payout account' })
+  async resolvePayoutAccount(@Body() dto: ResolvePayoutAccountDto) {
+    return {
+      message: 'Account name found',
+      data: await this.payoutAccounts.resolve(dto),
+    };
+  }
+
+  @Post('payout-method')
+  @UseGuards(JwtAuthGuard, RolesGuard, PayoutAccountLookupThrottlerGuard)
+  @Roles(Role.ARTISAN)
+  @Header('Cache-Control', 'private, no-store')
   @ApiBearerAuth()
   @ApiOperation({
-    summary: 'Register or update mobile money / bank account for payouts',
+    summary:
+      'Register or update mobile money / bank account for payouts (the account name is looked up on the server)',
   })
   setupPayout(
     @Req() req: AuthenticatedRequest,

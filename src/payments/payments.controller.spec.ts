@@ -18,7 +18,9 @@ import { BankListService } from './bank-list';
 import {
   ArtisanExportThrottlerGuard,
   ArtisanInsightsThrottlerGuard,
+  PayoutAccountLookupThrottlerGuard,
 } from '@common/throttling/artisan-throttler.guards';
+import { PayoutAccountService } from './payout-account.service';
 
 describe('PaymentsController', () => {
   let controller: PaymentsController;
@@ -51,6 +53,7 @@ describe('PaymentsController', () => {
   };
 
   const banks = { list: jest.fn() };
+  const payoutAccounts = { resolve: jest.fn() };
 
   const user = {
     id: 22,
@@ -75,6 +78,7 @@ describe('PaymentsController', () => {
         { provide: CustomerPaymentHistoryService, useValue: history },
         { provide: ArtisanEarningsService, useValue: earnings },
         { provide: BankListService, useValue: banks },
+        { provide: PayoutAccountService, useValue: payoutAccounts },
       ],
     })
       .overrideGuard(PaymentHistoryThrottlerGuard)
@@ -86,6 +90,8 @@ describe('PaymentsController', () => {
       .overrideGuard(ArtisanInsightsThrottlerGuard)
       .useValue({ canActivate: () => true })
       .overrideGuard(ArtisanExportThrottlerGuard)
+      .useValue({ canActivate: () => true })
+      .overrideGuard(PayoutAccountLookupThrottlerGuard)
       .useValue({ canActivate: () => true })
       .compile();
 
@@ -198,6 +204,37 @@ describe('PaymentsController', () => {
     await expect(controller.setupPayout(req, dto)).resolves.toBe(result);
     expect(service.setupPayoutMethod).toHaveBeenCalledWith(22, dto);
   });
+
+  it('resolvePayoutAccount wraps the looked-up name', async () => {
+    payoutAccounts.resolve.mockResolvedValue({ accountName: 'KOFI ASANTE' });
+    const dto = {
+      type: 'mobile_money' as const,
+      accountNumber: '0240000000',
+      bankCode: 'MTN',
+    };
+
+    await expect(controller.resolvePayoutAccount(dto)).resolves.toEqual({
+      message: 'Account name found',
+      data: { accountName: 'KOFI ASANTE' },
+    });
+    expect(payoutAccounts.resolve).toHaveBeenCalledWith(dto);
+  });
+
+  it.each(['resolvePayoutAccount', 'setupPayout'] as const)(
+    '%s is artisan-only, lookup-throttled and never cached',
+    (name) => {
+      const handler = PaymentsController.prototype[name];
+      expect(Reflect.getMetadata('__guards__', handler)).toEqual([
+        JwtAuthGuard,
+        RolesGuard,
+        PayoutAccountLookupThrottlerGuard,
+      ]);
+      expect(Reflect.getMetadata(ROLES_KEY, handler)).toEqual([Role.ARTISAN]);
+      expect(Reflect.getMetadata('__headers__', handler)).toEqual([
+        { name: 'Cache-Control', value: 'private, no-store' },
+      ]);
+    },
+  );
 
   it('retryTransfer passes the artisan id and job id', async () => {
     await expect(controller.retryTransfer(req, 35)).resolves.toBe(result);

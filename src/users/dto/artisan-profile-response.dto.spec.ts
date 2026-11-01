@@ -27,11 +27,30 @@ describe('ArtisanProfileResponseDto payout destination', () => {
       label: 'MTN MoMo',
       last4: '1234',
       accountName: 'Yaw Osei',
+      accountNameVerified: null,
     });
     expect(dto.payoutAccountNumber).toBe('••••••1234');
     expect(JSON.stringify(dto)).not.toContain('0241231234');
     expect(JSON.stringify(dto)).not.toContain('RCP_secret');
   });
+
+  it.each([true, false])(
+    'carries accountNameVerified %p next to the name',
+    (verified) => {
+      expect(
+        payoutDestinationOf({
+          payoutType: PayoutType.MOBILE_MONEY,
+          payoutAccountNumber: '0240000000',
+          payoutAccountName: 'KOFI ASANTE',
+          payoutAccountNameVerified: verified,
+          payoutBankCode: 'MTN',
+        }),
+      ).toMatchObject({
+        accountName: 'KOFI ASANTE',
+        accountNameVerified: verified,
+      });
+    },
+  );
 
   it('is null when no payout method is set', () => {
     const dto = plainToInstance(
@@ -68,6 +87,7 @@ describe('ArtisanProfileResponseDto payout destination', () => {
       label: 'Bank account',
       last4: '0123',
       accountName: null,
+      accountNameVerified: null,
     });
     const paystack = {
       listBanks: jest

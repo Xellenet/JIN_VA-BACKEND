@@ -11,6 +11,12 @@ export interface PayoutDestination {
   label: string;
   last4: string;
   accountName: string | null;
+  /**
+   * True when `accountName` is the name Paystack's lookup returned, false
+   * when the artisan typed it (lookup unavailable), null for methods saved
+   * before the lookup existed.
+   */
+  accountNameVerified: boolean | null;
 }
 
 const MOBILE_MONEY_LABELS: Record<string, string> = {
@@ -28,6 +34,7 @@ export function payoutDestinationOf(profile: {
   payoutType?: PayoutType | string | null;
   payoutAccountNumber?: string | null;
   payoutAccountName?: string | null;
+  payoutAccountNameVerified?: boolean | null;
   payoutBankCode?: string | null;
   paystackRecipientCode?: string | null;
 }): PayoutDestination | null {
@@ -44,6 +51,10 @@ export function payoutDestinationOf(profile: {
     label,
     last4: number.slice(-4),
     accountName: profile.payoutAccountName?.trim() || null,
+    accountNameVerified:
+      typeof profile.payoutAccountNameVerified === 'boolean'
+        ? profile.payoutAccountNameVerified
+        : null,
   };
 }
 
@@ -192,6 +203,7 @@ export class ArtisanProfileResponseDto {
       label: 'MTN MoMo',
       last4: '1234',
       accountName: 'Yaw Osei',
+      accountNameVerified: true,
     },
     description:
       'Artisan fixes: masked payout destination (label and last 4 only); null when no payout method is set.',

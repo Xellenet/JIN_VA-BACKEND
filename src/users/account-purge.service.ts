@@ -263,6 +263,7 @@ export class AccountPurgeService {
       payoutType: null,
       paystackRecipientCode: null,
       payoutAccountName: null,
+      payoutAccountNameVerified: null,
       payoutAccountNumber: null,
       payoutBankCode: null,
       isProfileComplete: false,
