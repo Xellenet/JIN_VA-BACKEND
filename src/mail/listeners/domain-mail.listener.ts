@@ -41,6 +41,7 @@ import type {
   PayoutReleasedPayload,
   PaymentRefundedPayload,
   PaymentTransferFailedPayload,
+  PayoutOnHoldPayload,
   DisputeFiledPayload,
   DisputeOutcomePayload,
 } from '@common/events/app.events';
@@ -806,6 +807,30 @@ export class DomainMailListener {
           },
         ],
         ...this.jobLink(user.role, payload.jobId),
+      }),
+    );
+  }
+
+  /** Payout name check: once per payment, with the fix-it link. */
+  @OnEvent(APP_EVENTS.PAYOUT_ON_HOLD, { async: true })
+  async handlePayoutOnHold(payload: PayoutOnHoldPayload): Promise<void> {
+    const cause =
+      payload.reason === 'payout_account_not_found'
+        ? "We couldn't find your payout account."
+        : "The name on your payout account doesn't match.";
+    await this.notify(
+      payload.artisanUserId,
+      NotificationType.PAYOUT_ON_HOLD,
+      APP_EVENTS.PAYOUT_ON_HOLD,
+      () => ({
+        heading: 'Your payout is on hold',
+        paragraphs: [
+          `We couldn't send your payout for ${payload.jobTitle}. ${cause}`,
+          'Update your payment details to receive it.',
+        ],
+        details: [{ label: 'Job', value: payload.jobTitle }],
+        actionPath: '/dashboard/artisan/settings?tab=payments',
+        actionLabel: 'Update payment details',
       }),
     );
   }

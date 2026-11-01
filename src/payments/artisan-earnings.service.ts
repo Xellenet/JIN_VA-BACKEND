@@ -33,6 +33,11 @@ import {
   stageOf,
 } from '../artisan-insights/earnings.util';
 import { CSV_BOM, csvCell, csvLine, csvNumber } from './csv.util';
+import {
+  isPayoutHoldReason,
+  payoutHoldLabel,
+  type PayoutHoldReason,
+} from './payout-hold';
 import { CsvSink, csvDateTime } from './customer-payment-history.service';
 import {
   ArtisanStatementExportQueryDto,
@@ -54,6 +59,11 @@ export interface StatementItem {
   stage: EarningStage;
   transferReference: string | null;
   failureReason: FailureReason | null;
+  /**
+   * Payout name check: why a needs-action payout is on hold, or null.
+   * Additive: set only for PENDING_TRANSFER rows held by the check.
+   */
+  holdReason: PayoutHoldReason | null;
   paidAt: string | null;
   releasedAt: string | null;
   createdAt: string;
@@ -74,6 +84,7 @@ export interface StatementRawRow {
   status: PaymentStatus;
   transferStarted: boolean | null;
   transferReference: string | null;
+  holdReason?: string | null;
   paidAt: Date | string | null;
   releasedAt: Date | string | null;
   createdAt: Date | string;
@@ -125,6 +136,7 @@ export const ARTISAN_CSV_HEADER = [
   'Transfer reference',
   'Client paid',
   'Paid out',
+  'Payout on hold',
 ];
 
 /** Artisan-side CSV labels. Never "escrow" or "withheld" (copy rules). */
@@ -168,6 +180,11 @@ export function mapStatementRow(r: StatementRawRow): StatementItem {
     stage,
     transferReference: r.transferReference ?? null,
     failureReason: failureReasonOf(r.status),
+    holdReason:
+      r.status === PaymentStatus.PENDING_TRANSFER &&
+      isPayoutHoldReason(r.holdReason)
+        ? r.holdReason
+        : null,
     paidAt: isoOrNull(r.paidAt),
     releasedAt: isoOrNull(r.releasedAt),
     createdAt: new Date(r.createdAt).toISOString(),
@@ -189,6 +206,7 @@ export function artisanCsvRow(r: StatementItem): string {
     csvCell(r.transferReference ?? ''),
     csvDateTime(r.paidAt),
     csvDateTime(r.releasedAt),
+    csvCell(payoutHoldLabel(r.holdReason)),
   ]);
 }
 
@@ -239,6 +257,7 @@ export class ArtisanEarningsService {
       .addSelect('p.status', 'status')
       .addSelect('(p.transfer_code IS NOT NULL)', 'transferStarted')
       .addSelect('p.transfer_reference', 'transferReference')
+      .addSelect('p.payout_hold_reason', 'holdReason')
       .addSelect('p.paid_at', 'paidAt')
       .addSelect('p.released_at', 'releasedAt')
       .addSelect('p.created_at', 'createdAt')

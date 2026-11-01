@@ -54,6 +54,12 @@ export const APP_EVENTS = {
   PAYMENT_REFUNDED: 'payment.refunded',
   /** PR3: an artisan payout failed and needs manual admin attention. */
   PAYMENT_TRANSFER_FAILED: 'payment.transfer-failed',
+  /**
+   * Payout name check: a payout was not sent because the name on the
+   * artisan's payout account doesn't match, or the account can't be found.
+   * Artisan-facing, once per payment.
+   */
+  PAYOUT_ON_HOLD: 'payment.payout-on-hold',
 
   // ─── Disputes (PD4) ─────────────────────────────────────────────────────────
   /** PR3: a new dispute was opened and is waiting on admin review. */
@@ -166,6 +172,18 @@ export interface PaymentTransferFailedPayload {
   /** Amount the failed transfer was for, in GHS. */
   artisanAmount: number;
   reason: string;
+}
+
+/**
+ * Payout name check: artisan-facing "we couldn't send your payout, update
+ * your payment details". Never carries the account name or number.
+ */
+export interface PayoutOnHoldPayload {
+  artisanUserId: number;
+  paymentId: number;
+  jobId: number;
+  jobTitle: string;
+  reason: 'payout_name_mismatch' | 'payout_account_not_found';
 }
 
 // ─── Disputes (PD4, PR3) ──────────────────────────────────────────────────────

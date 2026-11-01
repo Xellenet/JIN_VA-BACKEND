@@ -9,9 +9,19 @@ import {
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { DataSource, EntityManager, In, Repository } from 'typeorm';
+import {
+  DataSource,
+  EntityManager,
+  In,
+  LessThanOrEqual,
+  Repository,
+} from 'typeorm';
 import { Payment } from './entities/payment.entity';
-import { PaystackService } from './paystack.service';
+import {
+  maskForLog,
+  PaystackService,
+  type ResolveAccountResult,
+} from './paystack.service';
 import { Job } from '@jobs/entities/job.entity';
 import { User } from '@users/entities/user.entity';
 import { ArtisanProfile } from '@users/entities/artisan-profile.entity';
@@ -29,16 +39,49 @@ import {
   ACCOUNT_NAME_NOT_FOUND,
   ACCOUNT_NAME_REQUIRED,
 } from './payout-account';
+import { payoutNamesMatch } from './payout-name-match';
+import {
+  ARTISAN_ACTION_HOLDS,
+  needsArtisanAction,
+  type PayoutHoldReason,
+  nextPayoutCheckAt,
+  PAYOUT_ACCOUNT_NOT_FOUND,
+  PAYOUT_ACCOUNT_NOT_FOUND_MESSAGE,
+  PAYOUT_CHECK_MAX_ATTEMPTS,
+  PAYOUT_CHECK_PENDING,
+  PAYOUT_CHECK_PENDING_MESSAGE,
+  PAYOUT_NAME_MISMATCH,
+  PAYOUT_NAME_MISMATCH_MESSAGE,
+} from './payout-hold';
 import type {
   PaymentReceiptPayload,
   PaymentSecuredPayload,
   PayoutReleasedPayload,
   PaymentRefundedPayload,
   PaymentTransferFailedPayload,
+  PayoutOnHoldPayload,
 } from '@common/events/app.events';
 
 /** security-report.md finding #8: hard upper bound on admin list `limit`. */
 const MAX_ADMIN_PAGE_LIMIT = 100;
+
+/** Payout name check: how many due checks the scheduler retries per run. */
+const PAYOUT_CHECK_BATCH = 50;
+/** How many held payouts are retried when the artisan saves new details. */
+const HELD_PAYOUT_RETRY_LIMIT = 20;
+
+/**
+ * The outcome of a payout name check, with the payout details it checked
+ * (compared again under the lock). Never logged: it carries the full number.
+ */
+interface PayoutNameCheck {
+  outcome: 'match' | 'mismatch' | 'not_found' | 'unavailable';
+  /** Paystack's name for the account, when it named one. */
+  resolvedName?: string;
+  recipientCode: string | null;
+  accountNumber: string | null;
+  bankCode: string | null;
+}
 
 @Injectable()
 export class PaymentsService {
@@ -251,6 +294,31 @@ export class PaymentsService {
     }
   }
 
+  /**
+   * Payout name check: tells the artisan their payout is on hold and what to
+   * fix. Best-effort and after commit, like the other emitters.
+   */
+  private async emitPayoutOnHold(
+    payment: Payment,
+    reason: PayoutOnHoldPayload['reason'],
+  ): Promise<void> {
+    try {
+      const ctx = await this.resolvePaymentContext(payment);
+      if (ctx.artisanUserId === null) return;
+      this.eventEmitter.emit(APP_EVENTS.PAYOUT_ON_HOLD, {
+        artisanUserId: ctx.artisanUserId,
+        paymentId: payment.id,
+        jobId: payment.jobId,
+        jobTitle: ctx.jobTitle,
+        reason,
+      } as PayoutOnHoldPayload);
+    } catch (err) {
+      this.logger.error(
+        `Failed to emit PAYOUT_ON_HOLD for payment ${payment.id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
   // ─── Called internally by JobsService ────────────────────────────────────────
 
   /**
@@ -337,9 +405,69 @@ export class PaymentsService {
   }
 
   /**
-   * Initiates the Paystack transfer to the artisan.
-   * Called by JobsService when the customer confirms job completion, and by
-   * {@link retryPendingTransfer} for an artisan-triggered retry.
+   * Payout name check, made **before** the capture's transaction so a slow
+   * Paystack lookup never holds the payment row lock. Never throws: a lookup
+   * that errors counts as unavailable. The account details it checked are
+   * kept, so the transaction can tell if they changed in the meantime.
+   */
+  private async checkPayoutName(
+    profile: ArtisanProfile,
+  ): Promise<PayoutNameCheck> {
+    const checked = {
+      recipientCode: profile.paystackRecipientCode ?? null,
+      accountNumber: profile.payoutAccountNumber ?? null,
+      bankCode: profile.payoutBankCode ?? null,
+    };
+    // A recipient with no number or bank on file can't be checked against
+    // anything: the artisan has to set their details again.
+    if (!checked.accountNumber || !checked.bankCode) {
+      return { ...checked, outcome: 'not_found' };
+    }
+    let result: ResolveAccountResult;
+    try {
+      result = await this.paystack.resolveAccount(
+        checked.accountNumber,
+        checked.bankCode,
+      );
+    } catch {
+      result = { status: 'unavailable' };
+    }
+    if (result.status === 'unavailable') {
+      return { ...checked, outcome: 'unavailable' };
+    }
+    if (result.status === 'unresolvable') {
+      return { ...checked, outcome: 'not_found' };
+    }
+    return {
+      ...checked,
+      outcome: payoutNamesMatch(profile.payoutAccountName, result.accountName)
+        ? 'match'
+        : 'mismatch',
+      resolvedName: result.accountName,
+    };
+  }
+
+  /**
+   * Initiates the Paystack transfer to the artisan. Every transfer attempt
+   * goes through here: the client confirming completion and the 48 h
+   * auto-complete (both via JobsService), the artisan's retry
+   * ({@link retryPendingTransfer}), an admin/dispute release
+   * ({@link releaseWithheldPayment}), the scheduler's retry of a pending name
+   * check ({@link retryDuePayoutChecks}) and the retry after the artisan
+   * fixes their payout details ({@link setupPayoutMethod}).
+   *
+   * Payout name check: before any transfer, the payout account is looked up
+   * again with Paystack and its name compared with the saved one
+   * ({@link payoutNamesMatch}). The lookup runs before the transaction; the
+   * payment's state is then re-checked under the lock as before.
+   * - match → transfer (an unverified or legacy method becomes verified, with
+   *   Paystack's spelling of the name);
+   * - name differs, or the account can't be found → no transfer: the payment
+   *   is parked at PENDING_TRANSFER with a hold reason, the payout method is
+   *   marked not verified and the artisan is told once;
+   * - lookup unavailable → no transfer, PENDING_TRANSFER with
+   *   `payout_check_pending`, retried by the scheduler with backoff; the
+   *   artisan is not blamed or notified.
    *
    * security-report.md finding #3: wrapped in a transaction that takes a
    * `pessimistic_write` lock on the Payment row before reading its status,
@@ -350,13 +478,13 @@ export class PaymentsService {
    * see the `alreadyCaptured` check below for why that alone isn't quite
    * enough and what closes the remaining gap.
    *
-   * The Paystack call is deliberately made *inside* this transaction/lock
-   * (not after commit) specifically so a concurrent caller cannot start a
-   * second attempt while the first is in flight. If the transfer call
-   * itself throws, we still want the TRANSFER_FAILED status write to
-   * persist, so the error is captured and re-thrown *after* the transaction
-   * block resolves rather than thrown from inside it (which would roll the
-   * status change back too).
+   * The Paystack transfer call is deliberately made *inside* this
+   * transaction/lock (not after commit) specifically so a concurrent caller
+   * cannot start a second attempt while the first is in flight. If the
+   * transfer call itself throws, we still want the TRANSFER_FAILED status
+   * write to persist, so the error is captured and re-thrown *after* the
+   * transaction block resolves rather than thrown from inside it (which
+   * would roll the status change back too).
    */
   async capturePayment(reference: string, jobId: number): Promise<void> {
     let captureError: Error | undefined;
@@ -367,6 +495,14 @@ export class PaymentsService {
      * got rolled back would notify about a state change that never persisted).
      */
     let failedPayment: Payment | undefined;
+    /** Set when a hold needs the artisan told (first time for this payment). */
+    let heldForArtisan:
+      | { payment: Payment; reason: PayoutOnHoldPayload['reason'] }
+      | undefined;
+    /** Set when the scheduler has given up on a pending check. */
+    let checkGaveUp: Payment | undefined;
+
+    const check = await this.precheckPayoutName(reference);
 
     await this.dataSource.transaction(async (manager) => {
       const paymentRepo = manager.getRepository(Payment);
@@ -410,7 +546,8 @@ export class PaymentsService {
         return;
       }
 
-      const profile = await manager.getRepository(ArtisanProfile).findOne({
+      const profileRepo = manager.getRepository(ArtisanProfile);
+      const profile = await profileRepo.findOne({
         where: { id: payment.artisanProfileId },
       });
       if (!profile?.paystackRecipientCode) {
@@ -418,14 +555,93 @@ export class PaymentsService {
           `Artisan ${payment.artisanProfileId} has no payout method — marking PENDING_TRANSFER`,
         );
         payment.status = PaymentStatus.PENDING_TRANSFER;
+        this.clearPayoutHold(payment);
         await paymentRepo.save(payment);
         return;
+      }
+
+      // The check must be for the payout method on file now. If there was
+      // none (the payment changed state between the check and the lock) or
+      // the artisan changed their details in between, nothing is sent: the
+      // payment waits for a fresh check like any unavailable lookup.
+      const current =
+        check &&
+        check.recipientCode === profile.paystackRecipientCode &&
+        check.accountNumber === (profile.payoutAccountNumber ?? null) &&
+        check.bankCode === (profile.payoutBankCode ?? null);
+      const outcome = current ? check.outcome : 'unavailable';
+      const masked = maskForLog(profile.payoutAccountNumber);
+
+      if (outcome === 'mismatch' || outcome === 'not_found') {
+        const reason =
+          outcome === 'mismatch'
+            ? PAYOUT_NAME_MISMATCH
+            : PAYOUT_ACCOUNT_NOT_FOUND;
+        // Told once per payment, however often it is retried.
+        const tell = !payment.payoutHoldNotifiedAt;
+        payment.status = PaymentStatus.PENDING_TRANSFER;
+        payment.payoutHoldReason = reason;
+        payment.payoutCheckAttempts = 0;
+        payment.payoutCheckNextAt = null;
+        if (tell) payment.payoutHoldNotifiedAt = new Date();
+        await paymentRepo.save(payment);
+        // Only the method that was checked; one saved since is left alone.
+        await profileRepo.update(
+          {
+            id: profile.id,
+            payoutAccountNumber: profile.payoutAccountNumber,
+            payoutBankCode: profile.payoutBankCode,
+          },
+          { payoutAccountNameVerified: false },
+        );
+        this.logger.warn(
+          `Payout held: job=${jobId} payment=${payment.id} account=${masked} reason=${reason}`,
+        );
+        if (tell) heldForArtisan = { payment, reason };
+        return;
+      }
+
+      if (outcome === 'unavailable') {
+        const attempts =
+          payment.payoutHoldReason === PAYOUT_CHECK_PENDING
+            ? (payment.payoutCheckAttempts ?? 0) + 1
+            : 1;
+        payment.status = PaymentStatus.PENDING_TRANSFER;
+        payment.payoutHoldReason = PAYOUT_CHECK_PENDING;
+        payment.payoutCheckAttempts = attempts;
+        payment.payoutCheckNextAt = nextPayoutCheckAt(attempts, new Date());
+        await paymentRepo.save(payment);
+        this.logger.warn(
+          `Payout name check unavailable: job=${jobId} payment=${payment.id} account=${masked} attempt=${attempts}` +
+            (payment.payoutCheckNextAt
+              ? ` — retrying at ${payment.payoutCheckNextAt.toISOString()}`
+              : ' — automatic retries stopped; needs an admin'),
+        );
+        if (attempts === PAYOUT_CHECK_MAX_ATTEMPTS) checkGaveUp = payment;
+        return;
+      }
+
+      // Name matches. A method saved while the lookup was unavailable (or
+      // before it existed) is now verified, with Paystack's spelling.
+      if (profile.payoutAccountNameVerified !== true && check?.resolvedName) {
+        await profileRepo.update(
+          {
+            id: profile.id,
+            payoutAccountNumber: profile.payoutAccountNumber,
+            payoutBankCode: profile.payoutBankCode,
+          },
+          {
+            payoutAccountNameVerified: true,
+            payoutAccountName: check.resolvedName,
+          },
+        );
       }
 
       // Reset to HELD before (re)attempting — this is the "transfer in flight"
       // base state; the webhook flips it to RELEASED on success or this method
       // flips it to TRANSFER_FAILED below if the attempt itself errors out.
       payment.status = PaymentStatus.HELD;
+      this.clearPayoutHold(payment);
       const transferRef = `jinva-tr-${jobId}-${Date.now()}`;
       payment.transferReference = transferRef;
       await paymentRepo.save(payment);
@@ -457,6 +673,20 @@ export class PaymentsService {
       }
     });
 
+    if (heldForArtisan) {
+      await this.emitPayoutOnHold(
+        heldForArtisan.payment,
+        heldForArtisan.reason,
+      );
+    }
+
+    if (checkGaveUp) {
+      await this.emitTransferFailed(
+        checkGaveUp,
+        `The payout account name couldn't be checked after ${PAYOUT_CHECK_MAX_ATTEMPTS} tries, so automatic retries have stopped. Release it again once the account lookup works.`,
+      );
+    }
+
     if (failedPayment) {
       await this.emitTransferFailed(
         failedPayment,
@@ -465,6 +695,39 @@ export class PaymentsService {
     }
 
     if (captureError) throw captureError;
+  }
+
+  /**
+   * Reads the payment and payout method without a lock and, when a transfer
+   * could follow, runs the payout name check. Undefined when no transfer can
+   * follow (unknown payment, not capturable, a transfer already in flight,
+   * or no payout method); the transaction re-checks all of that anyway.
+   */
+  private async precheckPayoutName(
+    reference: string,
+  ): Promise<PayoutNameCheck | undefined> {
+    const payment = await this.repo.findOne({ where: { reference } });
+    if (!payment) return undefined;
+    if (payment.status === PaymentStatus.HELD && payment.transferCode) {
+      return undefined;
+    }
+    const capturable: PaymentStatus[] = [
+      PaymentStatus.HELD,
+      PaymentStatus.PENDING_TRANSFER,
+      PaymentStatus.TRANSFER_FAILED,
+    ];
+    if (!capturable.includes(payment.status)) return undefined;
+    const profile = await this.profileRepo.findOne({
+      where: { id: payment.artisanProfileId },
+    });
+    if (!profile?.paystackRecipientCode) return undefined;
+    return this.checkPayoutName(profile);
+  }
+
+  private clearPayoutHold(payment: Payment): void {
+    payment.payoutHoldReason = null;
+    payment.payoutCheckAttempts = 0;
+    payment.payoutCheckNextAt = null;
   }
 
   /**
@@ -926,6 +1189,24 @@ export class PaymentsService {
    * did not, so those cases are re-read after the call and turned into
    * explicit errors for the caller to surface.
    */
+  /** Payout name check: why an admin/dispute release sent nothing. */
+  private static adminHoldMessage(reason: PayoutHoldReason): string {
+    if (reason === PAYOUT_CHECK_PENDING) {
+      return (
+        "The artisan's payout account couldn't be checked right now, so nothing was transferred. " +
+        'It stays withheld and the check is retried automatically.'
+      );
+    }
+    const cause =
+      reason === PAYOUT_NAME_MISMATCH
+        ? "the name on the artisan's payout account doesn't match the name they saved"
+        : "the artisan's payout account couldn't be found";
+    return (
+      `Nothing was transferred because ${cause}. ` +
+      'It stays withheld and is sent once they update their payment details.'
+    );
+  }
+
   async releaseWithheldPayment(paymentId: number) {
     const payment = await this.repo.findOne({ where: { id: paymentId } });
     if (!payment) {
@@ -956,6 +1237,14 @@ export class PaymentsService {
     await this.capturePayment(payment.reference, payment.jobId);
 
     const after = await this.repo.findOne({ where: { id: paymentId } });
+    if (
+      after?.status === PaymentStatus.PENDING_TRANSFER &&
+      after.payoutHoldReason
+    ) {
+      throw new BadRequestException(
+        PaymentsService.adminHoldMessage(after.payoutHoldReason),
+      );
+    }
     if (after?.status === PaymentStatus.PENDING_TRANSFER) {
       throw new BadRequestException(
         'The artisan has no payout method registered, so the withheld amount could not be transferred. ' +
@@ -1333,10 +1622,101 @@ export class PaymentsService {
     profile.payoutBankCode = dto.bankCode;
     await this.profileRepo.save(profile);
 
+    const held = await this.retryHeldPayouts(profile.id);
+
     return {
       message: 'Payout method registered successfully.',
-      data: { accountName, accountNameVerified: verified },
+      data: {
+        accountName,
+        accountNameVerified: verified,
+        payoutsRetried: held.retried,
+        payoutsStillOnHold: held.stillOnHold,
+      },
     };
+  }
+
+  /**
+   * Payout name check: once the artisan saves new payout details, retries
+   * their payouts held for a name that didn't match or an account that
+   * couldn't be found. Each goes through {@link capturePayment}, so the new
+   * details are checked again before anything is sent. Best-effort: a
+   * failure here never fails the save (the artisan can still retry).
+   */
+  private async retryHeldPayouts(
+    artisanProfileId: number,
+  ): Promise<{ retried: number; stillOnHold: number }> {
+    let held: Payment[];
+    try {
+      held = await this.repo.find({
+        where: {
+          artisanProfileId,
+          status: PaymentStatus.PENDING_TRANSFER,
+          payoutHoldReason: In([...ARTISAN_ACTION_HOLDS]),
+        },
+        order: { id: 'ASC' },
+        take: HELD_PAYOUT_RETRY_LIMIT,
+      });
+    } catch (err) {
+      this.logger.error(
+        `Could not list held payouts for artisan ${artisanProfileId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return { retried: 0, stillOnHold: 0 };
+    }
+    let stillOnHold = 0;
+    for (const p of held) {
+      try {
+        await this.capturePayment(p.reference, p.jobId);
+      } catch (err) {
+        this.logger.error(
+          `Retry of held payout ${p.id} failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      const after = await this.repo
+        .findOne({ where: { id: p.id } })
+        .catch(() => null);
+      if (after && needsArtisanAction(after.payoutHoldReason)) stillOnHold++;
+    }
+    if (held.length > 0) {
+      this.logger.log(
+        `Retried ${held.length} held payout(s) for artisan ${artisanProfileId}; ${stillOnHold} still on hold.`,
+      );
+    }
+    return { retried: held.length, stillOnHold };
+  }
+
+  /**
+   * Payout name check: the scheduler's retry of payouts whose check couldn't
+   * be made (Paystack unavailable), once each one's backoff has passed. Each
+   * goes through {@link capturePayment}, which re-checks the state under the
+   * lock, so a payout already sent or retried elsewhere is left alone.
+   */
+  async retryDuePayoutChecks(
+    now: Date = new Date(),
+  ): Promise<{ candidates: number; sent: number; failed: number }> {
+    const due = await this.repo.find({
+      where: {
+        status: PaymentStatus.PENDING_TRANSFER,
+        payoutHoldReason: PAYOUT_CHECK_PENDING,
+        payoutCheckNextAt: LessThanOrEqual(now),
+      },
+      order: { payoutCheckNextAt: 'ASC' },
+      take: PAYOUT_CHECK_BATCH,
+    });
+    let sent = 0;
+    let failed = 0;
+    for (const p of due) {
+      try {
+        await this.capturePayment(p.reference, p.jobId);
+        const after = await this.repo.findOne({ where: { id: p.id } });
+        if (after?.transferCode && after.status === PaymentStatus.HELD) sent++;
+      } catch (err) {
+        failed++;
+        this.logger.error(
+          `Payout check retry for payment ${p.id} failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    return { candidates: due.length, sent, failed };
   }
 
   async retryPendingTransfer(artisanUserId: number, jobId: number) {
@@ -1364,6 +1744,23 @@ export class PaymentsService {
         'No retryable transfer for this job on your account.',
       );
     await this.capturePayment(payment.reference, jobId);
+
+    // Payout name check: say so when nothing was sent, rather than "retry
+    // initiated" for a payout that is still on hold.
+    const after = await this.repo.findOne({ where: { id: payment.id } });
+    if (after?.status === PaymentStatus.PENDING_TRANSFER) {
+      if (after.payoutHoldReason === PAYOUT_NAME_MISMATCH) {
+        throw new UnprocessableEntityException(PAYOUT_NAME_MISMATCH_MESSAGE);
+      }
+      if (after.payoutHoldReason === PAYOUT_ACCOUNT_NOT_FOUND) {
+        throw new UnprocessableEntityException(
+          PAYOUT_ACCOUNT_NOT_FOUND_MESSAGE,
+        );
+      }
+      if (after.payoutHoldReason === PAYOUT_CHECK_PENDING) {
+        throw new ServiceUnavailableException(PAYOUT_CHECK_PENDING_MESSAGE);
+      }
+    }
     return { message: 'Transfer retry initiated.' };
   }
 }

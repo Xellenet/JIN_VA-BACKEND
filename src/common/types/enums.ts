@@ -197,6 +197,8 @@ export enum NotificationType {
   PAYMENT_REFUNDED = 'PAYMENT_REFUNDED',
   /** PR3: [Admin] an artisan payout failed and needs manual attention. */
   PAYMENT_TRANSFER_FAILED = 'PAYMENT_TRANSFER_FAILED',
+  /** Payout name check: [Artisan] a payout is held until they fix their payment details. */
+  PAYOUT_ON_HOLD = 'PAYOUT_ON_HOLD',
 
   /** PR3: [Admin] a new dispute was filed and awaits review. */
   DISPUTE_FILED = 'DISPUTE_FILED',

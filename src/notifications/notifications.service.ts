@@ -51,6 +51,7 @@ import type {
   PayoutReleasedPayload,
   PaymentRefundedPayload,
   PaymentTransferFailedPayload,
+  PayoutOnHoldPayload,
   DisputeFiledPayload,
   DisputeOutcomePayload,
   ReviewFlaggedPayload,
@@ -560,6 +561,32 @@ export class NotificationsService {
       scope,
       `${formatGhs(payload.refundedAmount)} has been refunded for "${payload.jobTitle}". It should reach your original payment method shortly.`,
       { jobId: payload.jobId, fullyRefunded: payload.fullyRefunded },
+    );
+  }
+
+  /**
+   * Payout name check: the artisan is told once per payment that the payout
+   * was not sent and what to fix. Not behind a toggle: money is waiting on
+   * them. The payload carries no name or number; the web app maps this type
+   * to its fixed Settings → Payments link (it never reads a link from the
+   * payload).
+   */
+  @OnEvent(APP_EVENTS.PAYOUT_ON_HOLD)
+  async handlePayoutOnHold(payload: PayoutOnHoldPayload) {
+    const cause =
+      payload.reason === 'payout_account_not_found'
+        ? "We couldn't find your payout account."
+        : "The name on your payout account doesn't match.";
+    await this.persist(
+      payload.artisanUserId,
+      NotificationType.PAYOUT_ON_HOLD,
+      'Your payout is on hold',
+      `We couldn't send your payout for ${payload.jobTitle}. ${cause} Update your payment details to receive it.`,
+      {
+        jobId: payload.jobId,
+        paymentId: payload.paymentId,
+        reason: payload.reason,
+      },
     );
   }
 
