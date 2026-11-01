@@ -493,7 +493,7 @@ describe('Artisan insights (B1–B7)', () => {
         .trim()
         .split('\r\n');
       expect(lines[0]).toBe(
-        'Date,Job,Client,Status,Paid by client (GHS),Platform fee (GHS),Your payout (GHS),Refunded to client (GHS),Transfer reference,Client paid,Paid out',
+        'Date,Job,Client,Status,Paid by client (GHS),Platform fee (GHS),Your payout (GHS),Refunded to client (GHS),Transfer reference,Client paid,Paid out,Payout on hold',
       );
       expect(lines).toHaveLength(7);
       expect(res.text).not.toContain('other title');

@@ -1,9 +1,10 @@
 /**
  * Payout account name lookup over real HTTP and the in-memory database:
  * `POST /payments/payout-method/resolve` and the server-side lookup on
- * `POST /payments/payout-method`. Paystack is mocked (resolveAccount,
- * createTransferRecipient, listBanks); nothing leaves the process. Every
- * person and number here is fictional.
+ * `POST /payments/payout-method`, and the payout name check made before
+ * every transfer. Paystack is mocked (resolveAccount,
+ * createTransferRecipient, listBanks, initiateTransfer); nothing leaves the
+ * process. Every person and number here is fictional.
  */
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
@@ -20,8 +21,13 @@ import { TypeOrmFilter } from '../src/common/filters/typeorm-exception.filter';
 import { User } from '@users/entities/user.entity';
 import { ArtisanProfile } from '@users/entities/artisan-profile.entity';
 import { UserTokenService } from '@users/token.service';
-import { Role } from '@common/types/enums';
+import { PaymentStatus, Role, Status } from '@common/types/enums';
 import { PaystackService } from '../src/payments/paystack.service';
+import { PaymentsService } from '../src/payments/payments.service';
+import { Payment } from '../src/payments/entities/payment.entity';
+import { Job } from '@jobs/entities/job.entity';
+import { ServiceEntity } from '@services/entities/service.entity';
+import { PAYOUT_NAME_MISMATCH_MESSAGE } from '../src/payments/payout-hold';
 import type { ResolveAccountResult } from '../src/payments/paystack.service';
 import {
   ACCOUNT_LOOKUP_UNAVAILABLE,
@@ -59,6 +65,9 @@ describe('Payout account lookup', () => {
   >();
   const createTransferRecipient = jest.fn();
   const listBanks = jest.fn();
+  const initiateTransfer = jest.fn();
+  let moduleRef: TestingModule;
+  let serviceId: number | undefined;
   const server = () => app.getHttpServer();
   const post = (path: string, payload: object, who = 'K') =>
     request(server())
@@ -104,6 +113,7 @@ describe('Payout account lookup', () => {
     app.setGlobalPrefix('api/v1', { exclude: ['/'] });
     await app.init();
     dataSource = moduleFixture.get(DataSource);
+    moduleRef = moduleFixture;
 
     jest
       .spyOn(PaystackService.prototype, 'resolveAccount')
@@ -114,6 +124,9 @@ describe('Payout account lookup', () => {
     jest
       .spyOn(PaystackService.prototype, 'listBanks')
       .mockImplementation(listBanks);
+    jest
+      .spyOn(PaystackService.prototype, 'initiateTransfer')
+      .mockImplementation(initiateTransfer);
     listBanks.mockResolvedValue([
       { code: '280100', name: 'Access Bank', type: 'ghipss', active: true },
     ]);
@@ -149,6 +162,7 @@ describe('Payout account lookup', () => {
     };
     await make('K', Role.ARTISAN);
     await make('T', Role.ARTISAN);
+    await make('P', Role.ARTISAN);
     await make('c', Role.CUSTOMER);
   });
 
@@ -156,6 +170,8 @@ describe('Payout account lookup', () => {
     resolveAccount.mockReset();
     createTransferRecipient.mockReset();
     createTransferRecipient.mockResolvedValue({ recipient_code: 'RCP_e2e' });
+    initiateTransfer.mockReset();
+    initiateTransfer.mockResolvedValue({ transfer_code: 'TRF_e2e' });
   });
 
   afterAll(async () => {
@@ -166,6 +182,7 @@ describe('Payout account lookup', () => {
     }
     await removeTestData(dataSource, {
       userIds: await testUserIds(dataSource, PREFIX),
+      serviceIds: serviceId ? [serviceId] : [],
     });
     jest.restoreAllMocks();
     await app.close();
@@ -273,6 +290,8 @@ describe('Payout account lookup', () => {
       expect(body(res).data).toEqual({
         accountName: NAME,
         accountNameVerified: true,
+        payoutsRetried: 0,
+        payoutsStillOnHold: 0,
       });
       expect(createTransferRecipient).toHaveBeenCalledWith(
         expect.objectContaining({ name: NAME, accountNumber: NUMBER }),
@@ -307,10 +326,234 @@ describe('Payout account lookup', () => {
       expect(body(res).data).toEqual({
         accountName: 'Kofi Asante',
         accountNameVerified: false,
+        payoutsRetried: 0,
+        payoutsStillOnHold: 0,
       });
       expect(await profileRow('K')).toMatchObject({
         payout_account_name: 'Kofi Asante',
         payout_account_name_verified: false,
+      });
+    });
+  });
+
+  describe('payout name check before a transfer', () => {
+    const SAVED = 'YAW DARKO';
+    const NEW_NUMBER = '0550000000';
+    let payments: PaymentsService;
+
+    const paymentRow = async (id: number) =>
+      (
+        await dataSource.query<
+          Array<{
+            status: string;
+            payout_hold_reason: string | null;
+            payout_check_attempts: number;
+            payout_check_next_at: Date | null;
+            transfer_code: string | null;
+          }>
+        >(
+          `SELECT status, payout_hold_reason, payout_check_attempts, payout_check_next_at, transfer_code
+           FROM payments WHERE id = $1`,
+          [id],
+        )
+      )[0];
+    const onHoldNotifications = async () =>
+      (
+        await dataSource.query<Array<{ body: string; payload: object }>>(
+          `SELECT body, payload FROM notifications WHERE user_id = $1 AND type = 'PAYOUT_ON_HOLD'`,
+          [userId.P],
+        )
+      ).map((r) => r);
+    /** Listeners run after the emit returns; wait for their write. */
+    const settle = () => new Promise((r) => setTimeout(r, 150));
+
+    const makeHeldPayment = async (title: string): Promise<Payment> => {
+      const jobs = moduleRef.get<Repository<Job>>(getRepositoryToken(Job));
+      const rows = moduleRef.get<Repository<Payment>>(
+        getRepositoryToken(Payment),
+      );
+      const profileId = (
+        await dataSource.query<Array<{ id: number }>>(
+          'SELECT id FROM artisan_profiles WHERE user_id = $1',
+          [userId.P],
+        )
+      )[0].id;
+      const job = await jobs.save(
+        jobs.create({
+          customer: { id: userId.c },
+          service: { id: serviceId },
+          title,
+          description: 'Fixture job for the payout name check.',
+          location: 'Tema',
+          currency: 'GHS',
+          budgetMin: 200,
+          budgetMax: 200,
+          status: Status.COMPLETED,
+          acceptedArtisan: { id: userId.P },
+        }),
+      );
+      return rows.save(
+        rows.create({
+          jobId: job.id,
+          customerId: userId.c,
+          artisanProfileId: profileId,
+          amount: 200,
+          platformFee: 10,
+          artisanAmount: 190,
+          currency: 'GHS',
+          status: PaymentStatus.HELD,
+          reference: `${PREFIX}${uniq}-${job.id}`,
+          channel: 'mobile_money',
+          paidAt: new Date('2026-10-20T10:00:00Z'),
+        }),
+      );
+    };
+
+    beforeAll(async () => {
+      payments = moduleRef.get(PaymentsService);
+      const services = moduleRef.get<Repository<ServiceEntity>>(
+        getRepositoryToken(ServiceEntity),
+      );
+      serviceId = (
+        await services.save(
+          services.create({
+            name: `Payout check service ${uniq}`,
+            estimatedDurationMins: 60,
+          }),
+        )
+      ).id;
+    });
+
+    it('holds a payout whose name no longer matches, tells the artisan once, and sends it after they fix their details', async () => {
+      resolveAccount.mockResolvedValue({
+        status: 'resolved',
+        accountName: SAVED,
+      });
+      expect((await save(momo, 'P')).status).toBe(201);
+      const p = await makeHeldPayment('Fix the gate hinge');
+
+      // The account now belongs to someone else.
+      resolveAccount.mockResolvedValue({
+        status: 'resolved',
+        accountName: 'ESI BOATENG',
+      });
+      await payments.capturePayment(p.reference, p.jobId);
+      await settle();
+
+      expect(initiateTransfer).not.toHaveBeenCalled();
+      expect(await paymentRow(p.id)).toMatchObject({
+        status: PaymentStatus.PENDING_TRANSFER,
+        payout_hold_reason: 'payout_name_mismatch',
+        transfer_code: null,
+      });
+      expect((await profileRow('P')).payout_account_name_verified).toBe(false);
+      const told = await onHoldNotifications();
+      expect(told).toHaveLength(1);
+      expect(told[0].body).toBe(
+        "We couldn't send your payout for Fix the gate hinge. The name on your payout account doesn't match. Update your payment details to receive it.",
+      );
+      expect(JSON.stringify(told)).not.toContain(NUMBER);
+
+      // The artisan's retry says why, sends nothing and doesn't re-notify.
+      const retry = await post(`/payments/retry-transfer/${p.jobId}`, {}, 'P');
+      expect(retry.status).toBe(422);
+      expect(body(retry).message).toBe(PAYOUT_NAME_MISMATCH_MESSAGE);
+      await settle();
+      expect(await onHoldNotifications()).toHaveLength(1);
+      expect(initiateTransfer).not.toHaveBeenCalled();
+
+      // The statement and its CSV say why it needs action.
+      const statement = await request(server())
+        .get('/api/v1/payments/my-earnings/statement?period=all')
+        .set({ Authorization: `Bearer ${token.P}` });
+      expect(statement.status).toBe(200);
+      const items = body(statement).data.items as Array<
+        Record<string, unknown>
+      >;
+      expect(items.find((i) => i.paymentId === p.id)).toMatchObject({
+        stage: 'needs_action',
+        holdReason: 'payout_name_mismatch',
+      });
+      const csv = await request(server())
+        .get('/api/v1/payments/my-earnings/export.csv?period=all')
+        .set({ Authorization: `Bearer ${token.P}` });
+      expect(csv.status).toBe(200);
+      expect(csv.text).toContain('Payout on hold');
+      expect(csv.text).toContain("Payout account name doesn't match");
+
+      // Saving corrected details retries it with the new account.
+      resolveAccount.mockResolvedValue({
+        status: 'resolved',
+        accountName: SAVED,
+      });
+      createTransferRecipient.mockResolvedValue({
+        recipient_code: 'RCP_fixed',
+      });
+      const fixed = await save({ ...momo, accountNumber: NEW_NUMBER }, 'P');
+      expect(fixed.status).toBe(201);
+      expect(body(fixed).data).toMatchObject({
+        accountNameVerified: true,
+        payoutsRetried: 1,
+        payoutsStillOnHold: 0,
+      });
+      expect(resolveAccount).toHaveBeenLastCalledWith(NEW_NUMBER, 'MTN');
+      expect(initiateTransfer).toHaveBeenCalledTimes(1);
+      expect(initiateTransfer).toHaveBeenCalledWith(
+        expect.objectContaining({ recipientCode: 'RCP_fixed' }),
+      );
+      expect(await paymentRow(p.id)).toMatchObject({
+        status: PaymentStatus.HELD,
+        payout_hold_reason: null,
+        transfer_code: 'TRF_e2e',
+      });
+      expect((await profileRow('P')).payout_account_name_verified).toBe(true);
+    });
+
+    it('waits without blaming the artisan when the lookup is down, then the scheduler sends it', async () => {
+      resolveAccount.mockResolvedValue({
+        status: 'resolved',
+        accountName: SAVED,
+      });
+      const p = await makeHeldPayment('Rehang the kitchen door');
+      const before = (await onHoldNotifications()).length;
+
+      resolveAccount.mockResolvedValue({ status: 'unavailable' });
+      await payments.capturePayment(p.reference, p.jobId);
+      await settle();
+
+      expect(initiateTransfer).not.toHaveBeenCalled();
+      const held = await paymentRow(p.id);
+      expect(held).toMatchObject({
+        status: PaymentStatus.PENDING_TRANSFER,
+        payout_hold_reason: 'payout_check_pending',
+        payout_check_attempts: 1,
+      });
+      expect(held.payout_check_next_at).not.toBeNull();
+      expect((await profileRow('P')).payout_account_name_verified).toBe(true);
+      expect(await onHoldNotifications()).toHaveLength(before);
+
+      // Not due yet: nothing happens.
+      expect(await payments.retryDuePayoutChecks(new Date())).toMatchObject({
+        candidates: 0,
+      });
+
+      // Once due, with Paystack back, the scheduler's retry sends it.
+      resolveAccount.mockResolvedValue({
+        status: 'resolved',
+        accountName: SAVED,
+      });
+      const later = new Date(Date.now() + 2 * 60 * 60_000);
+      expect(await payments.retryDuePayoutChecks(later)).toEqual({
+        candidates: 1,
+        sent: 1,
+        failed: 0,
+      });
+      expect(initiateTransfer).toHaveBeenCalledTimes(1);
+      expect(await paymentRow(p.id)).toMatchObject({
+        status: PaymentStatus.HELD,
+        payout_hold_reason: null,
+        payout_check_attempts: 0,
+        payout_check_next_at: null,
       });
     });
   });

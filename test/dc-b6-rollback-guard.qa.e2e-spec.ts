@@ -100,6 +100,12 @@ describe('B6: dispute money-action rollback status guard — QA verification (e2
   const paystack = {
     createRefund: jest.fn(),
     initiateTransfer: jest.fn(),
+    // Payout name check: Paystack names the account as saved, so a release
+    // goes on to the transfer.
+    resolveAccount: jest.fn().mockResolvedValue({
+      status: 'resolved',
+      accountName: 'KWAME ADJEI',
+    }),
     verifyTransaction: jest.fn(),
     initializeTransaction: jest.fn(),
     verifyWebhookSignature: jest.fn().mockReturnValue(true),
@@ -375,6 +381,10 @@ describe('B6: dispute money-action rollback status guard — QA verification (e2
         user: artisanUser,
         currency: 'GHS',
         paystackRecipientCode: `RCP_qa_b6_${uniq}`,
+        payoutAccountName: 'Kwame Adjei',
+        payoutAccountNumber: '0240000000',
+        payoutBankCode: 'MTN',
+        payoutAccountNameVerified: true,
       }),
     );
     createdProfileIds.push(artisanProfile.id);

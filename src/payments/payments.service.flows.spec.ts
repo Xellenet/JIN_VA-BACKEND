@@ -38,6 +38,7 @@ describe('PaymentsService (flows)', () => {
     find: jest.fn(),
     findOne: jest.fn(),
     findOneOrFail: jest.fn(),
+    update: jest.fn(() => Promise.resolve({ affected: 1 })),
     query: jest.fn(),
     createQueryBuilder: jest.fn(),
   });
@@ -112,6 +113,31 @@ describe('PaymentsService (flows)', () => {
       ],
     }).compile();
     return module.get(PaymentsService);
+  };
+
+  /** A saved, verified payout method whose name Paystack agrees with. */
+  const payoutProfile = (overrides: Record<string, unknown> = {}) => ({
+    id: 4,
+    paystackRecipientCode: 'RCP_unit',
+    payoutAccountName: 'Kofi Mensah',
+    payoutAccountNumber: '0240000000',
+    payoutBankCode: 'MTN',
+    payoutAccountNameVerified: true,
+    ...overrides,
+  });
+
+  /**
+   * The same payment and profile for the unlocked pre-check (made before the
+   * transaction) and for the locked read inside it.
+   */
+  const arrangeCapture = (
+    p: Payment,
+    profile: Record<string, unknown> | null,
+  ) => {
+    paymentRepo.findOne.mockResolvedValueOnce(p);
+    profileRepo.findOne.mockResolvedValueOnce(profile);
+    txPaymentRepo.findOne.mockResolvedValue(p);
+    txProfileRepo.findOne.mockResolvedValue(profile);
   };
 
   /** Make the artisan resolvable for notification payloads. */
@@ -250,6 +276,14 @@ describe('PaymentsService (flows)', () => {
   });
 
   describe('capturePayment', () => {
+    beforeEach(() => {
+      // Default: Paystack names the account as saved, so capture transfers.
+      paystack.resolveAccount.mockResolvedValue({
+        status: 'resolved',
+        accountName: 'KOFI MENSAH',
+      });
+    });
+
     it('does nothing when the reference is unknown', async () => {
       txPaymentRepo.findOne.mockResolvedValue(null);
       await service.capturePayment('jinva-missing', 35);
@@ -290,11 +324,7 @@ describe('PaymentsService (flows)', () => {
 
     it('initiates the transfer and records the transfer code, staying HELD', async () => {
       const p = payment({ status: PaymentStatus.TRANSFER_FAILED });
-      txPaymentRepo.findOne.mockResolvedValue(p);
-      txProfileRepo.findOne.mockResolvedValue({
-        id: 4,
-        paystackRecipientCode: 'RCP_unit',
-      });
+      arrangeCapture(p, payoutProfile());
       paystack.initiateTransfer.mockResolvedValue({
         transfer_code: 'TRF_new',
       });
@@ -315,11 +345,7 @@ describe('PaymentsService (flows)', () => {
 
     it('marks TRANSFER_FAILED, alerts admins after commit, and rethrows when the transfer call fails', async () => {
       const p = payment();
-      txPaymentRepo.findOne.mockResolvedValue(p);
-      txProfileRepo.findOne.mockResolvedValue({
-        id: 4,
-        paystackRecipientCode: 'RCP_unit',
-      });
+      arrangeCapture(p, payoutProfile());
       paystack.initiateTransfer.mockRejectedValue(
         new Error('Insufficient balance'),
       );
@@ -345,11 +371,7 @@ describe('PaymentsService (flows)', () => {
     });
 
     it('wraps a non-Error rejection so callers still get an Error', async () => {
-      txPaymentRepo.findOne.mockResolvedValue(payment());
-      txProfileRepo.findOne.mockResolvedValue({
-        id: 4,
-        paystackRecipientCode: 'RCP_unit',
-      });
+      arrangeCapture(payment(), payoutProfile());
       paystack.initiateTransfer.mockRejectedValue('gateway down');
       // Notification context lookup fails too; that must not mask the error.
       jobRepo.findOne.mockRejectedValue(new Error('db gone'));
@@ -1193,6 +1215,8 @@ describe('PaymentsService (flows)', () => {
         status: 'resolved',
         accountName: 'KOFI ASANTE',
       });
+      // No payouts on hold unless a test says so.
+      paymentRepo.find.mockResolvedValue([]);
     });
 
     it('throws NotFoundException without an artisan profile', async () => {
@@ -1213,7 +1237,12 @@ describe('PaymentsService (flows)', () => {
 
       await expect(service.setupPayoutMethod(9, momo)).resolves.toEqual({
         message: 'Payout method registered successfully.',
-        data: { accountName: 'KOFI ASANTE', accountNameVerified: true },
+        data: {
+          accountName: 'KOFI ASANTE',
+          accountNameVerified: true,
+          payoutsRetried: 0,
+          payoutsStillOnHold: 0,
+        },
       });
 
       expect(paystack.resolveAccount).toHaveBeenCalledWith('0240000000', 'MTN');

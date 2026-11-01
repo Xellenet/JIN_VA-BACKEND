@@ -102,6 +102,7 @@ describe('ArtisanEarningsService (B2)', () => {
         stage: 'paid',
         transferReference: 'TRF-77-1',
         failureReason: null,
+        holdReason: null,
         paidAt: '2026-10-20T10:00:00.000Z',
         releasedAt: '2026-10-22T09:00:00.000Z',
         createdAt: '2026-10-19T16:30:00.000Z',
@@ -142,9 +143,50 @@ describe('ArtisanEarningsService (B2)', () => {
         ),
       );
       expect(line).toBe(
-        `2026-10-22 09:00,"'=HYPERLINK(""x"")",'+Ama Mensah,Paid,600.00,60.00,540.00,0.00,TRF-77-1,2026-10-20 10:00,2026-10-22 09:00\r\n`,
+        `2026-10-22 09:00,"'=HYPERLINK(""x"")",'+Ama Mensah,Paid,600.00,60.00,540.00,0.00,TRF-77-1,2026-10-20 10:00,2026-10-22 09:00,\r\n`,
       );
-      expect(ARTISAN_CSV_HEADER).toHaveLength(11);
+      expect(ARTISAN_CSV_HEADER).toHaveLength(12);
+      expect(ARTISAN_CSV_HEADER[11]).toBe('Payout on hold');
+    });
+
+    it.each([
+      ['payout_name_mismatch', "Payout account name doesn't match"],
+      ['payout_account_not_found', 'Payout account not found'],
+      ['payout_check_pending', 'Checking your payout account'],
+    ] as const)(
+      'exposes a %s hold on a needs-action row and in the CSV',
+      (holdReason, label) => {
+        const item = mapStatementRow(
+          raw({
+            status: PaymentStatus.PENDING_TRANSFER,
+            holdReason,
+            transferReference: null,
+            releasedAt: null,
+          }),
+        );
+        expect(item).toMatchObject({
+          stage: 'needs_action',
+          failureReason: 'no_payout_method',
+          holdReason,
+        });
+        expect(artisanCsvRow(item).trimEnd().endsWith(`,${label}`)).toBe(true);
+      },
+    );
+
+    it('ignores a hold reason on a row that is no longer held, or an unknown one', () => {
+      expect(
+        mapStatementRow(
+          raw({
+            status: PaymentStatus.RELEASED,
+            holdReason: 'payout_name_mismatch',
+          }),
+        ).holdReason,
+      ).toBeNull();
+      expect(
+        mapStatementRow(
+          raw({ status: PaymentStatus.PENDING_TRANSFER, holdReason: 'other' }),
+        ).holdReason,
+      ).toBeNull();
     });
 
     it.each([

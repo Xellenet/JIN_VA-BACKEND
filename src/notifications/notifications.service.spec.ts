@@ -294,6 +294,60 @@ describe('NotificationsService', () => {
     });
   });
 
+  describe('payout on hold (payout name check)', () => {
+    it.each([
+      [
+        'payout_name_mismatch',
+        "We couldn't send your payout for Kitchen Sink Repair. The name on your payout account doesn't match. Update your payment details to receive it.",
+      ],
+      [
+        'payout_account_not_found',
+        "We couldn't send your payout for Kitchen Sink Repair. We couldn't find your payout account. Update your payment details to receive it.",
+      ],
+    ] as const)(
+      'tells the artisan what to fix (%s), with the Settings → Payments link',
+      async (reason, body) => {
+        prefsRepo.findOne.mockResolvedValue(prefsFor(Role.ARTISAN));
+
+        await service.handlePayoutOnHold({
+          artisanUserId: 99,
+          paymentId: 7,
+          jobId: 3,
+          jobTitle: 'Kitchen Sink Repair',
+          reason,
+        });
+
+        const saved = notificationsRepo.create.mock.calls[0][0];
+        expect(saved).toMatchObject({
+          type: NotificationType.PAYOUT_ON_HOLD,
+          title: 'Your payout is on hold',
+          body,
+          payload: {
+            jobId: 3,
+            paymentId: 7,
+            reason,
+          },
+        });
+      },
+    );
+
+    it('is delivered even when payment notifications are muted', async () => {
+      prefsRepo.findOne.mockResolvedValue(
+        prefsFor(Role.ARTISAN, { paymentReleased: false }),
+      );
+
+      await service.handlePayoutOnHold({
+        artisanUserId: 99,
+        paymentId: 7,
+        jobId: 3,
+        jobTitle: 'Kitchen Sink Repair',
+        reason: 'payout_name_mismatch',
+      });
+
+      expect(notificationsRepo.save).toHaveBeenCalled();
+    });
+  });
+
   describe('dispute outcome (PD4)', () => {
     it('persists one notification per party, de-duplicated', async () => {
       prefsRepo.findOne.mockResolvedValue(prefsFor(Role.CUSTOMER));

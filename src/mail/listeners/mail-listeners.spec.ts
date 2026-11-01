@@ -245,6 +245,33 @@ describe('DomainMailListener job, message, payment and dispute emails', () => {
     expect(mailService.sendMail).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['payout_name_mismatch', "The name on your payout account doesn't match."],
+    ['payout_account_not_found', "We couldn't find your payout account."],
+  ] as const)(
+    'emails the artisan once a payout is on hold (%s), linking to Settings → Payments',
+    async (reason, cause) => {
+      const { listener, sent } = build();
+      await listener.handlePayoutOnHold({
+        artisanUserId: 2,
+        paymentId: 7,
+        jobId: 12,
+        jobTitle: 'Fix kitchen sink',
+        reason,
+      });
+      const [[to, event, data]] = sent();
+      expect(to).toBe('yaw@example.com');
+      expect(event).toBe(APP_EVENTS.PAYOUT_ON_HOLD);
+      expect(data.paragraphs).toEqual([
+        `We couldn't send your payout for Fix kitchen sink. ${cause}`,
+        'Update your payment details to receive it.',
+      ]);
+      expect(data.actionUrl).toBe(
+        'https://app.jinva.example/dashboard/artisan/settings?tab=payments',
+      );
+    },
+  );
+
   describe('messages', () => {
     const message = {
       recipientId: 1,
