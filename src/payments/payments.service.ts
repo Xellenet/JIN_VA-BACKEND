@@ -17,6 +17,12 @@ import {
   Repository,
 } from 'typeorm';
 import { Payment } from './entities/payment.entity';
+import { PaymentCharge } from './entities/payment-charge.entity';
+import { CHARGE_MESSAGES } from './charge-outcome';
+import {
+  PaymentMethodsService,
+  type PaystackAuthorization,
+} from '../payment-methods/payment-methods.service';
 import {
   maskForLog,
   PaystackService,
@@ -115,6 +121,11 @@ export class PaymentsService {
     private readonly eventEmitter: EventEmitter2,
     /** AT5: audit rows for admin refunds and fraud flags. */
     private readonly auditService: AdminAuditService,
+    /** Saved payment methods: direct charge attempts, each with its own reference. */
+    @InjectRepository(PaymentCharge)
+    private readonly chargeRepo: Repository<PaymentCharge>,
+    /** Saved payment methods: saving the card from an opted-in hosted charge. */
+    private readonly paymentMethods: PaymentMethodsService,
   ) {
     // ConfigService.get() always returns environment variables as strings
     // (process.env is never coerced), whether the value comes from a .env
@@ -850,13 +861,30 @@ export class PaymentsService {
     }
   }
 
-  async initializePayment(customerId: number, jobId: number) {
+  async initializePayment(
+    customerId: number,
+    jobId: number,
+    opts: { saveCard?: boolean } = {},
+  ) {
     const payment = await this.repo.findOne({
       where: { jobId, customerId, status: PaymentStatus.PENDING },
     });
     if (!payment) {
       throw new NotFoundException(
         'No pending payment found for this job. Has the artisan accepted yet?',
+      );
+    }
+
+    // Saved payment methods: the customer's "Save this card for next time"
+    // choice, recorded on the payment row by the server. Only this allows
+    // the card from this payment's charge.success to be saved; webhook
+    // metadata is never trusted alone. The latest choice wins.
+    const wantSave = opts.saveCard === true;
+    if (wantSave !== (payment.saveCardRequested === true)) {
+      payment.saveCardRequested = wantSave;
+      await this.repo.update(
+        { id: payment.id },
+        { saveCardRequested: wantSave },
       );
     }
 
@@ -891,7 +919,12 @@ export class PaymentsService {
         amountGhs: payment.amount,
         reference: payment.reference,
         callbackUrl: this.config.get('PAYSTACK_CALLBACK_URL'),
-        metadata: { jobId: payment.jobId, customerId, paymentId: payment.id },
+        metadata: {
+          jobId: payment.jobId,
+          customerId,
+          paymentId: payment.id,
+          ...(wantSave ? { save_card: true } : {}),
+        },
         // B5c: only when the customer saved a preference. Without one the
         // Paystack payload carries no `channels` key, exactly as before.
         ...(channels ? { channels } : {}),
@@ -1474,6 +1507,12 @@ export class PaymentsService {
     const reference = data.reference as string;
     const payment = await this.repo.findOne({ where: { reference } });
     if (!payment) {
+      // Saved payment methods: a direct charge has its own reference.
+      const charge = await this.chargeRepo.findOne({ where: { reference } });
+      if (charge) {
+        await this.applySavedChargeSuccess(charge.id, data);
+        return;
+      }
       this.logger.warn(`charge.success: no payment for reference ${reference}`);
       return;
     }
@@ -1501,6 +1540,22 @@ export class PaymentsService {
     // payment-secured notice.
     const isFirstHold = payment.status !== PaymentStatus.HELD;
 
+    // Saved payment methods: the job was already paid by a saved-method
+    // charge, so this hosted charge is a second payment. The state is left
+    // alone and the extra payment is logged for a refund.
+    if (payment.status !== PaymentStatus.PENDING) {
+      const paidBySavedMethod = await this.chargeRepo.count({
+        where: { paymentId: payment.id, status: 'succeeded' },
+      });
+      if (paidBySavedMethod > 0) {
+        this.logger.error(
+          `charge.success: payment ${payment.id} was already paid with a saved method; ` +
+            `hosted ref=${reference} is a second payment and needs a refund.`,
+        );
+        return;
+      }
+    }
+
     payment.status = PaymentStatus.HELD;
     payment.channel = data.channel as string;
     payment.paidAt = new Date(data.paid_at as string);
@@ -1510,6 +1565,109 @@ export class PaymentsService {
     );
 
     if (isFirstHold) await this.emitPaymentHeld(payment);
+
+    if (payment.saveCardRequested) {
+      await this.saveCardBestEffort(
+        payment,
+        data.authorization as PaystackAuthorization | undefined,
+      );
+    }
+  }
+
+  /**
+   * Saved payment methods: keeps the card from an opted-in hosted charge.
+   * Never fails the webhook; logs the outcome without any card data.
+   */
+  private async saveCardBestEffort(
+    payment: Payment,
+    authorization: PaystackAuthorization | undefined,
+  ): Promise<void> {
+    try {
+      const outcome = await this.paymentMethods.saveCardFromAuthorization(
+        payment.customerId,
+        authorization,
+      );
+      this.logger.log(`Card save for payment ${payment.id}: ${outcome}`);
+    } catch (err) {
+      this.logger.warn(
+        `Card save for payment ${payment.id} failed: ${(err as Error)?.name ?? 'Error'}`,
+      );
+    }
+  }
+
+  /**
+   * Saved payment methods: a direct charge succeeded (webhook or verify).
+   * The same PENDING → HELD transition as the hosted checkout, made under a
+   * lock on the payment row so a hosted payment and a saved-method charge
+   * can't both claim it. A second success for an already-paid job marks the
+   * attempt `duplicate` (logged for a refund) and changes nothing else.
+   */
+  async applySavedChargeSuccess(
+    chargeId: number,
+    data: Record<string, unknown>,
+  ): Promise<void> {
+    const reference = typeof data.reference === 'string' ? data.reference : '';
+    const held = await this.dataSource.transaction(async (manager) => {
+      const charges = manager.getRepository(PaymentCharge);
+      const charge = await charges.findOne({ where: { id: chargeId } });
+      if (!charge) return null;
+      const payment = await manager.getRepository(Payment).findOne({
+        where: { id: charge.paymentId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!payment) return null;
+      if (charge.status === 'succeeded' || charge.status === 'duplicate') {
+        return null; // A redelivered webhook, or a verify after it.
+      }
+
+      const paidAmountPesewas = Number(data.amount);
+      const paidCurrency = (data.currency as string | undefined) ?? 'GHS';
+      const expectedPesewas = Math.round(Number(payment.amount) * 100);
+      if (paidAmountPesewas !== expectedPesewas || paidCurrency !== 'GHS') {
+        this.logger.error(
+          `charge.success: amount/currency mismatch for saved-method ref=${reference} — ` +
+            `Paystack reports ${paidAmountPesewas} ${paidCurrency}, expected ${expectedPesewas} GHS pesewas. ` +
+            `Refusing to auto-reconcile; needs manual review.`,
+        );
+        return null;
+      }
+
+      if (payment.status !== PaymentStatus.PENDING) {
+        await charges.update(
+          { id: charge.id },
+          {
+            status: 'duplicate',
+            action: null,
+            message: CHARGE_MESSAGES.DUPLICATE,
+          },
+        );
+        this.logger.error(
+          `charge.success: payment ${payment.id} was already paid; saved-method ` +
+            `ref=${reference} is a second payment and needs a refund.`,
+        );
+        return null;
+      }
+
+      payment.status = PaymentStatus.HELD;
+      payment.channel =
+        (data.channel as string | undefined) ?? charge.methodType;
+      payment.paidAt = data.paid_at
+        ? new Date(data.paid_at as string)
+        : new Date();
+      await manager.getRepository(Payment).save(payment);
+      await charges.update(
+        { id: charge.id },
+        { status: 'succeeded', action: null, message: null },
+      );
+      return payment;
+    });
+
+    if (held) {
+      this.logger.log(
+        `Payment HELD: saved-method ref=${reference} channel=${held.channel}`,
+      );
+      await this.emitPaymentHeld(held);
+    }
   }
 
   private async onTransferSuccess(data: Record<string, unknown>) {

@@ -16,6 +16,8 @@ import { User } from '@users/entities/user.entity';
 import { ArtisanProfile } from '@users/entities/artisan-profile.entity';
 import { PaystackService } from './paystack.service';
 import { AdminAuditService } from '../admin-audit/admin-audit.service';
+import { PaymentCharge } from './entities/payment-charge.entity';
+import { PaymentMethodsService } from '../payment-methods/payment-methods.service';
 import {
   AdminActionType,
   PaymentStatus,
@@ -110,6 +112,18 @@ describe('PaymentsService (flows)', () => {
         { provide: ConfigService, useValue: config },
         { provide: EventEmitter2, useValue: events },
         { provide: AdminAuditService, useValue: audit },
+        // Saved payment methods: no charge attempts, no card saving here.
+        {
+          provide: getRepositoryToken(PaymentCharge),
+          useValue: {
+            findOne: jest.fn().mockResolvedValue(null),
+            count: jest.fn().mockResolvedValue(0),
+          },
+        },
+        {
+          provide: PaymentMethodsService,
+          useValue: { saveCardFromAuthorization: jest.fn() },
+        },
       ],
     }).compile();
     return module.get(PaymentsService);

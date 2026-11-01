@@ -57,6 +57,16 @@ import {
 import { BankListService } from './bank-list';
 import { PayoutAccountService } from './payout-account.service';
 import { ResolvePayoutAccountDto } from './dto/resolve-payout-account.dto';
+import { RejectPinFieldsGuard } from '@common/guards/reject-pin-fields.guard';
+import {
+  PaymentChargeStatusThrottlerGuard,
+  PaymentChargeThrottlerGuard,
+} from '@common/throttling/customer-throttler.guards';
+import { SavedMethodChargeService } from './saved-method-charge.service';
+import {
+  ChargeWithSavedMethodDto,
+  SubmitChargeOtpDto,
+} from './dto/saved-method-charge.dto';
 
 @ApiTags('Payments')
 @Controller('payments')
@@ -67,6 +77,7 @@ export class PaymentsController {
     private readonly earnings: ArtisanEarningsService,
     private readonly banks: BankListService,
     private readonly payoutAccounts: PayoutAccountService,
+    private readonly savedCharges: SavedMethodChargeService,
   ) {}
 
   // ─── Public — no auth (Paystack calls this directly) ──────────────────────────
@@ -91,7 +102,7 @@ export class PaymentsController {
   // ─── Customer routes ──────────────────────────────────────────────────────────
 
   @Post('initialize')
-  @UseGuards(JwtAuthGuard, RolesGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, RejectPinFieldsGuard)
   @Roles(Role.CUSTOMER)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get Paystack payment URL for an accepted job' })
@@ -99,7 +110,88 @@ export class PaymentsController {
     @Req() req: AuthenticatedRequest,
     @Body() dto: InitializePaymentDto,
   ) {
-    return this.paymentsService.initializePayment(req.user.id, dto.jobId);
+    return this.paymentsService.initializePayment(req.user.id, dto.jobId, {
+      saveCard: dto.saveCard,
+    });
+  }
+
+  // ─── Saved payment methods: paying with one ──────────────────────────────────
+
+  /**
+   * Pays the job's pending payment with a saved method. Mobile money sends
+   * the network's approval prompt to the customer's phone (they approve with
+   * their PIN there; no PIN is ever sent here). The payment becomes HELD
+   * only via the webhook or a verify, exactly as with the hosted checkout.
+   * A second call while an attempt is active returns that attempt.
+   */
+  @Post(':jobId/charge')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(
+    JwtAuthGuard,
+    RolesGuard,
+    RejectPinFieldsGuard,
+    PaymentChargeThrottlerGuard,
+  )
+  @Roles(Role.CUSTOMER)
+  @Header('Cache-Control', 'private, no-store')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Pay a job with a saved payment method' })
+  async chargeSavedMethod(
+    @Req() req: AuthenticatedRequest,
+    @Param('jobId', ParseIntPipe) jobId: number,
+    @Body() dto: ChargeWithSavedMethodDto,
+  ) {
+    return {
+      message: 'Payment started',
+      data: await this.savedCharges.charge(
+        req.user.id,
+        jobId,
+        dto.paymentMethodId,
+      ),
+    };
+  }
+
+  /** The one-time code Telecel sends for some mobile money charges. Never a PIN. */
+  @Post('charges/:reference/otp')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(
+    JwtAuthGuard,
+    RolesGuard,
+    RejectPinFieldsGuard,
+    PaymentChargeThrottlerGuard,
+  )
+  @Roles(Role.CUSTOMER)
+  @Header('Cache-Control', 'private, no-store')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Submit the one-time code for a pending charge' })
+  async submitChargeOtp(
+    @Req() req: AuthenticatedRequest,
+    @Param('reference') reference: string,
+    @Body() dto: SubmitChargeOtpDto,
+  ) {
+    return {
+      message: 'Code submitted',
+      data: await this.savedCharges.submitOtp(req.user.id, reference, dto.otp),
+    };
+  }
+
+  @Get('charges/:reference/status')
+  @UseGuards(JwtAuthGuard, RolesGuard, PaymentChargeStatusThrottlerGuard)
+  @Roles(Role.CUSTOMER)
+  @Header('Cache-Control', 'private, no-store')
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'The state of a saved-method charge (pending, needs_otp, succeeded, failed)',
+  })
+  async chargeStatus(
+    @Req() req: AuthenticatedRequest,
+    @Param('reference') reference: string,
+  ) {
+    return {
+      message: 'Payment status retrieved',
+      data: await this.savedCharges.status(req.user.id, reference),
+    };
   }
 
   /**

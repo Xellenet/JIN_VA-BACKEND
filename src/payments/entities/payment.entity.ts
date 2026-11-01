@@ -150,6 +150,14 @@ export class Payment {
   })
   payoutHoldNotifiedAt?: Date | null;
 
+  /**
+   * Saved payment methods: the customer ticked "Save this card for next
+   * time" on the last initialise. Only this (never webhook metadata alone)
+   * allows the card from a successful hosted charge to be saved.
+   */
+  @Column({ name: 'save_card_requested', type: 'boolean', default: false })
+  saveCardRequested!: boolean;
+
   @Column({ name: 'paid_at', type: 'timestamptz', nullable: true })
   paidAt?: Date;
 

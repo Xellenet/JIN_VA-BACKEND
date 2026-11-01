@@ -11,6 +11,8 @@ import { User } from '@users/entities/user.entity';
 import { ArtisanProfile } from '@users/entities/artisan-profile.entity';
 import { PaystackService } from './paystack.service';
 import { AdminAuditService } from '../admin-audit/admin-audit.service';
+import { PaymentCharge } from './entities/payment-charge.entity';
+import { PaymentMethodsService } from '../payment-methods/payment-methods.service';
 import { PaymentStatus } from '@common/types/enums';
 
 describe('PaymentsService', () => {
@@ -63,6 +65,18 @@ describe('PaymentsService', () => {
         { provide: ConfigService, useValue: mockConfig },
         { provide: EventEmitter2, useValue: mockEventEmitter },
         { provide: AdminAuditService, useValue: mockAuditService },
+        // Saved payment methods: no charge attempts, no card saving here.
+        {
+          provide: getRepositoryToken(PaymentCharge),
+          useValue: {
+            findOne: jest.fn().mockResolvedValue(null),
+            count: jest.fn().mockResolvedValue(0),
+          },
+        },
+        {
+          provide: PaymentMethodsService,
+          useValue: { saveCardFromAuthorization: jest.fn() },
+        },
       ],
     }).compile();
 

@@ -34,6 +34,33 @@ export type ResolveAccountResult =
   | { status: 'unresolvable' }
   | { status: 'unavailable' };
 
+/**
+ * A direct charge reply (`/charge`, `/transaction/charge_authorization`,
+ * `/charge/submit_otp`), never thrown:
+ * - `ok`: Paystack answered `status: true`; `data.status` says what next.
+ * - `refused`: Paystack answered `status: false` (a 4xx such as a bad OTP).
+ * - `unreachable`: no usable answer (network, timeout, 5xx, bad JSON). The
+ *   charge may or may not have started; the webhook or a verify decides.
+ */
+export interface PaystackChargeData {
+  status?: string;
+  reference?: string;
+  display_text?: string;
+  message?: string;
+  gateway_response?: string;
+  amount?: number;
+  currency?: string;
+  channel?: string;
+  paid_at?: string;
+}
+export type PaystackChargeReply =
+  | { outcome: 'ok'; data: PaystackChargeData }
+  | { outcome: 'refused'; httpStatus: number; message: string | null }
+  | { outcome: 'unreachable' };
+
+/** A direct charge call that takes longer than this counts as unreachable. */
+export const CHARGE_TIMEOUT_MS = 20_000;
+
 /** Paystack statuses meaning "the number and bank code don't match an account". */
 const UNRESOLVABLE_STATUSES = new Set([400, 422]);
 /** A name lookup that takes longer than this counts as unavailable. */
@@ -280,6 +307,106 @@ export class PaystackService {
       }
       return { status: 'unavailable' };
     }
+  }
+
+  /**
+   * POST for the direct charge endpoints. Never throws and never logs the
+   * body (it carries a phone number, an authorization code or an OTP); the
+   * log line names the path and the reference only.
+   */
+  private async postCharge(
+    path: string,
+    body: Record<string, unknown>,
+    reference: string,
+  ): Promise<PaystackChargeReply> {
+    try {
+      const res = await fetch(`${this.baseUrl}${path}`, {
+        method: 'POST',
+        headers: this.headers,
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(CHARGE_TIMEOUT_MS),
+      });
+      if (res.status >= 500) {
+        this.logger.warn(
+          `Paystack POST ${path} (ref ${reference}) answered ${res.status}`,
+        );
+        return { outcome: 'unreachable' };
+      }
+      const json = (await res.json()) as PaystackResponse<PaystackChargeData>;
+      if (json?.status === true) {
+        return { outcome: 'ok', data: json.data ?? {} };
+      }
+      this.logger.warn(
+        `Paystack POST ${path} (ref ${reference}) refused with ${res.status}`,
+      );
+      return {
+        outcome: 'refused',
+        httpStatus: res.status,
+        message: typeof json?.message === 'string' ? json.message : null,
+      };
+    } catch (err) {
+      this.logger.warn(
+        `Paystack POST ${path} (ref ${reference}) failed: ${(err as Error)?.name ?? 'Error'}`,
+      );
+      return { outcome: 'unreachable' };
+    }
+  }
+
+  /**
+   * Saved payment methods: charge a mobile money wallet. The customer
+   * approves on their phone (the network's prompt); no PIN passes through
+   * JinVa. `provider` is Paystack's code (`mtn`, `vod`, `atl`).
+   */
+  async chargeMobileMoney(params: {
+    email: string;
+    amountGhs: number;
+    reference: string;
+    phone: string;
+    provider: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<PaystackChargeReply> {
+    return this.postCharge(
+      '/charge',
+      {
+        email: params.email,
+        amount: Math.round(params.amountGhs * 100), // GHS → pesewas
+        currency: 'GHS',
+        reference: params.reference,
+        mobile_money: { phone: params.phone, provider: params.provider },
+        metadata: params.metadata ?? {},
+      },
+      params.reference,
+    );
+  }
+
+  /** Saved payment methods: charge a saved, reusable card authorization. */
+  async chargeAuthorization(params: {
+    email: string;
+    amountGhs: number;
+    reference: string;
+    authorizationCode: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<PaystackChargeReply> {
+    return this.postCharge(
+      '/transaction/charge_authorization',
+      {
+        email: params.email,
+        amount: Math.round(params.amountGhs * 100), // GHS → pesewas
+        currency: 'GHS',
+        reference: params.reference,
+        authorization_code: params.authorizationCode,
+        metadata: params.metadata ?? {},
+      },
+      params.reference,
+    );
+  }
+
+  /** The one-time code a network (Telecel) sent for a pending charge. */
+  async submitChargeOtp(
+    reference: string,
+    otp: string,
+  ): Promise<PaystackChargeReply> {
+    return this.postCharge('/charge/submit_otp', { otp, reference }, reference);
   }
 
   /**

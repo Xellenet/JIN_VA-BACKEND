@@ -83,6 +83,9 @@ for (const name of [
   'resolveAccount',
   'initiateTransfer',
   'listBanks',
+  'chargeMobileMoney',
+  'chargeAuthorization',
+  'submitChargeOtp',
 ]) {
   patch(PaystackService.prototype, name, refuse(`Paystack ${name}`));
 }

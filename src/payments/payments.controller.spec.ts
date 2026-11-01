@@ -21,6 +21,12 @@ import {
   PayoutAccountLookupThrottlerGuard,
 } from '@common/throttling/artisan-throttler.guards';
 import { PayoutAccountService } from './payout-account.service';
+import { SavedMethodChargeService } from './saved-method-charge.service';
+import {
+  PaymentChargeStatusThrottlerGuard,
+  PaymentChargeThrottlerGuard,
+} from '@common/throttling/customer-throttler.guards';
+import { RejectPinFieldsGuard } from '@common/guards/reject-pin-fields.guard';
 
 describe('PaymentsController', () => {
   let controller: PaymentsController;
@@ -54,6 +60,11 @@ describe('PaymentsController', () => {
 
   const banks = { list: jest.fn() };
   const payoutAccounts = { resolve: jest.fn() };
+  const savedCharges = {
+    charge: jest.fn(),
+    submitOtp: jest.fn(),
+    status: jest.fn(),
+  };
 
   const user = {
     id: 22,
@@ -79,8 +90,13 @@ describe('PaymentsController', () => {
         { provide: ArtisanEarningsService, useValue: earnings },
         { provide: BankListService, useValue: banks },
         { provide: PayoutAccountService, useValue: payoutAccounts },
+        { provide: SavedMethodChargeService, useValue: savedCharges },
       ],
     })
+      .overrideGuard(PaymentChargeThrottlerGuard)
+      .useValue({ canActivate: () => true })
+      .overrideGuard(PaymentChargeStatusThrottlerGuard)
+      .useValue({ canActivate: () => true })
       .overrideGuard(PaymentHistoryThrottlerGuard)
       .useValue({ canActivate: () => true })
       .overrideGuard(CustomerAnalyticsThrottlerGuard)
@@ -126,7 +142,9 @@ describe('PaymentsController', () => {
     await expect(controller.initialize(req, { jobId: 35 })).resolves.toBe(
       result,
     );
-    expect(service.initializePayment).toHaveBeenCalledWith(22, 35);
+    expect(service.initializePayment).toHaveBeenCalledWith(22, 35, {
+      saveCard: undefined,
+    });
   });
 
   describe('getHistory (B3)', () => {
@@ -353,6 +371,56 @@ describe('PaymentsController', () => {
       user,
       7,
       'Verified with bank',
+    );
+  });
+
+  describe('saved payment methods', () => {
+    const charge = {
+      reference: 'jinva-ch-1',
+      jobId: 35,
+      method: 'mobile_money',
+      status: 'pending',
+      action: 'approve_on_phone',
+      message: null,
+    };
+    beforeEach(() => {
+      Object.values(savedCharges).forEach((fn) => fn.mockResolvedValue(charge));
+    });
+
+    it('charge passes the customer, job and method ids', async () => {
+      await expect(
+        controller.chargeSavedMethod(req, 35, { paymentMethodId: 4 }),
+      ).resolves.toEqual({ message: 'Payment started', data: charge });
+      expect(savedCharges.charge).toHaveBeenCalledWith(22, 35, 4);
+    });
+
+    it('submitChargeOtp passes the reference and code', async () => {
+      await controller.submitChargeOtp(req, 'jinva-ch-1', { otp: '123456' });
+      expect(savedCharges.submitOtp).toHaveBeenCalledWith(
+        22,
+        'jinva-ch-1',
+        '123456',
+      );
+    });
+
+    it('chargeStatus passes the customer and reference', async () => {
+      const res = await controller.chargeStatus(req, 'jinva-ch-1');
+      expect(res.data).toEqual(charge);
+      expect(savedCharges.status).toHaveBeenCalledWith(22, 'jinva-ch-1');
+    });
+
+    it.each(['chargeSavedMethod', 'submitChargeOtp', 'initialize'] as const)(
+      '%s refuses PIN fields and is customer-only',
+      (handler) => {
+        const guards = Reflect.getMetadata(
+          '__guards__',
+          PaymentsController.prototype[handler],
+        ) as unknown[];
+        expect(guards).toContain(RejectPinFieldsGuard);
+        expect(
+          Reflect.getMetadata('roles', PaymentsController.prototype[handler]),
+        ).toEqual(['CUSTOMER']);
+      },
     );
   });
 });
