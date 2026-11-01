@@ -14,6 +14,7 @@ import {
   ApiBearerAuth,
   ApiOperation,
   ApiParam,
+  ApiQuery,
   ApiTags,
 } from '@nestjs/swagger';
 import { VerificationService } from './verification.service';
@@ -53,9 +54,19 @@ export class VerificationController {
   @Roles(Role.ARTISAN)
   @ApiOperation({
     summary: 'Get my latest verification submission (artisan only)',
+    description:
+      'Answers 404 when nothing was ever submitted. Pass `ifNone=null` to get ' +
+      '200 with `data: null` instead (the Overview checks this on every load, ' +
+      'and a 404 is logged by the browser as an error).',
   })
-  getMyVerification(@Req() req: AuthenticatedRequest) {
-    return this.verificationService.getMyVerification(req.user.id);
+  @ApiQuery({ name: 'ifNone', required: false, enum: ['null'] })
+  getMyVerification(
+    @Req() req: AuthenticatedRequest,
+    @Query('ifNone') ifNone?: string,
+  ) {
+    return this.verificationService.getMyVerification(req.user.id, {
+      nullIfNone: ifNone === 'null',
+    });
   }
 
   // ─── Admin routes ─────────────────────────────────────────────────────────────

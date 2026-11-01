@@ -255,6 +255,18 @@ describe('VerificationService', () => {
       );
     });
 
+    it('returns data null instead of 404 when asked (ifNone=null)', async () => {
+      mockProfileRepo.findOne.mockResolvedValue(buildProfile());
+      mockRepo.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.getMyVerification(7, { nullIfNone: true }),
+      ).resolves.toEqual({
+        message: 'No verification submission yet.',
+        data: null,
+      });
+    });
+
     it('returns the latest submission for the artisan profile', async () => {
       mockProfileRepo.findOne.mockResolvedValue(buildProfile());
       mockRepo.findOne.mockResolvedValue(
