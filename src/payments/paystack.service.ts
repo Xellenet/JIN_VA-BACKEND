@@ -218,6 +218,24 @@ export class PaystackService {
   }
 
   /**
+   * Idempotent payments: refunds a whole transaction (a duplicate payment).
+   * Throws like every other POST when Paystack refuses (502 with Paystack's
+   * message). Returns Paystack's refund id and status.
+   */
+  async refund(
+    transactionReference: string,
+  ): Promise<{ id: string | null; status: string | null }> {
+    const data = await this.post<{
+      id?: number | string;
+      status?: string;
+    } | null>('/refund', { transaction: transactionReference });
+    return {
+      id: data?.id !== undefined && data?.id !== null ? String(data.id) : null,
+      status: typeof data?.status === 'string' ? data.status : null,
+    };
+  }
+
+  /**
    * Register an artisan's bank account or mobile money number as a Transfer Recipient.
    * The returned recipient_code is saved on the ArtisanProfile and reused for every payout.
    *

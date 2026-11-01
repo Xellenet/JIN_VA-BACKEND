@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PaymentsService } from '../payments/payments.service';
+import { DuplicateRefundService } from '../payments/duplicate-refund.service';
 
 /**
  * Payout name check: retries payouts whose name check couldn't be made
@@ -14,7 +15,10 @@ import { PaymentsService } from '../payments/payments.service';
 export class PayoutsSchedulerService {
   private readonly logger = new Logger(PayoutsSchedulerService.name);
 
-  constructor(private readonly paymentsService: PaymentsService) {}
+  constructor(
+    private readonly paymentsService: PaymentsService,
+    private readonly duplicateRefunds: DuplicateRefundService,
+  ) {}
 
   @Cron(CronExpression.EVERY_30_MINUTES)
   async retryPendingPayoutChecks(): Promise<void> {
@@ -27,6 +31,27 @@ export class PayoutsSchedulerService {
     } catch (err) {
       this.logger.error(
         `retryPendingPayoutChecks failed: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  /**
+   * Idempotent payments: refunds of duplicate payments whose call failed (or
+   * whose call was cut off) and are due again. Each carries its own backoff
+   * and cap; admins are told when one gives up.
+   */
+  @Cron(CronExpression.EVERY_5_MINUTES)
+  async retryDuplicateRefunds(): Promise<void> {
+    try {
+      const { candidates, requested } = await this.duplicateRefunds.retryDue();
+      if (candidates > 0) {
+        this.logger.log(
+          `retryDuplicateRefunds run summary: candidates=${candidates} requested=${requested}`,
+        );
+      }
+    } catch (err) {
+      this.logger.error(
+        `retryDuplicateRefunds failed: ${(err as Error).message}`,
       );
     }
   }

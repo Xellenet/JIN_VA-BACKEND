@@ -348,6 +348,51 @@ describe('NotificationsService', () => {
     });
   });
 
+  describe('duplicate payment refunds (idempotent payments)', () => {
+    it('tells the customer they were charged twice and refunded, with no timing promise', async () => {
+      prefsRepo.findOne.mockResolvedValue(
+        prefsFor(Role.CUSTOMER, { paymentReceipts: false }),
+      );
+
+      await service.handleDuplicatePaymentRefunded({
+        customerId: 22,
+        jobId: 3,
+        jobTitle: 'Kitchen Sink Repair',
+        amount: 150,
+        methodLabel: 'MTN MoMo',
+      });
+
+      const saved = notificationsRepo.create.mock.calls[0][0];
+      expect(saved).toMatchObject({
+        type: NotificationType.DUPLICATE_PAYMENT_REFUNDED,
+        title: 'Extra payment refunded',
+        body: "You were charged twice for Kitchen Sink Repair. We've refunded the extra payment of GH₵ 150.00 to your MTN MoMo.",
+        payload: { jobId: 3, amount: 150 },
+      });
+      expect(saved.body).not.toMatch(/shortly|within|days|hours/i);
+    });
+
+    it('alerts every admin when a refund needs a person', async () => {
+      usersRepo.find.mockResolvedValue([{ id: 1 }, { id: 2 }]);
+      prefsRepo.findOne.mockResolvedValue(prefsFor(Role.ADMIN));
+
+      await service.handleRefundNeedsAttention({
+        paymentId: 7,
+        jobId: 3,
+        jobTitle: 'Kitchen Sink Repair',
+        amount: 150,
+        reference: 'jinva-ch-7-2',
+        reason: 'Paystack reported the refund failed; refund it by hand.',
+      });
+
+      expect(notificationsRepo.save).toHaveBeenCalledTimes(2);
+      expect(notificationsRepo.create.mock.calls[0][0]).toMatchObject({
+        type: NotificationType.PAYMENT_REFUND_NEEDS_ATTENTION,
+        payload: { paymentId: 7, jobId: 3, reference: 'jinva-ch-7-2' },
+      });
+    });
+  });
+
   describe('dispute outcome (PD4)', () => {
     it('persists one notification per party, de-duplicated', async () => {
       prefsRepo.findOne.mockResolvedValue(prefsFor(Role.CUSTOMER));

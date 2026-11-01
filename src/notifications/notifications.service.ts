@@ -51,6 +51,8 @@ import type {
   PayoutReleasedPayload,
   PaymentRefundedPayload,
   PaymentTransferFailedPayload,
+  PaymentDuplicateRefundedPayload,
+  PaymentRefundNeedsAttentionPayload,
   PayoutOnHoldPayload,
   DisputeFiledPayload,
   DisputeOutcomePayload,
@@ -150,6 +152,8 @@ const ADMIN_PREF_KEY: Partial<
 > = {
   [NotificationType.DISPUTE_FILED]: 'disputeFiled',
   [NotificationType.PAYMENT_TRANSFER_FAILED]: 'paymentTransferFailed',
+  // Idempotent payments: the same money-needs-a-person toggle as a failed payout.
+  [NotificationType.PAYMENT_REFUND_NEEDS_ATTENTION]: 'paymentTransferFailed',
   [NotificationType.ARTISAN_VERIFICATION_SUBMITTED]: 'verificationSubmitted',
   [NotificationType.REVIEW_FLAGGED]: 'reviewFlagged',
   [NotificationType.ARTISAN_REGISTERED]: 'artisanRegistered',
@@ -598,6 +602,41 @@ export class NotificationsService {
       'Payout Transfer Failed',
       `A payout of ${formatGhs(payload.artisanAmount)} to ${payload.artisanName} for "${payload.jobTitle}" failed and needs manual attention. Reason: ${payload.reason}`,
       { paymentId: payload.paymentId, jobId: payload.jobId },
+    );
+  }
+
+  /**
+   * Idempotent payments: the customer paid twice for one job and the extra
+   * payment was refunded automatically. Not behind a toggle: it is about
+   * their money. No timing promise.
+   */
+  @OnEvent(APP_EVENTS.PAYMENT_DUPLICATE_REFUNDED)
+  async handleDuplicatePaymentRefunded(
+    payload: PaymentDuplicateRefundedPayload,
+  ) {
+    await this.persist(
+      payload.customerId,
+      NotificationType.DUPLICATE_PAYMENT_REFUNDED,
+      'Extra payment refunded',
+      `You were charged twice for ${payload.jobTitle}. We've refunded the extra payment of ${formatGhs(payload.amount)} to your ${payload.methodLabel}.`,
+      { jobId: payload.jobId, amount: payload.amount },
+    );
+  }
+
+  /** Idempotent payments: routed to every admin. */
+  @OnEvent(APP_EVENTS.PAYMENT_REFUND_NEEDS_ATTENTION)
+  async handleRefundNeedsAttention(
+    payload: PaymentRefundNeedsAttentionPayload,
+  ) {
+    await this.persistForAdmins(
+      NotificationType.PAYMENT_REFUND_NEEDS_ATTENTION,
+      'Duplicate payment refund needs attention',
+      `A duplicate payment of ${formatGhs(payload.amount)} for "${payload.jobTitle}" (ref ${payload.reference}) could not be refunded automatically. ${payload.reason}`,
+      {
+        paymentId: payload.paymentId,
+        jobId: payload.jobId,
+        reference: payload.reference,
+      },
     );
   }
 

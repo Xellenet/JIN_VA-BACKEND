@@ -79,6 +79,7 @@ for (const name of [
   'initializeTransaction',
   'verifyTransaction',
   'createRefund',
+  'refund',
   'createTransferRecipient',
   'resolveAccount',
   'initiateTransfer',
