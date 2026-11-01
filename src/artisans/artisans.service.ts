@@ -21,7 +21,16 @@ import {
 import { UpdateArtisanProfileDto } from '@users/dto/update-artisan-profile.dto';
 import { ArtisanProfileResponseDto } from '@users/dto/artisan-profile-response.dto';
 import { SUCCESS_MESSAGES } from '@common/constants/success-messages.constants';
-import { Role, Status } from '@common/types/enums';
+import { AvailabilityStatus, Role, Status } from '@common/types/enums';
+import {
+  AvailabilityService,
+  type ClientAvailability,
+} from '../availability/availability.service';
+import {
+  addDays,
+  dayOfWeekOf,
+  platformClock,
+} from '../availability/availability-summary';
 type Pagination = {
   total: number;
   page: number;
@@ -71,6 +80,7 @@ export class ArtisansService {
     private readonly servicesRepository: Repository<ServiceEntity>,
     @InjectRepository(Job)
     private readonly jobsRepository: Repository<Job>,
+    private readonly availabilityService: AvailabilityService,
   ) {}
 
   // ─── Public discovery ────────────────────────────────────────────────────────
@@ -85,6 +95,11 @@ export class ArtisansService {
    * - `minRating`          — minimum average rating threshold
    * - `availabilityStatus` — AVAILABLE | BUSY | OFFLINE
    * - `isVerified`         — return only platform-verified artisans
+   * - `availabilityWindow` — now | this_week, from weekly hours and time off
+   *   in Africa/Accra time (see `applySearchFilters`)
+   *
+   * Each item carries `availability`, the client-facing state computed from
+   * the artisan's Calendar settings (batched: a fixed number of queries per page).
    *
    * Sort options (via `sortBy`): rating (default), newest, experience, hourlyRate.
    *
@@ -118,15 +133,18 @@ export class ArtisansService {
 
     // D3: bulk-compute completed-jobs counts for every profile on this page
     // in a single query, rather than N+1 queries per result card.
-    const countsByUserId = await this.getCompletedJobsCountsByUserId(
-      profiles.map((p) => p.user.id),
-    );
+    const [countsByUserId, availability] = await Promise.all([
+      this.getCompletedJobsCountsByUserId(profiles.map((p) => p.user.id)),
+      this.availabilityService.describeForClients(profiles),
+    ]);
 
     return {
       message: SUCCESS_MESSAGES.ARTISAN_PROFILE.ALL_RETRIEVED,
-      data: profiles.map((p) =>
-        this.toPublic(p, countsByUserId.get(p.user.id) ?? 0),
-      ),
+      data: profiles.map((p) => {
+        const dto = this.toPublic(p, countsByUserId.get(p.user.id) ?? 0);
+        dto.availability = availability.get(p.id)?.summary;
+        return dto;
+      }),
       pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
   }
@@ -177,13 +195,18 @@ export class ArtisansService {
     }
 
     // D3/P1: same completed-jobs count computation as search, for the Hero section.
-    const completedJobsCount = await this.getCompletedJobsCount(
-      profile.user.id,
-    );
+    const [completedJobsCount, availability] = await Promise.all([
+      this.getCompletedJobsCount(profile.user.id),
+      this.availabilityService.describeForClients([profile]),
+    ]);
 
     return {
       message: SUCCESS_MESSAGES.ARTISAN_PROFILE.RETRIEVED,
-      data: this.toPublic(profile, completedJobsCount),
+      data: this.toPublicWithSchedule(
+        profile,
+        completedJobsCount,
+        availability.get(profile.id),
+      ),
     };
   }
 
@@ -468,34 +491,65 @@ export class ArtisansService {
       );
     }
 
-    // D7: best-effort "now" / "this week" availability filter, backed by real
-    // ArtisanAvailability weekly-hours rows. Cannot account for already-booked/
-    // blocked time — see AvailabilityWindow doc comment and api-contract.md.
-    if (query.availabilityWindow === AvailabilityWindow.NOW) {
-      const now = new Date();
-      const dayOfWeek = now.getDay(); // 0 = Sunday, matches ArtisanAvailability.dayOfWeek
-      const currentTime = now.toTimeString().slice(0, 8); // HH:MM:SS
-      qb.andWhere(
-        `EXISTS (
-          SELECT 1 FROM artisan_availability av
-          WHERE av.artisan_profile_id = ap.id
-          AND av.is_active = true
-          AND av.day_of_week = :availDayOfWeek
-          AND av.start_time <= :availCurrentTime
-          AND av.end_time > :availCurrentTime
-        )`,
-        { availDayOfWeek: dayOfWeek, availCurrentTime: currentTime },
-      );
-    } else if (query.availabilityWindow === AvailabilityWindow.THIS_WEEK) {
-      // The stored schedule is a recurring weekly pattern (not date-specific),
-      // so any active slot recurs within any 7-day window by definition.
-      qb.andWhere(
-        `EXISTS (
-          SELECT 1 FROM artisan_availability av
-          WHERE av.artisan_profile_id = ap.id
-          AND av.is_active = true
-        )`,
-      );
+    // D7: "now" / "this week" availability filter, computed from the
+    // artisan's Calendar settings in Africa/Accra time (not the server's
+    // local clock). Both require status AVAILABLE, since bookings for a BUSY
+    // or UNAVAILABLE artisan are refused anyway (BookingsService), and both
+    // honour time off (blocked_slots). Neither checks existing bookings: a
+    // match means the artisan works then, not that a particular time is free.
+    if (query.availabilityWindow) {
+      const clock = platformClock(this.availabilityService.now());
+      qb.andWhere('ap.availabilityStatus = :availWindowStatus', {
+        availWindowStatus: AvailabilityStatus.AVAILABLE,
+      });
+      if (query.availabilityWindow === AvailabilityWindow.NOW) {
+        // An active slot covers the current Accra time, and today isn't time off.
+        qb.andWhere(
+          `EXISTS (
+            SELECT 1 FROM artisan_availability av
+            WHERE av.artisan_profile_id = ap.id
+            AND av.is_active = true
+            AND av.day_of_week = :availDayOfWeek
+            AND av.start_time <= :availCurrentTime
+            AND av.end_time > :availCurrentTime
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM blocked_slots bs
+            WHERE bs.artisan_profile_id = ap.id
+            AND bs.start_date <= :availToday
+            AND bs.end_date >= :availToday
+          )`,
+          {
+            availDayOfWeek: clock.dayOfWeek,
+            availCurrentTime: clock.time,
+            availToday: clock.date,
+          },
+        );
+      } else if (query.availabilityWindow === AvailabilityWindow.THIS_WEEK) {
+        // Some day in the next 7 (today included) has active hours and no
+        // time off. One OR-branch per day keeps it portable SQL.
+        const params: Record<string, string | number> = {};
+        const days = Array.from({ length: 7 }, (_, i) => {
+          const date = addDays(clock.date, i);
+          params[`availWeekDow${i}`] = dayOfWeekOf(date);
+          params[`availWeekDate${i}`] = date;
+          return `(av.day_of_week = :availWeekDow${i} AND NOT EXISTS (
+              SELECT 1 FROM blocked_slots bs
+              WHERE bs.artisan_profile_id = ap.id
+              AND bs.start_date <= :availWeekDate${i}
+              AND bs.end_date >= :availWeekDate${i}
+            ))`;
+        });
+        qb.andWhere(
+          `EXISTS (
+            SELECT 1 FROM artisan_availability av
+            WHERE av.artisan_profile_id = ap.id
+            AND av.is_active = true
+            AND (${days.join(' OR ')})
+          )`,
+          params,
+        );
+      }
     }
   }
 
@@ -545,6 +599,22 @@ export class ArtisansService {
       excludeExtraneousValues: true,
     });
     dto.completedJobsCount = completedJobsCount;
+    return dto;
+  }
+
+  /**
+   * The public profile plus what clients need to plan a booking: the
+   * effective availability, active weekly hours and upcoming time-off dates.
+   */
+  private toPublicWithSchedule(
+    profile: ArtisanProfile,
+    completedJobsCount: number,
+    availability: ClientAvailability | undefined,
+  ): ArtisanPublicResponseDto {
+    const dto = this.toPublic(profile, completedJobsCount);
+    dto.availability = availability?.summary;
+    dto.weeklyHours = availability?.weeklyHours ?? [];
+    dto.upcomingTimeOff = availability?.upcomingTimeOff ?? [];
     return dto;
   }
 
