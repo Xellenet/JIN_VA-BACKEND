@@ -392,9 +392,9 @@ describe('AccountPurgeService (C1.7/C1.8)', () => {
       expect(profilePayload!.isProfileComplete).toBe(false);
     });
 
-    it('deletes the residual tokens, push devices, saved addresses, payment settings and security events', async () => {
+    it('deletes the residual tokens, push devices, saved addresses, payment settings, saved payment methods and security events', async () => {
       await runPurge();
-      expect(mockQueryBuilder.delete).toHaveBeenCalledTimes(5);
+      expect(mockQueryBuilder.delete).toHaveBeenCalledTimes(6);
     });
 
     // T-9 / SEC-37 (Customer Experience v2): both new tables are purged, by
@@ -409,6 +409,7 @@ describe('AccountPurgeService (C1.7/C1.8)', () => {
       expect(deletedFrom).toEqual(
         expect.arrayContaining([
           'CustomerPaymentSettings',
+          'CustomerPaymentMethod',
           'AccountSecurityEvent',
         ]),
       );
@@ -624,6 +625,7 @@ describe('AccountPurgeService (C1.7/C1.8)', () => {
         'AccountSecurityEvent',
         'Address',
         'ArtisanProfile',
+        'CustomerPaymentMethod',
         'CustomerPaymentSettings',
         'CustomerProfile',
         'DeviceToken',

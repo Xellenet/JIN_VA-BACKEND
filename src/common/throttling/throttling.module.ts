@@ -50,6 +50,10 @@ export const CUSTOMER_THROTTLER_DEFAULTS = {
   PAYMENT_SETTINGS_WRITE: { limit: 5, ttl: ONE_MINUTE_MS },
   PROFILE_MEDIA_WRITE: { limit: 10, ttl: ONE_HOUR_MS },
   NOTIFICATION_READ: { limit: 60, ttl: ONE_MINUTE_MS },
+  PAYMENT_METHOD_LOOKUP: { limit: 10, ttl: TEN_MINUTES_MS },
+  PAYMENT_METHODS_WRITE: { limit: 20, ttl: TEN_MINUTES_MS },
+  PAYMENT_CHARGE: { limit: 10, ttl: TEN_MINUTES_MS },
+  PAYMENT_CHARGE_STATUS: { limit: 60, ttl: ONE_MINUTE_MS },
 } as const;
 
 /** Artisan fixes defaults, per authenticated user and per route. */
@@ -162,6 +166,42 @@ export function buildThrottlerOptions(config: ConfigService): {
           config,
           'NOTIFICATION_READ_RATE_LIMIT_PER_MINUTE',
           CUSTOMER_THROTTLER_DEFAULTS.NOTIFICATION_READ.limit,
+        ),
+      },
+      {
+        name: THROTTLER_NAMES.PAYMENT_METHOD_LOOKUP,
+        ttl: CUSTOMER_THROTTLER_DEFAULTS.PAYMENT_METHOD_LOOKUP.ttl,
+        limit: readLimit(
+          config,
+          'PAYMENT_METHOD_LOOKUP_RATE_LIMIT_PER_10_MINUTES',
+          CUSTOMER_THROTTLER_DEFAULTS.PAYMENT_METHOD_LOOKUP.limit,
+        ),
+      },
+      {
+        name: THROTTLER_NAMES.PAYMENT_METHODS_WRITE,
+        ttl: CUSTOMER_THROTTLER_DEFAULTS.PAYMENT_METHODS_WRITE.ttl,
+        limit: readLimit(
+          config,
+          'PAYMENT_METHODS_WRITE_RATE_LIMIT_PER_10_MINUTES',
+          CUSTOMER_THROTTLER_DEFAULTS.PAYMENT_METHODS_WRITE.limit,
+        ),
+      },
+      {
+        name: THROTTLER_NAMES.PAYMENT_CHARGE,
+        ttl: CUSTOMER_THROTTLER_DEFAULTS.PAYMENT_CHARGE.ttl,
+        limit: readLimit(
+          config,
+          'PAYMENT_CHARGE_RATE_LIMIT_PER_10_MINUTES',
+          CUSTOMER_THROTTLER_DEFAULTS.PAYMENT_CHARGE.limit,
+        ),
+      },
+      {
+        name: THROTTLER_NAMES.PAYMENT_CHARGE_STATUS,
+        ttl: CUSTOMER_THROTTLER_DEFAULTS.PAYMENT_CHARGE_STATUS.ttl,
+        limit: readLimit(
+          config,
+          'PAYMENT_CHARGE_STATUS_RATE_LIMIT_PER_MINUTE',
+          CUSTOMER_THROTTLER_DEFAULTS.PAYMENT_CHARGE_STATUS.limit,
         ),
       },
       {

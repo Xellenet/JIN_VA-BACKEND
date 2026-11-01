@@ -14,6 +14,10 @@ export const CUSTOMER_RATE_LIMIT_ERROR_CODES = {
   PAYMENT_SETTINGS_WRITE: 'PAYMENT_SETTINGS_RATE_LIMIT_EXCEEDED',
   PROFILE_MEDIA_WRITE: 'PROFILE_MEDIA_RATE_LIMIT_EXCEEDED',
   NOTIFICATION_READ: 'NOTIFICATION_READ_RATE_LIMIT_EXCEEDED',
+  PAYMENT_METHOD_LOOKUP: 'PAYMENT_METHOD_LOOKUP_RATE_LIMIT_EXCEEDED',
+  PAYMENT_METHODS_WRITE: 'PAYMENT_METHODS_RATE_LIMIT_EXCEEDED',
+  PAYMENT_CHARGE: 'PAYMENT_CHARGE_RATE_LIMIT_EXCEEDED',
+  PAYMENT_CHARGE_STATUS: 'PAYMENT_CHARGE_STATUS_RATE_LIMIT_EXCEEDED',
 } as const;
 
 /** The ready-to-display copy every one of these 429s carries. */
@@ -108,4 +112,35 @@ export class NotificationReadThrottlerGuard extends UserKeyedThrottlerGuard {
   protected readonly throttlerName = THROTTLER_NAMES.NOTIFICATION_READ;
   protected readonly errorCode =
     CUSTOMER_RATE_LIMIT_ERROR_CODES.NOTIFICATION_READ;
+}
+
+/** Saved payment methods: name lookup and saving a number, 10 per 600 s. */
+@Injectable()
+export class PaymentMethodLookupThrottlerGuard extends UserKeyedThrottlerGuard {
+  protected readonly throttlerName = THROTTLER_NAMES.PAYMENT_METHOD_LOOKUP;
+  protected readonly errorCode =
+    CUSTOMER_RATE_LIMIT_ERROR_CODES.PAYMENT_METHOD_LOOKUP;
+}
+
+/** Saved payment methods: make default and remove, 20 per 600 s. */
+@Injectable()
+export class PaymentMethodsWriteThrottlerGuard extends UserKeyedThrottlerGuard {
+  protected readonly throttlerName = THROTTLER_NAMES.PAYMENT_METHODS_WRITE;
+  protected readonly errorCode =
+    CUSTOMER_RATE_LIMIT_ERROR_CODES.PAYMENT_METHODS_WRITE;
+}
+
+/** Paying with a saved method and submitting its OTP, 10 per 600 s. */
+@Injectable()
+export class PaymentChargeThrottlerGuard extends UserKeyedThrottlerGuard {
+  protected readonly throttlerName = THROTTLER_NAMES.PAYMENT_CHARGE;
+  protected readonly errorCode = CUSTOMER_RATE_LIMIT_ERROR_CODES.PAYMENT_CHARGE;
+}
+
+/** The charge status the pay page polls, 60 per 60 s. */
+@Injectable()
+export class PaymentChargeStatusThrottlerGuard extends UserKeyedThrottlerGuard {
+  protected readonly throttlerName = THROTTLER_NAMES.PAYMENT_CHARGE_STATUS;
+  protected readonly errorCode =
+    CUSTOMER_RATE_LIMIT_ERROR_CODES.PAYMENT_CHARGE_STATUS;
 }

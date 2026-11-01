@@ -26,8 +26,10 @@ describe('AccountSecurityService', () => {
     );
   });
 
-  it('only knows the three event names the table accepts', () => {
+  it('only knows the event names the table accepts', () => {
     expect([...SECURITY_EVENT_NAMES].sort()).toEqual([
+      'payment_method.added',
+      'payment_method.removed',
       'payment_settings.updated',
       'profile_photo.removed',
       'spending_report.exported',

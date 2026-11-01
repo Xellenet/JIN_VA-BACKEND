@@ -10,6 +10,7 @@ import { ArtisanProfile } from './entities/artisan-profile.entity';
 import { CustomerProfile } from './entities/customer-profile.entity';
 import { DeviceToken } from '../push-notifications/entities/device-token.entity';
 import { CustomerPaymentSettings } from '../payment-settings/entities/customer-payment-settings.entity';
+import { CustomerPaymentMethod } from '../payment-methods/entities/customer-payment-method.entity';
 import { AccountSecurityEvent } from '../account-security/entities/account-security-event.entity';
 import { ArtisanVerification } from '../verification/entities/artisan-verification.entity';
 import { KycMediaService } from '../uploads/kyc-media.service';
@@ -486,6 +487,16 @@ export class AccountPurgeService {
       .createQueryBuilder()
       .delete()
       .from(CustomerPaymentSettings)
+      .where('user_id = :userId', { userId })
+      .execute();
+
+    // Saved payment methods: the encrypted numbers and card authorizations go
+    // with the account (hard delete). Charge attempts keep only a method id,
+    // which the foreign key sets to null.
+    await manager
+      .createQueryBuilder()
+      .delete()
+      .from(CustomerPaymentMethod)
       .where('user_id = :userId', { userId })
       .execute();
 

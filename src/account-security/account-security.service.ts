@@ -11,6 +11,8 @@ export const SECURITY_EVENT_NAMES = [
   'payment_settings.updated',
   'spending_report.exported',
   'profile_photo.removed',
+  'payment_method.added',
+  'payment_method.removed',
 ] as const;
 
 export type SecurityEventName = (typeof SECURITY_EVENT_NAMES)[number];

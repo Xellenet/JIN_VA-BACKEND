@@ -68,4 +68,16 @@ export const THROTTLER_NAMES = {
    * number, so the limit is low enough to make enumeration impractical.
    */
   PAYOUT_ACCOUNT_LOOKUP: 'payout-account-lookup',
+  /**
+   * Saved payment methods: `POST /users/me/payment-methods/resolve` and
+   * `POST /users/me/payment-methods/mobile-money`. Each is a name lookup, so
+   * the limit is as low as the payout lookup's.
+   */
+  PAYMENT_METHOD_LOOKUP: 'payment-method-lookup',
+  /** `PATCH .../payment-methods/:id/default` and `DELETE .../payment-methods/:id`. */
+  PAYMENT_METHODS_WRITE: 'payment-methods-write',
+  /** `POST /payments/:jobId/charge` and `POST /payments/charges/:reference/otp`. */
+  PAYMENT_CHARGE: 'payment-charge',
+  /** `GET /payments/charges/:reference/status` (polled while waiting). */
+  PAYMENT_CHARGE_STATUS: 'payment-charge-status',
 } as const;
