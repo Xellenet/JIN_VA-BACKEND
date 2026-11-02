@@ -14,6 +14,14 @@ RUN npm run build && npm prune --omit=dev
 # ---- runtime ----
 FROM node:24-slim AS runtime
 ENV NODE_ENV=production
+# Debian security updates for the OS packages image scanners flag, and no npm /
+# corepack in the final image: the app runs with `node` only, and npm's own
+# bundled dependencies are a frequent source of scanner findings.
+RUN apt-get update \
+ && apt-get upgrade -y --no-install-recommends \
+ && rm -rf /var/lib/apt/lists/* \
+ && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+           /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
 WORKDIR /app
 
 COPY --from=build --chown=node:node /app/package.json ./
