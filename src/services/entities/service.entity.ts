@@ -15,7 +15,7 @@ export class ServiceEntity {
   name!: string;
 
   @Column({ type: 'text', nullable: true })
-  description?: string;
+  description?: string | null;
 
   @Column({ type: 'decimal', precision: 10, scale: 2, nullable: true })
   price?: number | null;
@@ -33,6 +33,15 @@ export class ServiceEntity {
     default: 60,
   })
   estimatedDurationMins!: number;
+
+  /**
+   * Hidden services (false) leave the public catalogue: customers can't post
+   * jobs or bookings for them and artisans can't add them, but existing
+   * records keep them. This is how an admin retires a service that is in
+   * use, since deleting it would break those records.
+   */
+  @Column({ name: 'is_active', type: 'boolean', default: true })
+  isActive!: boolean;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamp' })
   createdAt!: Date;

@@ -1,8 +1,4 @@
-import {
-  BadRequestException,
-  ConflictException,
-  NotFoundException,
-} from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import { ILike, type Repository } from 'typeorm';
 import type { ServiceEntity } from './entities/service.entity';
 import { ServicesService } from './services.service';
@@ -55,8 +51,20 @@ describe('ServicesService', () => {
       nameQb.getOne.mockResolvedValue({ id: 3, name: 'roofing' });
       await expect(
         service.create({ name: 'ROOFING' } as never),
-      ).rejects.toThrow(BadRequestException);
+      ).rejects.toThrow(
+        new ConflictException(
+          'A service called "roofing" already exists. Choose a different name, or edit that service instead.',
+        ),
+      );
       expect(repo.save).not.toHaveBeenCalled();
+    });
+
+    it('stores an empty description as none', async () => {
+      await service.create({ name: 'Roofing', description: '' } as never);
+      expect(repo.save).toHaveBeenCalledWith({
+        name: 'Roofing',
+        description: undefined,
+      });
     });
   });
 
@@ -66,7 +74,7 @@ describe('ServicesService', () => {
       const result = await service.findAll({});
 
       expect(repo.findAndCount).toHaveBeenCalledWith({
-        where: {},
+        where: { isActive: true },
         order: { id: 'DESC' },
         skip: 0,
         take: 100,
@@ -90,12 +98,59 @@ describe('ServicesService', () => {
 
       expect(repo.findAndCount).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { name: ILike('%pla%') },
+          where: { name: ILike('%pla%'), isActive: true },
           skip: 10,
           take: 10,
         }),
       );
       expect(result.pagination.totalPages).toBe(3);
+    });
+
+    it('ignores includeInactive from anyone but an admin', async () => {
+      repo.findAndCount.mockResolvedValue([[{ id: 1, name: 'Masonry' }], 1]);
+      const result = await service.findAll({ includeInactive: true }, false);
+      expect(repo.findAndCount).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { isActive: true } }),
+      );
+      expect(repo.manager.query).not.toHaveBeenCalled();
+      expect(result.data[0]).not.toHaveProperty('usage');
+    });
+
+    it('shows an admin hidden services too, with usage counts', async () => {
+      repo.findAndCount.mockResolvedValue([
+        [
+          { id: 1, name: 'Masonry', isActive: false },
+          { id: 2, name: 'Roofing', isActive: true },
+        ],
+        2,
+      ]);
+      repo.manager.query.mockResolvedValue([
+        { id: '1', artisans: 2, bookings: 0, jobs: 5 },
+      ]);
+      const result = await service.findAll({ includeInactive: true }, true);
+      expect(repo.findAndCount).toHaveBeenCalledWith(
+        expect.objectContaining({ where: {} }),
+      );
+      expect(repo.manager.query).toHaveBeenCalledWith(expect.any(String), [
+        [1, 2],
+      ]);
+      expect(result.data).toEqual([
+        expect.objectContaining({
+          id: 1,
+          isActive: false,
+          usage: { artisans: 2, bookings: 0, jobs: 5 },
+        }),
+        expect.objectContaining({
+          id: 2,
+          usage: { artisans: 0, bookings: 0, jobs: 0 },
+        }),
+      ]);
+    });
+
+    it('skips the usage query for an empty admin page', async () => {
+      repo.findAndCount.mockResolvedValue([[], 0]);
+      await service.findAll({ includeInactive: true }, true);
+      expect(repo.manager.query).not.toHaveBeenCalled();
     });
   });
 
@@ -153,8 +208,28 @@ describe('ServicesService', () => {
       nameQb.getOne.mockResolvedValue({ id: 5, name: 'Joinery' });
       await expect(
         service.update(4, { name: 'joinery' } as never),
-      ).rejects.toThrow(BadRequestException);
+      ).rejects.toThrow(ConflictException);
       expect(repo.save).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('update visibility and description', () => {
+    it('hides a service', async () => {
+      repo.findOne.mockResolvedValue({ id: 4, name: 'Tiling', isActive: true });
+      const result = await service.update(4, { isActive: false } as never);
+      expect(result.data).toMatchObject({ id: 4, isActive: false });
+    });
+
+    it('clears the description when sent empty', async () => {
+      repo.findOne.mockResolvedValue({
+        id: 4,
+        name: 'Tiling',
+        description: 'x',
+      });
+      await service.update(4, { description: '' } as never);
+      expect(repo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ description: null }),
+      );
     });
   });
 
@@ -183,7 +258,7 @@ describe('ServicesService', () => {
       const err = await service.remove(4).catch((e: Error) => e);
       expect(err).toBeInstanceOf(ConflictException);
       expect(err.message).toBe(
-        "This service can't be deleted because 1 artisan offers it. Ask those artisans to remove it from their profile first.",
+        "This service can't be deleted because 1 artisan offers it. Hide it instead, so no one new can pick it, or ask those artisans to remove it from their profile first.",
       );
       expect(repo.delete).not.toHaveBeenCalled();
     });
@@ -196,6 +271,7 @@ describe('ServicesService', () => {
         'because 3 artisans offer, 1 booking uses, 2 jobs use it.',
       );
       expect(err.message).toContain('booking or job history are kept');
+      expect(err.message).toContain('Hide it instead');
     });
 
     it('treats job-only usage as history', async () => {

@@ -248,6 +248,14 @@ export class ArtisansService {
         if (services.length !== serviceIds.length) {
           throw new NotFoundException('One or more services were not found.');
         }
+        // A hidden service may stay on a profile that already has it, but
+        // can't be newly added.
+        const current = new Set((profile.services ?? []).map((s) => s.id));
+        if (services.some((s) => s.isActive === false && !current.has(s.id))) {
+          throw new BadRequestException(
+            'That service type is no longer offered. Choose another one.',
+          );
+        }
         profile.services = services;
       }
     }
@@ -305,6 +313,12 @@ export class ArtisansService {
     });
     if (!service) {
       throw new NotFoundException(`Service with id ${serviceId} not found.`);
+    }
+    // A service an admin has hidden can't be newly added to a profile.
+    if (service.isActive === false) {
+      throw new BadRequestException(
+        'That service type is no longer offered. Choose another one.',
+      );
     }
 
     const alreadyAdded = profile.services.some((s) => s.id === serviceId);

@@ -51,3 +51,36 @@ describe('Service name (QA ADM-10)', () => {
     ]);
   });
 });
+
+describe('Service limits and visibility', () => {
+  it('rejects a one-letter name and one over 60 characters', async () => {
+    expect(await errorsFor(CreateServiceDto, { name: 'T' })).toEqual(['name']);
+    expect(await errorsFor(CreateServiceDto, { name: 'T'.repeat(61) })).toEqual(
+      ['name'],
+    );
+    expect(await errorsFor(CreateServiceDto, { name: 'T'.repeat(60) })).toEqual(
+      [],
+    );
+  });
+
+  it('trims the description and caps it at 500 characters', async () => {
+    const dto = plainToInstance(CreateServiceDto, {
+      name: 'Tiling',
+      description: '  Floor tiles  ',
+    });
+    expect(dto.description).toBe('Floor tiles');
+    expect(
+      await errorsFor(CreateServiceDto, {
+        name: 'Tiling',
+        description: 'x'.repeat(501),
+      }),
+    ).toEqual(['description']);
+  });
+
+  it('accepts isActive as a boolean only', async () => {
+    expect(await errorsFor(UpdateServiceDto, { isActive: false })).toEqual([]);
+    expect(await errorsFor(UpdateServiceDto, { isActive: 'no' })).toEqual([
+      'isActive',
+    ]);
+  });
+});
