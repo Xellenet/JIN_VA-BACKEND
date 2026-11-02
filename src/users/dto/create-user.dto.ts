@@ -23,6 +23,7 @@ import {
   IsSupportedPhoneNumber,
   NormalizePhoneNumber,
 } from '@common/validators/is-supported-phone-number.decorator';
+import { NormalizeMiddleName } from '@common/validators/middle-name.decorator';
 
 /**
  * DI5: the genders an endpoint accepts as **new input**. The `Gender` enum
@@ -64,9 +65,18 @@ export class CreateUserDto {
   @MinLength(8)
   password?: string;
 
-  @ApiProperty({ example: 'johndoe', description: 'Full name of the user' })
+  @ApiProperty({
+    example: 'john.doe',
+    description:
+      '3–30 letters, numbers, dots or underscores; no spaces, no leading or ' +
+      'trailing dot, no two dots in a row. Checked for new values only: ' +
+      'usernames stored before this rule stay valid for login and display.',
+  })
   @IsString()
   @IsNotEmpty({ message: VALIDATION_MESSAGES.USERNAME_REQUIRED })
+  @Matches(VARIABLES.USERNAME_REGEX, {
+    message: VALIDATION_MESSAGES.USERNAME_INVALID,
+  })
   username?: string;
 
   @ApiProperty({
@@ -82,6 +92,21 @@ export class CreateUserDto {
   @IsString()
   @MaxLength(15, { message: VALIDATION_MESSAGES.FIRSTNAME_MAX_LENGTH })
   firstname: string;
+
+  @ApiProperty({
+    example: 'Kwame',
+    description:
+      'Optional middle name. Trimmed; blank is stored as null. Same length rule as the first and last name.',
+    required: false,
+    nullable: true,
+  })
+  @NormalizeMiddleName()
+  @IsOptional()
+  @IsString()
+  @MaxLength(VARIABLES.NAME_MAX_LENGTH, {
+    message: VALIDATION_MESSAGES.MIDDLENAME_MAX_LENGTH,
+  })
+  middlename?: string | null;
 
   @ApiProperty({ example: 'Doe', description: 'The last name of the user.' })
   @IsString()

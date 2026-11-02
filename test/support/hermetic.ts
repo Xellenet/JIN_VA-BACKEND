@@ -5,13 +5,15 @@
  *
  * - JWT keys: a fresh RSA pair is generated in memory for every run, so no
  *   test reads the gitignored keys/ folder (or a real signing key).
+ * - Payment data key: a fresh random PAYMENT_DATA_ENCRYPTION_KEY per run, so
+ *   saved payment methods work in tests without any real key.
  * - Network: every outbound connection is refused, except to this machine.
  *   Loopback stays open because supertest talks to the app over a local
  *   socket. Anything else (Google, Paystack, Photon, FCM, S3/B2, SMTP,
  *   Resend) must be mocked; a test that forgets fails loudly instead of
  *   quietly depending on the internet.
  */
-import { generateKeyPairSync } from 'crypto';
+import { generateKeyPairSync, randomBytes } from 'crypto';
 import dns from 'dns';
 import * as net from 'net';
 
@@ -22,6 +24,8 @@ const { privateKey, publicKey } = generateKeyPairSync('rsa', {
 });
 process.env.JWT_PRIVATE_KEY = privateKey;
 process.env.JWT_PUBLIC_KEY = publicKey;
+process.env.PAYMENT_DATA_ENCRYPTION_KEY = randomBytes(32).toString('base64');
+delete process.env.PAYMENT_DATA_ENCRYPTION_KEY_PREVIOUS;
 
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '::1', '::ffff:127.0.0.1']);
 

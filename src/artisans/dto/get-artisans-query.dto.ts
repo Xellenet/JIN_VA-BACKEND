@@ -19,11 +19,14 @@ export enum ArtisanSortBy {
 }
 
 /**
- * D7: best-effort availability window filter, backed by the artisan's real
- * weekly `ArtisanAvailability` schedule. Does NOT check actual booking
- * conflicts (no reliable blocked-dates/booking-conflict data source exists
- * yet) — a match means the artisan's stated weekly schedule covers the
- * window, not that they are guaranteed free at that exact moment.
+ * D7: availability window filter, computed in Africa/Accra time from the
+ * artisan's Calendar settings. Both values require status AVAILABLE.
+ * - `now`: an active weekly slot covers the current Accra time and today
+ *   isn't inside time off.
+ * - `this_week`: at least one of the next 7 days (today included) has active
+ *   weekly hours and isn't inside time off.
+ * Existing bookings are NOT checked: a match means the artisan works then,
+ * not that a given time is still free (the booking page shows that).
  */
 export enum AvailabilityWindow {
   NOW = 'now',
@@ -86,11 +89,11 @@ export class GetArtisansQueryDto {
     enum: AvailabilityWindow,
     example: AvailabilityWindow.NOW,
     description:
-      "D7: best-effort filter using the artisan's real weekly working-hours " +
-      '(`ArtisanAvailability`). "now" matches artisans whose weekly schedule ' +
-      'covers the current day/time; "this_week" matches artisans with at ' +
-      'least one active weekly slot. Does not account for already-booked/' +
-      'blocked time — surface this limitation to the customer.',
+      'D7: computed in Africa/Accra time from weekly hours, time off and status ' +
+      '(AVAILABLE required). "now": an active weekly slot covers the current time ' +
+      'and today is not time off. "this_week": one of the next 7 days (today ' +
+      'included) has active hours and is not time off. Existing bookings are not ' +
+      'checked, so a match does not guarantee a particular time is free.',
   })
   @IsOptional()
   @IsEnum(AvailabilityWindow)

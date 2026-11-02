@@ -9,10 +9,23 @@ import type { ArtisanProfile } from '@users/entities/artisan-profile.entity';
 import type { User } from '@users/entities/user.entity';
 import type { ServiceEntity } from '@services/entities/service.entity';
 import type { Job } from '@jobs/entities/job.entity';
+import type { AvailabilityService } from '../availability/availability.service';
 import {
   ArtisansService,
   computeProfileCompleteness,
 } from './artisans.service';
+
+/** A stand-in AvailabilityService with a fixed clock (Sat 31 Oct 2026, 23:30 UTC by default). */
+const fakeAvailability = (
+  now = new Date('2026-10-31T23:30:00.000Z'),
+  described = new Map<number, unknown>(),
+) => {
+  const fake = {
+    now: jest.fn(() => now),
+    describeForClients: jest.fn().mockResolvedValue(described),
+  };
+  return fake as typeof fake & AvailabilityService;
+};
 
 describe('computeProfileCompleteness (F3)', () => {
   const complete = {
@@ -86,6 +99,7 @@ describe('computeProfileCompleteness (F3)', () => {
  */
 describe('ArtisansService.findById (C1.6)', () => {
   const jobsCount = jest.fn().mockResolvedValue(0);
+  let availability = fakeAvailability();
 
   const buildService = (profile: unknown) => {
     const artisanProfileRepository = {
@@ -97,10 +111,14 @@ describe('ArtisansService.findById (C1.6)', () => {
       {} as unknown as Repository<User>,
       {} as unknown as Repository<ServiceEntity>,
       { count: jobsCount } as unknown as Repository<Job>,
+      availability,
     );
   };
 
-  beforeEach(() => jobsCount.mockClear());
+  beforeEach(() => {
+    jobsCount.mockClear();
+    availability = fakeAvailability();
+  });
 
   it('404s when no profile row exists at all', async () => {
     await expect(buildService(null).findById(472)).rejects.toThrow(
@@ -146,6 +164,46 @@ describe('ArtisansService.findById (C1.6)', () => {
 
     expect(result.data).toBeDefined();
     expect(jobsCount).toHaveBeenCalledTimes(1);
+  });
+
+  it('adds the client-facing availability, weekly hours and time-off dates', async () => {
+    const summary = { state: 'on_time_off', onTimeOffUntil: '2026-11-12' };
+    availability = fakeAvailability(
+      undefined,
+      new Map([
+        [
+          472,
+          {
+            summary,
+            weeklyHours: [
+              { dayOfWeek: 1, startTime: '08:00', endTime: '12:00' },
+            ],
+            upcomingTimeOff: [
+              { startDate: '2026-11-01', endDate: '2026-11-12' },
+            ],
+          },
+        ],
+      ]),
+    );
+    const result = await buildService(live()).findById(472);
+
+    expect(availability.describeForClients).toHaveBeenCalledWith([
+      expect.objectContaining({ id: 472 }),
+    ]);
+    expect(result.data.availability).toBe(summary);
+    expect(result.data.weeklyHours).toEqual([
+      { dayOfWeek: 1, startTime: '08:00', endTime: '12:00' },
+    ]);
+    expect(result.data.upcomingTimeOff).toEqual([
+      { startDate: '2026-11-01', endDate: '2026-11-12' },
+    ]);
+  });
+
+  it('answers empty hours and time off when nothing was computed', async () => {
+    const result = await buildService(live()).findById(472);
+    expect(result.data.weeklyHours).toEqual([]);
+    expect(result.data.upcomingTimeOff).toEqual([]);
+    expect(result.data.availability).toBeUndefined();
   });
 
   describe('artisans hidden from search (QA SRCH-15)', () => {
@@ -218,6 +276,7 @@ describe('ArtisansService.search', () => {
     profiles: unknown[] = [],
     total = 0,
     jobRows: unknown[] = [],
+    availability = fakeAvailability(),
   ) => {
     const qb = makeSearchQb(profiles, total);
     const jobsQb = makeJobsQb(jobRows);
@@ -230,10 +289,11 @@ describe('ArtisansService.search', () => {
       {
         createQueryBuilder: jest.fn().mockReturnValue(jobsQb),
       } as unknown as Repository<Job>,
+      availability,
     );
     const whereClauses = () =>
       qb.andWhere.mock.calls.map(([sql]: [string]) => sql.replace(/\s+/g, ' '));
-    return { service, qb, jobsQb, whereClauses };
+    return { service, qb, jobsQb, whereClauses, availability };
   };
 
   it('always excludes deleted, incomplete, suspended and banned artisans', async () => {
@@ -345,28 +405,93 @@ describe('ArtisansService.search', () => {
     });
   });
 
-  it('filters "now" against the current weekday and time', async () => {
-    jest.useFakeTimers().setSystemTime(new Date(2026, 9, 28, 14, 30, 5));
-    try {
-      const { service, qb } = setup();
-      await service.search({ availabilityWindow: 'now' } as never);
-      const [sql, params] = lastWhere(qb);
-      expect(sql).toContain('av.day_of_week = :availDayOfWeek');
-      expect(params).toEqual({
-        availDayOfWeek: 3,
-        availCurrentTime: '14:30:05',
-      });
-    } finally {
-      jest.useRealTimers();
-    }
+  const flat = (sql: string) => sql.replace(/\s+/g, ' ');
+
+  it('filters "now" on Accra time, status AVAILABLE and no time off today', async () => {
+    // 23:30 UTC on Saturday 31 Oct is 23:30 Saturday in Accra, whatever the
+    // server's own zone (and the real date) happens to be.
+    const { service, qb } = setup();
+    await service.search({ availabilityWindow: 'now' } as never);
+    const calls = qb.andWhere.mock.calls as Array<[string, object?]>;
+    const [statusSql, statusParams] = calls.at(-2)!;
+    expect(statusSql).toBe('ap.availabilityStatus = :availWindowStatus');
+    expect(statusParams).toEqual({ availWindowStatus: 'AVAILABLE' });
+    const [sql, params] = lastWhere(qb);
+    expect(flat(sql)).toContain('av.day_of_week = :availDayOfWeek');
+    expect(flat(sql)).toContain(
+      'NOT EXISTS ( SELECT 1 FROM blocked_slots bs WHERE bs.artisan_profile_id = ap.id AND bs.start_date <= :availToday AND bs.end_date >= :availToday )',
+    );
+    expect(params).toEqual({
+      availDayOfWeek: 6,
+      availCurrentTime: '23:30:00',
+      availToday: '2026-10-31',
+    });
   });
 
-  it('filters "this week" to artisans with any active weekly slot', async () => {
+  it('rolls "now" over to the next Accra day just after midnight UTC', async () => {
+    const { service, qb } = setup(
+      [],
+      0,
+      [],
+      fakeAvailability(new Date('2026-11-01T00:00:30.000Z')),
+    );
+    await service.search({ availabilityWindow: 'now' } as never);
+    expect(lastWhere(qb)[1]).toEqual({
+      availDayOfWeek: 0,
+      availCurrentTime: '00:00:30',
+      availToday: '2026-11-01',
+    });
+  });
+
+  it('filters "this week" to an active slot on one of the next 7 days that is not time off', async () => {
     const { service, qb } = setup();
     await service.search({ availabilityWindow: 'this_week' } as never);
-    const last = lastWhere(qb);
-    expect(last[0]).toContain('av.is_active = true');
-    expect(last).toHaveLength(1);
+    const [sql, params] = lastWhere(qb);
+    expect(flat(sql)).toContain('av.is_active = true');
+    for (let i = 0; i < 7; i++) {
+      expect(sql).toContain(`av.day_of_week = :availWeekDow${i}`);
+      expect(sql).toContain(`bs.end_date >= :availWeekDate${i}`);
+    }
+    expect(params).toEqual({
+      availWeekDow0: 6,
+      availWeekDate0: '2026-10-31',
+      availWeekDow1: 0,
+      availWeekDate1: '2026-11-01',
+      availWeekDow2: 1,
+      availWeekDate2: '2026-11-02',
+      availWeekDow3: 2,
+      availWeekDate3: '2026-11-03',
+      availWeekDow4: 3,
+      availWeekDate4: '2026-11-04',
+      availWeekDow5: 4,
+      availWeekDate5: '2026-11-05',
+      availWeekDow6: 5,
+      availWeekDate6: '2026-11-06',
+    });
+    const calls = qb.andWhere.mock.calls as Array<[string, object?]>;
+    expect(calls.at(-2)![1]).toEqual({ availWindowStatus: 'AVAILABLE' });
+  });
+
+  it("adds each card's availability from one batched lookup", async () => {
+    const profiles = [
+      { id: 1, user: { id: 11 } },
+      { id: 2, user: { id: 12 } },
+    ];
+    const summary = { state: 'no_hours' };
+    const availability = fakeAvailability(
+      undefined,
+      new Map([[2, { summary }]]),
+    );
+    const { service } = setup(profiles, 2, [], availability);
+    const result = await service.search({});
+    expect(availability.describeForClients).toHaveBeenCalledTimes(1);
+    expect(availability.describeForClients).toHaveBeenCalledWith(profiles);
+    expect(result.data.map((d) => d.availability)).toEqual([
+      undefined,
+      summary,
+    ]);
+    // Schedule details stay on the profile endpoint.
+    expect(result.data[1].weeklyHours).toBeUndefined();
   });
 
   it('attaches completed-jobs counts from one grouped query', async () => {
@@ -422,6 +547,7 @@ describe('ArtisansService self-management', () => {
       {} as unknown as Repository<User>,
       servicesRepo as unknown as Repository<ServiceEntity>,
       jobsRepo as unknown as Repository<Job>,
+      fakeAvailability(),
     );
     return { service, profileRepo, servicesRepo, jobsRepo };
   };

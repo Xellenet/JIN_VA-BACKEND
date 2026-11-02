@@ -9,6 +9,9 @@ import { Address } from './entities/address.entity';
 import { ArtisanProfile } from './entities/artisan-profile.entity';
 import { CustomerProfile } from './entities/customer-profile.entity';
 import { DeviceToken } from '../push-notifications/entities/device-token.entity';
+import { CustomerPaymentSettings } from '../payment-settings/entities/customer-payment-settings.entity';
+import { CustomerPaymentMethod } from '../payment-methods/entities/customer-payment-method.entity';
+import { AccountSecurityEvent } from '../account-security/entities/account-security-event.entity';
 import { ArtisanVerification } from '../verification/entities/artisan-verification.entity';
 import { KycMediaService } from '../uploads/kyc-media.service';
 import { VARIABLES } from '@common/constants/variables.constants';
@@ -220,6 +223,7 @@ export class AccountPurgeService {
       password: null,
       firstname: VARIABLES.PURGED_FIRSTNAME,
       lastname: VARIABLES.PURGED_LASTNAME,
+      middlename: null,
       username: null,
       phoneNumber: null,
       nationalId: null,
@@ -261,6 +265,7 @@ export class AccountPurgeService {
       payoutType: null,
       paystackRecipientCode: null,
       payoutAccountName: null,
+      payoutAccountNameVerified: null,
       payoutAccountNumber: null,
       payoutBankCode: null,
       isProfileComplete: false,
@@ -448,7 +453,7 @@ export class AccountPurgeService {
    * scrubbed-but-present row would still identify the device.
    *
    * Every statement here locates rows by the raw `user_id` column, and none
-   * has a soft-delete filter to inherit. Zero rows for any of the three (no
+   * has a soft-delete filter to inherit. Zero rows for any of these (no
    * tokens, no registered devices, no saved addresses) is a valid outcome.
    */
   private async deleteResidualPersonalData(
@@ -473,6 +478,33 @@ export class AccountPurgeService {
       .createQueryBuilder()
       .delete()
       .from(Address)
+      .where('user_id = :userId', { userId })
+      .execute();
+
+    // Customer Experience v2 (SEC-37): the checkout preference and the
+    // account's security events. Neither is ever linked to a dispute or fraud
+    // case, so nothing is kept back.
+    await manager
+      .createQueryBuilder()
+      .delete()
+      .from(CustomerPaymentSettings)
+      .where('user_id = :userId', { userId })
+      .execute();
+
+    // Saved payment methods: the encrypted numbers and card authorizations go
+    // with the account (hard delete). Charge attempts keep only a method id,
+    // which the foreign key sets to null.
+    await manager
+      .createQueryBuilder()
+      .delete()
+      .from(CustomerPaymentMethod)
+      .where('user_id = :userId', { userId })
+      .execute();
+
+    await manager
+      .createQueryBuilder()
+      .delete()
+      .from(AccountSecurityEvent)
       .where('user_id = :userId', { userId })
       .execute();
   }

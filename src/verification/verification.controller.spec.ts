@@ -59,7 +59,9 @@ describe('VerificationController', () => {
     await expect(controller.getMyVerification(reqAs(artisan))).resolves.toBe(
       response,
     );
-    expect(mockService.getMyVerification).toHaveBeenCalledWith(7);
+    expect(mockService.getMyVerification).toHaveBeenCalledWith(7, {
+      nullIfNone: false,
+    });
   });
 
   it('findAll passes the query through', async () => {

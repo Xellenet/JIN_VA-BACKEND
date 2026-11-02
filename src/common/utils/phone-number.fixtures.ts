@@ -101,6 +101,51 @@ export const PHONE_NUMBER_FIXTURES: readonly PhoneNumberFixture[] = [
     expected: '+2348031234567',
     note: '+CC overrides the selected country',
   },
+  // Sign-up form v2: a trunk 0 typed after the calling code never reaches
+  // storage, in the countries that use one (GH, LR, NG, SL). Where 0 is part
+  // of the number itself (BJ, CI) it is kept.
+  {
+    input: '+233 024 123 4567',
+    country: 'GH',
+    expected: '+233241234567',
+    note: 'trunk 0 after +233 is dropped',
+  },
+  {
+    input: '2330241234567',
+    country: 'GH',
+    expected: '+233241234567',
+    note: '233 without +, trunk 0 dropped',
+  },
+  {
+    input: '+234 0803 123 4567',
+    country: 'GH',
+    expected: '+2348031234567',
+    note: 'Nigeria, trunk 0 after +234 dropped',
+  },
+  {
+    input: '+231 077 012 3456',
+    country: 'GH',
+    expected: '+231770123456',
+    note: 'Liberia, trunk 0 after +231 dropped',
+  },
+  {
+    input: '+232 025 123456',
+    country: 'GH',
+    expected: '+23225123456',
+    note: 'Sierra Leone, trunk 0 after +232 dropped',
+  },
+  {
+    input: '+225 01 23 45 6789',
+    country: 'GH',
+    expected: '+2250123456789',
+    note: "Côte d'Ivoire, leading 0 is part of the number",
+  },
+  {
+    input: '01 95 12 34 56',
+    country: 'BJ',
+    expected: '+2290195123456',
+    note: 'Benin, leading 0 is part of the number',
+  },
   // Rejected.
   {
     input: '123-456-7890',

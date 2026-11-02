@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { NotFoundException } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { NotificationsService } from './notifications.service';
 import { Notification } from './entities/notification.entity';
@@ -95,6 +96,44 @@ describe('NotificationsService', () => {
     }).compile();
 
     service = module.get<NotificationsService>(NotificationsService);
+  });
+
+  /** B8: `GET /notifications/:id`. */
+  describe('findOne', () => {
+    it("returns the caller's notification, scoped by owner in the query, without marking it read", async () => {
+      notificationsRepo.findOne.mockResolvedValueOnce({
+        id: 9021,
+        type: NotificationType.DISPUTE_RESOLVED,
+        title: 'Dispute resolved',
+        body: 'Your dispute was resolved.',
+        isRead: false,
+        payload: { jobId: 812 },
+        createdAt: new Date('2026-10-30T14:14:00.000Z'),
+        user: { id: 5, email: 'ama.owusu@example.com' },
+      });
+
+      const result = await service.findOne(5, 9021);
+
+      expect(notificationsRepo.findOne).toHaveBeenCalledWith({
+        where: { id: 9021, user: { id: 5 } },
+      });
+      expect(notificationsRepo.save).not.toHaveBeenCalled();
+      expect(result.message).toBe('Notification retrieved');
+      expect(result.data).toMatchObject({
+        id: 9021,
+        title: 'Dispute resolved',
+        isRead: false,
+        payload: { jobId: 812 },
+      });
+      expect(JSON.stringify(result.data)).not.toContain('ama.owusu');
+    });
+
+    it("gives the same 404 for someone else's and a missing notification", async () => {
+      notificationsRepo.findOne.mockResolvedValueOnce(null);
+      await expect(service.findOne(5, 1)).rejects.toThrow(
+        new NotFoundException('Notification not found.'),
+      );
+    });
   });
 
   describe('preferences shape by role (PR3)', () => {
@@ -252,6 +291,105 @@ describe('NotificationsService', () => {
 
       const saved = notificationsRepo.create.mock.calls[0][0];
       expect(saved.body).not.toContain('has been released');
+    });
+  });
+
+  describe('payout on hold (payout name check)', () => {
+    it.each([
+      [
+        'payout_name_mismatch',
+        "We couldn't send your payout for Kitchen Sink Repair. The name on your payout account doesn't match. Update your payment details to receive it.",
+      ],
+      [
+        'payout_account_not_found',
+        "We couldn't send your payout for Kitchen Sink Repair. We couldn't find your payout account. Update your payment details to receive it.",
+      ],
+    ] as const)(
+      'tells the artisan what to fix (%s), with the Settings → Payments link',
+      async (reason, body) => {
+        prefsRepo.findOne.mockResolvedValue(prefsFor(Role.ARTISAN));
+
+        await service.handlePayoutOnHold({
+          artisanUserId: 99,
+          paymentId: 7,
+          jobId: 3,
+          jobTitle: 'Kitchen Sink Repair',
+          reason,
+        });
+
+        const saved = notificationsRepo.create.mock.calls[0][0];
+        expect(saved).toMatchObject({
+          type: NotificationType.PAYOUT_ON_HOLD,
+          title: 'Your payout is on hold',
+          body,
+          payload: {
+            jobId: 3,
+            paymentId: 7,
+            reason,
+          },
+        });
+      },
+    );
+
+    it('is delivered even when payment notifications are muted', async () => {
+      prefsRepo.findOne.mockResolvedValue(
+        prefsFor(Role.ARTISAN, { paymentReleased: false }),
+      );
+
+      await service.handlePayoutOnHold({
+        artisanUserId: 99,
+        paymentId: 7,
+        jobId: 3,
+        jobTitle: 'Kitchen Sink Repair',
+        reason: 'payout_name_mismatch',
+      });
+
+      expect(notificationsRepo.save).toHaveBeenCalled();
+    });
+  });
+
+  describe('duplicate payment refunds (idempotent payments)', () => {
+    it('tells the customer they were charged twice and refunded, with no timing promise', async () => {
+      prefsRepo.findOne.mockResolvedValue(
+        prefsFor(Role.CUSTOMER, { paymentReceipts: false }),
+      );
+
+      await service.handleDuplicatePaymentRefunded({
+        customerId: 22,
+        jobId: 3,
+        jobTitle: 'Kitchen Sink Repair',
+        amount: 150,
+        methodLabel: 'MTN MoMo',
+      });
+
+      const saved = notificationsRepo.create.mock.calls[0][0];
+      expect(saved).toMatchObject({
+        type: NotificationType.DUPLICATE_PAYMENT_REFUNDED,
+        title: 'Extra payment refunded',
+        body: "You were charged twice for Kitchen Sink Repair. We've refunded the extra payment of GH₵ 150.00 to your MTN MoMo.",
+        payload: { jobId: 3, amount: 150 },
+      });
+      expect(saved.body).not.toMatch(/shortly|within|days|hours/i);
+    });
+
+    it('alerts every admin when a refund needs a person', async () => {
+      usersRepo.find.mockResolvedValue([{ id: 1 }, { id: 2 }]);
+      prefsRepo.findOne.mockResolvedValue(prefsFor(Role.ADMIN));
+
+      await service.handleRefundNeedsAttention({
+        paymentId: 7,
+        jobId: 3,
+        jobTitle: 'Kitchen Sink Repair',
+        amount: 150,
+        reference: 'jinva-ch-7-2',
+        reason: 'Paystack reported the refund failed; refund it by hand.',
+      });
+
+      expect(notificationsRepo.save).toHaveBeenCalledTimes(2);
+      expect(notificationsRepo.create.mock.calls[0][0]).toMatchObject({
+        type: NotificationType.PAYMENT_REFUND_NEEDS_ATTENTION,
+        payload: { paymentId: 7, jobId: 3, reference: 'jinva-ch-7-2' },
+      });
     });
   });
 

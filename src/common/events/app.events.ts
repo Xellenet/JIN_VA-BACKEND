@@ -54,6 +54,23 @@ export const APP_EVENTS = {
   PAYMENT_REFUNDED: 'payment.refunded',
   /** PR3: an artisan payout failed and needs manual admin attention. */
   PAYMENT_TRANSFER_FAILED: 'payment.transfer-failed',
+  /**
+   * Idempotent payments: a second successful charge for a job that was
+   * already paid was refunded automatically. Customer-facing, once.
+   */
+  PAYMENT_DUPLICATE_REFUNDED: 'payment.duplicate-refunded',
+  /**
+   * Idempotent payments: an automatic refund of a duplicate payment could
+   * not be made (the call keeps failing, or Paystack reported it failed).
+   * Admin-facing.
+   */
+  PAYMENT_REFUND_NEEDS_ATTENTION: 'payment.refund-needs-attention',
+  /**
+   * Payout name check: a payout was not sent because the name on the
+   * artisan's payout account doesn't match, or the account can't be found.
+   * Artisan-facing, once per payment.
+   */
+  PAYOUT_ON_HOLD: 'payment.payout-on-hold',
 
   // ─── Disputes (PD4) ─────────────────────────────────────────────────────────
   /** PR3: a new dispute was opened and is waiting on admin review. */
@@ -146,6 +163,28 @@ export interface PayoutReleasedPayload {
   artisanAmount: number;
 }
 
+/** Customer-facing: the extra payment for an already-paid job was refunded. */
+export interface PaymentDuplicateRefundedPayload {
+  customerId: number;
+  jobId: number;
+  jobTitle: string;
+  /** The refunded amount, in GHS. */
+  amount: number;
+  /** "MTN MoMo", "Visa card ending 4081", "card", "mobile money", ... */
+  methodLabel: string;
+}
+
+/** Admin-facing: an automatic duplicate refund needs a person. */
+export interface PaymentRefundNeedsAttentionPayload {
+  paymentId: number;
+  jobId: number;
+  jobTitle: string;
+  amount: number;
+  /** The duplicate's Paystack reference (not personal data). */
+  reference: string;
+  reason: string;
+}
+
 /** PD3: customer-facing refund notification. */
 export interface PaymentRefundedPayload {
   customerId: number;
@@ -166,6 +205,18 @@ export interface PaymentTransferFailedPayload {
   /** Amount the failed transfer was for, in GHS. */
   artisanAmount: number;
   reason: string;
+}
+
+/**
+ * Payout name check: artisan-facing "we couldn't send your payout, update
+ * your payment details". Never carries the account name or number.
+ */
+export interface PayoutOnHoldPayload {
+  artisanUserId: number;
+  paymentId: number;
+  jobId: number;
+  jobTitle: string;
+  reason: 'payout_name_mismatch' | 'payout_account_not_found';
 }
 
 // ─── Disputes (PD4, PR3) ──────────────────────────────────────────────────────

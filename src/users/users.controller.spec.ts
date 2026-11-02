@@ -4,6 +4,11 @@ import type { Response } from 'express';
 import { UsersController } from './users.controller';
 import { UsersService } from './users.service';
 import { UploadsService } from '../uploads/uploads.service';
+import { AccountSecurityService } from '../account-security/account-security.service';
+import { GUARDS_METADATA } from '@nestjs/common/constants';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { NotSuspendedGuard } from '@common/guards/not-suspended.guard';
+import { ProfileMediaWriteThrottlerGuard } from '@common/throttling/customer-throttler.guards';
 import { CreateUserDto } from './dto/create-user.dto';
 import type { AuthenticatedRequest } from '@common/types/authenticated-request.type';
 import { VARIABLES } from '@common/constants/variables.constants';
@@ -14,9 +19,15 @@ describe('UsersController', () => {
   const mockUsersService = {
     createUser: jest.fn(),
     deleteMe: jest.fn(),
+    clearAvatar: jest.fn(),
+    updateAvatar: jest.fn(),
   };
   const mockUploadsService = {
     uploadAvatar: jest.fn(),
+    deleteOwnAvatar: jest.fn(),
+  };
+  const mockAccountSecurity = {
+    recordBestEffort: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -25,8 +36,14 @@ describe('UsersController', () => {
       providers: [
         { provide: UsersService, useValue: mockUsersService },
         { provide: UploadsService, useValue: mockUploadsService },
+        { provide: AccountSecurityService, useValue: mockAccountSecurity },
       ],
-    }).compile();
+    })
+      // The throttler guard is a real provider with real dependencies; these
+      // specs call handlers directly, so it is stubbed (see auth.controller.spec).
+      .overrideGuard(ProfileMediaWriteThrottlerGuard)
+      .useValue({ canActivate: () => true })
+      .compile();
 
     controller = module.get<UsersController>(UsersController);
 
@@ -125,6 +142,84 @@ describe('UsersController', () => {
       // The deletion has already committed; a cookie-header failure must not
       // surface as an error the user would retry.
       await expect(controller.deleteMe(req, res)).resolves.toBe(deletion);
+    });
+  });
+
+  /** B1: `DELETE /users/me/avatar` (BU-3.x at the controller seam, T-6). */
+  describe('removeAvatar', () => {
+    const req = {
+      user: { id: 41 },
+      ip: '203.0.113.9',
+      headers: { 'user-agent': 'jest-agent' },
+    } as unknown as AuthenticatedRequest;
+    const profile = { message: 'Profile photo removed', data: { id: 41 } };
+
+    it('clears the photo, deletes the stored file and records the event', async () => {
+      mockUsersService.clearAvatar.mockResolvedValueOnce({
+        previous: '/uploads/avatars/abc.webp',
+        deleteStoredFile: true,
+        result: profile,
+      });
+      mockUploadsService.deleteOwnAvatar.mockResolvedValueOnce(true);
+
+      await expect(controller.removeAvatar(req)).resolves.toBe(profile);
+
+      expect(mockUsersService.clearAvatar).toHaveBeenCalledWith(41);
+      expect(mockUploadsService.deleteOwnAvatar).toHaveBeenCalledWith(
+        '/uploads/avatars/abc.webp',
+      );
+      expect(mockAccountSecurity.recordBestEffort).toHaveBeenCalledWith({
+        userId: 41,
+        event: 'profile_photo.removed',
+        ip: '203.0.113.9',
+        userAgent: 'jest-agent',
+      });
+    });
+
+    it('SEC-5: a file another account references is cleared and recorded but not deleted', async () => {
+      mockUsersService.clearAvatar.mockResolvedValueOnce({
+        previous: '/uploads/avatars/abc.webp',
+        deleteStoredFile: false,
+        result: profile,
+      });
+
+      await expect(controller.removeAvatar(req)).resolves.toBe(profile);
+      expect(mockUploadsService.deleteOwnAvatar).not.toHaveBeenCalled();
+      expect(mockAccountSecurity.recordBestEffort).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 41, event: 'profile_photo.removed' }),
+      );
+    });
+
+    it('with no photo, succeeds without touching storage or recording an event', async () => {
+      mockUsersService.clearAvatar.mockResolvedValueOnce({
+        previous: null,
+        deleteStoredFile: false,
+        result: profile,
+      });
+
+      await expect(controller.removeAvatar(req)).resolves.toBe(profile);
+      expect(mockUploadsService.deleteOwnAvatar).not.toHaveBeenCalled();
+      expect(mockAccountSecurity.recordBestEffort).not.toHaveBeenCalled();
+    });
+
+    it('is guarded by JWT, the suspension check and the profile-media throttle', () => {
+      const guards = Reflect.getMetadata(
+        GUARDS_METADATA,
+        UsersController.prototype.removeAvatar,
+      ) as unknown[];
+      expect(guards).toEqual([
+        JwtAuthGuard,
+        NotSuspendedGuard,
+        ProfileMediaWriteThrottlerGuard,
+      ]);
+    });
+
+    it('puts the profile-media throttle on the avatar upload too', () => {
+      const guards = Reflect.getMetadata(
+        GUARDS_METADATA,
+        UsersController.prototype.uploadAvatar,
+      ) as unknown[];
+      expect(guards).toEqual([JwtAuthGuard, ProfileMediaWriteThrottlerGuard]);
     });
   });
 });

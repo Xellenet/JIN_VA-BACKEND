@@ -39,6 +39,7 @@ import { Roles } from '@common/decorators/roles.decorator';
 import { Role } from '@common/types/enums';
 import type { AuthenticatedRequest } from '@common/types/authenticated-request.type';
 import { maxFileSizeMb } from './max-file-size';
+import { ProfileMediaWriteThrottlerGuard } from '@common/throttling/customer-throttler.guards';
 
 const fileField = {
   schema: {
@@ -60,6 +61,9 @@ export class UploadsController {
   ) {}
 
   @Post('avatar')
+  // Customer Experience v2: the profile-media limit, per user, on its own
+  // bucket (the class-level JwtAuthGuard runs first, so the tracker is the user).
+  @UseGuards(ProfileMediaWriteThrottlerGuard)
   @HttpCode(HttpStatus.OK)
   @UseInterceptors(FileInterceptor('file', { storage: memoryStorage() }))
   @ApiOperation({

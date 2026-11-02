@@ -1,4 +1,5 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { formatBookingDate } from '@common/utils/booking-date.util';
 import { InjectRepository } from '@nestjs/typeorm';
 import { OnEvent } from '@nestjs/event-emitter';
 import { plainToInstance } from 'class-transformer';
@@ -50,6 +51,9 @@ import type {
   PayoutReleasedPayload,
   PaymentRefundedPayload,
   PaymentTransferFailedPayload,
+  PaymentDuplicateRefundedPayload,
+  PaymentRefundNeedsAttentionPayload,
+  PayoutOnHoldPayload,
   DisputeFiledPayload,
   DisputeOutcomePayload,
   ReviewFlaggedPayload,
@@ -148,6 +152,8 @@ const ADMIN_PREF_KEY: Partial<
 > = {
   [NotificationType.DISPUTE_FILED]: 'disputeFiled',
   [NotificationType.PAYMENT_TRANSFER_FAILED]: 'paymentTransferFailed',
+  // Idempotent payments: the same money-needs-a-person toggle as a failed payout.
+  [NotificationType.PAYMENT_REFUND_NEEDS_ATTENTION]: 'paymentTransferFailed',
   [NotificationType.ARTISAN_VERIFICATION_SUBMITTED]: 'verificationSubmitted',
   [NotificationType.REVIEW_FLAGGED]: 'reviewFlagged',
   [NotificationType.ARTISAN_REGISTERED]: 'artisanRegistered',
@@ -382,7 +388,7 @@ export class NotificationsService {
       payload.artisanUserId,
       NotificationType.BOOKING_RECEIVED,
       'New Booking Request',
-      `${payload.customerName} has requested a booking on ${payload.scheduledDate}.`,
+      `${payload.customerName} has requested a booking on ${formatBookingDate(payload.scheduledDate)}.`,
       { bookingId: payload.bookingId },
     );
   }
@@ -393,7 +399,7 @@ export class NotificationsService {
       payload.customerId,
       NotificationType.BOOKING_CONFIRMED,
       'Booking Confirmed',
-      `Your booking on ${payload.scheduledDate} has been confirmed by ${payload.artisanName}.`,
+      `Your booking on ${formatBookingDate(payload.scheduledDate)} has been confirmed by ${payload.artisanName}.`,
       { bookingId: payload.bookingId },
     );
   }
@@ -404,7 +410,7 @@ export class NotificationsService {
       payload.customerId,
       NotificationType.BOOKING_DECLINED,
       'Booking Declined',
-      `Your booking request on ${payload.scheduledDate} was declined by ${payload.artisanName}.`,
+      `Your booking request on ${formatBookingDate(payload.scheduledDate)} was declined by ${payload.artisanName}.`,
       { bookingId: payload.bookingId },
     );
   }
@@ -415,7 +421,7 @@ export class NotificationsService {
       payload.artisanUserId,
       NotificationType.BOOKING_CANCELLED,
       'Booking Cancelled',
-      `${payload.customerName} cancelled the booking on ${payload.scheduledDate}.`,
+      `${payload.customerName} cancelled the booking on ${formatBookingDate(payload.scheduledDate)}.`,
       { bookingId: payload.bookingId },
     );
   }
@@ -426,7 +432,7 @@ export class NotificationsService {
       payload.artisanUserId,
       NotificationType.BOOKING_COMPLETED,
       'Booking Marked Complete',
-      `The booking on ${payload.scheduledDate} was marked as completed by the customer.`,
+      `The booking on ${formatBookingDate(payload.scheduledDate)} was marked as completed by the customer.`,
       { bookingId: payload.bookingId },
     );
   }
@@ -437,7 +443,7 @@ export class NotificationsService {
       payload.customerId,
       NotificationType.BOOKING_EXPIRED,
       'Booking Request Expired',
-      `Your booking request for ${payload.scheduledDate} expired without a response from the artisan.`,
+      `Your booking request for ${formatBookingDate(payload.scheduledDate)} expired without a response from the artisan.`,
       { bookingId: payload.bookingId },
     );
   }
@@ -448,7 +454,7 @@ export class NotificationsService {
       payload.recipientUserId,
       NotificationType.BOOKING_NO_SHOW,
       'No-Show Reported',
-      `${payload.flaggedByName} reported you as a no-show for the ${payload.scheduledDate} appointment.`,
+      `${payload.flaggedByName} reported you as a no-show for the ${formatBookingDate(payload.scheduledDate)} appointment.`,
       { bookingId: payload.bookingId },
     );
   }
@@ -469,7 +475,7 @@ export class NotificationsService {
       payload.recipientUserId,
       NotificationType.BOOKING_REMINDER,
       'Upcoming Appointment Reminder',
-      `Reminder: you have an appointment on ${payload.scheduledDate} at ${payload.startTime.slice(0, 5)}, in about ${hours}.`,
+      `Reminder: you have an appointment on ${formatBookingDate(payload.scheduledDate)} at ${payload.startTime.slice(0, 5)}, in about ${hours}.`,
       { bookingId: payload.bookingId, milestone: payload.milestone },
     );
   }
@@ -562,6 +568,32 @@ export class NotificationsService {
     );
   }
 
+  /**
+   * Payout name check: the artisan is told once per payment that the payout
+   * was not sent and what to fix. Not behind a toggle: money is waiting on
+   * them. The payload carries no name or number; the web app maps this type
+   * to its fixed Settings → Payments link (it never reads a link from the
+   * payload).
+   */
+  @OnEvent(APP_EVENTS.PAYOUT_ON_HOLD)
+  async handlePayoutOnHold(payload: PayoutOnHoldPayload) {
+    const cause =
+      payload.reason === 'payout_account_not_found'
+        ? "We couldn't find your payout account."
+        : "The name on your payout account doesn't match.";
+    await this.persist(
+      payload.artisanUserId,
+      NotificationType.PAYOUT_ON_HOLD,
+      'Your payout is on hold',
+      `We couldn't send your payout for ${payload.jobTitle}. ${cause} Update your payment details to receive it.`,
+      {
+        jobId: payload.jobId,
+        paymentId: payload.paymentId,
+        reason: payload.reason,
+      },
+    );
+  }
+
   /** PR3: routed to every admin, not to either party of the payment. */
   @OnEvent(APP_EVENTS.PAYMENT_TRANSFER_FAILED)
   async handlePaymentTransferFailed(payload: PaymentTransferFailedPayload) {
@@ -570,6 +602,41 @@ export class NotificationsService {
       'Payout Transfer Failed',
       `A payout of ${formatGhs(payload.artisanAmount)} to ${payload.artisanName} for "${payload.jobTitle}" failed and needs manual attention. Reason: ${payload.reason}`,
       { paymentId: payload.paymentId, jobId: payload.jobId },
+    );
+  }
+
+  /**
+   * Idempotent payments: the customer paid twice for one job and the extra
+   * payment was refunded automatically. Not behind a toggle: it is about
+   * their money. No timing promise.
+   */
+  @OnEvent(APP_EVENTS.PAYMENT_DUPLICATE_REFUNDED)
+  async handleDuplicatePaymentRefunded(
+    payload: PaymentDuplicateRefundedPayload,
+  ) {
+    await this.persist(
+      payload.customerId,
+      NotificationType.DUPLICATE_PAYMENT_REFUNDED,
+      'Extra payment refunded',
+      `You were charged twice for ${payload.jobTitle}. We've refunded the extra payment of ${formatGhs(payload.amount)} to your ${payload.methodLabel}.`,
+      { jobId: payload.jobId, amount: payload.amount },
+    );
+  }
+
+  /** Idempotent payments: routed to every admin. */
+  @OnEvent(APP_EVENTS.PAYMENT_REFUND_NEEDS_ATTENTION)
+  async handleRefundNeedsAttention(
+    payload: PaymentRefundNeedsAttentionPayload,
+  ) {
+    await this.persistForAdmins(
+      NotificationType.PAYMENT_REFUND_NEEDS_ATTENTION,
+      'Duplicate payment refund needs attention',
+      `A duplicate payment of ${formatGhs(payload.amount)} for "${payload.jobTitle}" (ref ${payload.reference}) could not be refunded automatically. ${payload.reason}`,
+      {
+        paymentId: payload.paymentId,
+        jobId: payload.jobId,
+        reference: payload.reference,
+      },
     );
   }
 
@@ -778,6 +845,26 @@ export class NotificationsService {
       where: { user: { id: userId }, isRead: false },
     });
     return { count };
+  }
+
+  /**
+   * B8: one of the caller's notifications. Someone else's and a missing one
+   * give the same 404. Read-only: it does not mark the notification read.
+   */
+  async findOne(
+    userId: number,
+    notificationId: number,
+  ): Promise<{ message: string; data: NotificationResponseDto }> {
+    const notification = await this.notificationsRepository.findOne({
+      where: { id: notificationId, user: { id: userId } },
+    });
+    if (!notification) throw new NotFoundException('Notification not found.');
+    return {
+      message: SUCCESS_MESSAGES.NOTIFICATION.RETRIEVED,
+      data: plainToInstance(NotificationResponseDto, notification, {
+        excludeExtraneousValues: true,
+      }),
+    };
   }
 
   async markRead(

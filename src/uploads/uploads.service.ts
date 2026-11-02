@@ -1,6 +1,8 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { loadEsm } from 'load-esm';
 import { StorageProviderFactory } from './providers/storage-provider.factory';
+import { LocalStorageProvider } from './providers/local-storage.provider';
+import { AVATARS_FOLDER, resolveOwnAvatarFilename } from './avatar-path.util';
 import type { UploadFolder } from './providers/storage-provider.interface';
 
 const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
@@ -17,7 +19,46 @@ const ALLOWED_MESSAGE_ATTACHMENT_TYPES = new Set(['image/jpeg', 'image/png']);
 
 @Injectable()
 export class UploadsService {
-  constructor(private readonly factory: StorageProviderFactory) {}
+  private readonly logger = new Logger(UploadsService.name);
+
+  constructor(
+    private readonly factory: StorageProviderFactory,
+    private readonly localProvider: LocalStorageProvider,
+  ) {}
+
+  /**
+   * B1: deletes a removed profile photo from storage, **best effort**, and
+   * only when the stored value is one of our own avatar files
+   * (`resolveOwnAvatarFilename`). Anything else, such as a Google photo URL,
+   * is left alone. Local disk and the active provider are both tried, for the
+   * reason `KycMediaService.deleteByReference` gives (pre-cutover files live
+   * on disk). Never throws, and never logs the stored path.
+   *
+   * @returns whether a delete was attempted.
+   */
+  async deleteOwnAvatar(stored: string | null | undefined): Promise<boolean> {
+    const filename = resolveOwnAvatarFilename(stored);
+    if (!filename) {
+      this.logger.warn(
+        'Profile photo is not stored in our avatars folder; nothing deleted from storage.',
+      );
+      return false;
+    }
+    try {
+      await this.localProvider.delete(filename, AVATARS_FOLDER);
+      const active = this.factory.getProvider();
+      if (active.providerName !== this.localProvider.providerName) {
+        await active.delete(filename, AVATARS_FOLDER);
+      }
+    } catch (err) {
+      this.logger.warn(
+        `Could not delete a removed profile photo from storage (${
+          (err as Error)?.name ?? 'Error'
+        }).`,
+      );
+    }
+    return true;
+  }
 
   async uploadAvatar(file: Express.Multer.File) {
     const mimetype = await this.assertMime(

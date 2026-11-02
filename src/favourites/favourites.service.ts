@@ -14,6 +14,7 @@ import { ArtisanProfile } from '@users/entities/artisan-profile.entity';
 import { Job } from '@jobs/entities/job.entity';
 import { Status } from '@common/types/enums';
 import { SUCCESS_MESSAGES } from '@common/constants/success-messages.constants';
+import { AvailabilityService } from '../availability/availability.service';
 
 type Pagination = {
   total: number;
@@ -38,6 +39,7 @@ export class FavouritesService {
     private readonly artisanProfileRepository: Repository<ArtisanProfile>,
     @InjectRepository(Job)
     private readonly jobsRepository: Repository<Job>,
+    private readonly availabilityService: AvailabilityService,
   ) {}
 
   /**
@@ -160,8 +162,14 @@ export class FavouritesService {
       .take(limit)
       .getManyAndCount();
 
-    const completedJobsCountByArtisanUserId = await this.getCompletedJobsCounts(
-      favourites.map((f) => f.artisan.user.id),
+    const [completedJobsCountByArtisanUserId, availability] = await Promise.all(
+      [
+        this.getCompletedJobsCounts(favourites.map((f) => f.artisan.user.id)),
+        // Same client-facing availability as search cards, batched per page.
+        this.availabilityService.describeForClients(
+          favourites.map((f) => f.artisan),
+        ),
+      ],
     );
 
     const artisanProfiles = favourites.map((f) => {
@@ -171,6 +179,7 @@ export class FavouritesService {
       dto.favouritedAt = f.createdAt;
       dto.completedJobsCount =
         completedJobsCountByArtisanUserId.get(f.artisan.user.id) ?? 0;
+      dto.availability = availability.get(f.artisan.id)?.summary;
       return dto;
     });
 

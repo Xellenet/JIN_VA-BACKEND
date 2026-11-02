@@ -6,10 +6,12 @@ import { ArtisanProfile } from '@users/entities/artisan-profile.entity';
 import { User } from '@users/entities/user.entity';
 import { ServiceEntity } from '@services/entities/service.entity';
 import { Job } from '@jobs/entities/job.entity';
+import { AvailabilityModule } from '../availability/availability.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([ArtisanProfile, User, ServiceEntity, Job]),
+    AvailabilityModule,
   ],
   controllers: [ArtisansController],
   providers: [ArtisansService],

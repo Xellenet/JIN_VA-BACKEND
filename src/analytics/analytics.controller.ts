@@ -1,4 +1,4 @@
-import { Controller, Get, Query, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, Header, Query, Req, UseGuards } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiForbiddenResponse,
@@ -14,6 +14,7 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '@common/decorators/roles.decorator';
 import { AnalyticsRange, Role } from '@common/types/enums';
 import type { AuthenticatedRequest } from '@common/types/authenticated-request.type';
+import { ArtisanInsightsThrottlerGuard } from '@common/throttling/artisan-throttler.guards';
 
 /**
  * AN1: PRD §7's `GET /analytics/artisan`. No analytics module, file or import
@@ -37,13 +38,15 @@ export class AnalyticsController {
    * behind the admin-only endpoint.
    */
   @Get('artisan')
+  @UseGuards(ArtisanInsightsThrottlerGuard)
   @Roles(Role.ARTISAN)
+  @Header('Cache-Control', 'private, no-store')
   @ApiOperation({
     summary:
       "AA1–AA6: the authenticated artisan's own earnings, job counts, repeat-client rate, rating trend and top services",
     description:
-      'Ranges: `7d | 30d | 90d | all` (PRD §5.12). Daily buckets for 7d/30d, weekly for ' +
-      '90d, monthly for all-time. Computed live — every figure describes the selected ' +
+      'Ranges: `7d | 30d | 90d | 12m | all` (PRD §5.12, plus 12m). Daily buckets for 7d/30d, weekly for ' +
+      '90d, monthly for 12m and all-time. `series.earningsFilled` is zero-filled with money as strings. Computed live — every figure describes the selected ' +
       'range unless the field name says otherwise (`allTime`, `*AllTime`). ' +
       'Portfolio view counts are deliberately absent: no view-tracking mechanism exists ' +
       'and a fabricated figure is worse than an omitted one.',

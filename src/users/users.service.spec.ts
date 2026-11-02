@@ -1126,4 +1126,107 @@ describe('UsersService', () => {
       expect(mockUsersRepository.delete).toHaveBeenCalledWith(mockUser.id);
     });
   });
+
+  /** B1 (Customer Experience v2): `DELETE /users/me/avatar`. */
+  describe('clearAvatar', () => {
+    it('BU-3.1: clears profilePicture, saves, and hands back what was stored', async () => {
+      const user = {
+        ...mockUser,
+        profilePicture: '/uploads/avatars/3f2a.webp',
+        addresses: [],
+      } as unknown as User;
+      mockUsersRepository.findOne.mockResolvedValueOnce(user);
+      mockUsersRepository.save.mockImplementationOnce((u: User) =>
+        Promise.resolve(u),
+      );
+      mockUserQb.getOne.mockResolvedValueOnce(null);
+      mockUsersRepository.find.mockResolvedValueOnce([]);
+
+      const { previous, deleteStoredFile, result } = await service.clearAvatar(
+        mockUser.id,
+      );
+
+      expect(previous).toBe('/uploads/avatars/3f2a.webp');
+      expect(deleteStoredFile).toBe(true);
+      expect(mockUsersRepository.find).toHaveBeenCalledWith(
+        expect.objectContaining({ withDeleted: true }),
+      );
+      expect(mockUsersRepository.findOne).toHaveBeenCalledWith({
+        where: { id: mockUser.id },
+        relations: ['addresses'],
+      });
+      expect(mockUsersRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ id: mockUser.id, profilePicture: null }),
+      );
+      expect(result.message).toBe('Profile photo removed');
+      expect(result.data.profilePicture).toBeNull();
+    });
+
+    it('BU-3.3: with no photo, succeeds without saving', async () => {
+      mockUsersRepository.findOne.mockResolvedValueOnce({
+        ...mockUser,
+        profilePicture: null,
+        addresses: [],
+      });
+      mockUserQb.getOne.mockResolvedValueOnce(null);
+
+      const { previous, deleteStoredFile, result } = await service.clearAvatar(
+        mockUser.id,
+      );
+
+      expect(previous).toBeNull();
+      expect(deleteStoredFile).toBe(false);
+      expect(mockUsersRepository.find).not.toHaveBeenCalled();
+      expect(mockUsersRepository.save).not.toHaveBeenCalled();
+      expect(result.message).toBe('Profile photo removed');
+    });
+
+    it('SEC-5: never deletes a file another account still references, in any URL form', async () => {
+      mockUsersRepository.findOne.mockResolvedValueOnce({
+        ...mockUser,
+        profilePicture: '/uploads/avatars/3f2a.webp',
+        addresses: [],
+      });
+      mockUsersRepository.save.mockImplementationOnce((u: User) =>
+        Promise.resolve(u),
+      );
+      mockUserQb.getOne.mockResolvedValueOnce(null);
+      mockUsersRepository.find.mockResolvedValueOnce([
+        // A LIKE over-match on another name is ignored...
+        { id: 7, profilePicture: '/uploads/avatars/x3f2a.webp' },
+        // ...but the same file, owned by someone else, blocks the delete.
+        { id: 8, profilePicture: '/uploads/avatars/3f2a.webp' },
+      ]);
+
+      const { previous, deleteStoredFile, result } = await service.clearAvatar(
+        mockUser.id,
+      );
+
+      expect(previous).toBe('/uploads/avatars/3f2a.webp');
+      expect(deleteStoredFile).toBe(false);
+      expect(result.data.profilePicture).toBeNull();
+    });
+
+    it('SEC-5: a value outside our avatars folder is cleared without a lookup or a delete', async () => {
+      mockUsersRepository.findOne.mockResolvedValueOnce({
+        ...mockUser,
+        profilePicture: 'https://lh3.googleusercontent.com/a/photo',
+        addresses: [],
+      });
+      mockUsersRepository.save.mockImplementationOnce((u: User) =>
+        Promise.resolve(u),
+      );
+      mockUserQb.getOne.mockResolvedValueOnce(null);
+
+      const { deleteStoredFile } = await service.clearAvatar(mockUser.id);
+
+      expect(deleteStoredFile).toBe(false);
+      expect(mockUsersRepository.find).not.toHaveBeenCalled();
+    });
+
+    it('404s for a missing account', async () => {
+      mockUsersRepository.findOne.mockResolvedValueOnce(null);
+      await expect(service.clearAvatar(999)).rejects.toThrow(NotFoundException);
+    });
+  });
 });

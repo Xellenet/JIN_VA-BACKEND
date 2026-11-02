@@ -15,11 +15,15 @@ const ADMIN_RANGES = [
   AnalyticsRange.LAST_YEAR,
 ] as const;
 
-/** AN2: artisan ranges are `7d | 30d | 90d | all`, per PRD §5.12. */
+/**
+ * AN2: artisan ranges are `7d | 30d | 90d | all`, per PRD §5.12, plus `12m`
+ * (artisan fixes B3: the Spending page's calendar-month year).
+ */
 const ARTISAN_RANGES = [
   AnalyticsRange.LAST_7_DAYS,
   AnalyticsRange.LAST_30_DAYS,
   AnalyticsRange.LAST_90_DAYS,
+  AnalyticsRange.LAST_12_MONTHS,
   AnalyticsRange.ALL_TIME,
 ] as const;
 
@@ -42,11 +46,11 @@ export class ArtisanAnalyticsQueryDto {
     enum: ARTISAN_RANGES,
     default: AnalyticsRange.LAST_30_DAYS,
     description:
-      'Daily buckets for 7d/30d, weekly for 90d, monthly for all-time. `1y` is not valid here.',
+      'Daily buckets for 7d/30d, weekly for 90d, monthly for 12m and all-time. `1y` is not valid here.',
   })
   @IsOptional()
   @IsIn(ARTISAN_RANGES as unknown as string[], {
-    message: 'range must be one of: 7d, 30d, 90d, all',
+    message: 'range must be one of: 7d, 30d, 90d, 12m, all',
   })
   range?: AnalyticsRange = AnalyticsRange.LAST_30_DAYS;
 }

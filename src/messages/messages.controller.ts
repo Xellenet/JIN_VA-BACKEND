@@ -30,6 +30,7 @@ import { NotSuspendedGuard } from '@common/guards/not-suspended.guard';
 import { MessagesService } from './messages.service';
 import { SendMessageDto } from './dto/send-message.dto';
 import { GetMessagesQueryDto } from './dto/get-messages-query.dto';
+import { MarkConversationReadQueryDto } from './dto/mark-conversation-read-query.dto';
 import { MessageResponseDto } from './dto/message-response.dto';
 import { ConversationResponseDto } from './dto/conversation-response.dto';
 import type { AuthenticatedRequest } from '@common/types/authenticated-request.type';
@@ -183,9 +184,11 @@ export class MessagesController {
     summary: 'Mark received messages in a conversation as read',
     description:
       'Marks all unread messages sent by the other participant as read. ' +
-      'Messages sent by the caller are not affected.',
+      'Messages sent by the caller are not affected. With `upToMessageId`, ' +
+      'only messages up to and including that id are marked read.',
   })
   @ApiOkResponse({ description: 'Messages marked as read' })
+  @ApiBadRequestResponse({ description: 'Invalid `upToMessageId`' })
   @ApiNotFoundResponse({ description: 'Conversation not found' })
   @ApiForbiddenResponse({
     description: 'Caller is not a participant in this conversation',
@@ -194,7 +197,10 @@ export class MessagesController {
   markRead(
     @Req() req: AuthenticatedRequest,
     @Param('id', ParseIntPipe) id: number,
+    @Query() query: MarkConversationReadQueryDto,
   ) {
-    return this.messagesService.markRead(req.user.id, id);
+    return query.upToMessageId === undefined
+      ? this.messagesService.markRead(req.user.id, id)
+      : this.messagesService.markRead(req.user.id, id, query.upToMessageId);
   }
 }

@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { plainToInstance } from 'class-transformer';
-import { In, Repository } from 'typeorm';
+import { Between, In, MoreThanOrEqual, Repository } from 'typeorm';
 import { ArtisanAvailability } from './entities/artisan-availability.entity';
 import { BlockedSlot } from './entities/blocked-slot.entity';
 import { ArtisanProfile } from '@users/entities/artisan-profile.entity';
@@ -19,8 +19,18 @@ import {
   ArtisanAvailabilityResponseDto,
   AvailabilitySlotResponseDto,
   BlockedSlotResponseDto,
+  AvailabilitySummaryDto,
   BookableWindowDto,
+  PublicTimeOffDto,
+  PublicWeeklyHoursDto,
 } from './dto/availability-response.dto';
+import {
+  AVAILABILITY_HORIZON_DAYS,
+  addDays,
+  platformClock,
+  subtractOccupied,
+  summariseAvailability,
+} from './availability-summary';
 import { SUCCESS_MESSAGES } from '@common/constants/success-messages.constants';
 import { BookingStatus } from '@common/types/enums';
 
@@ -34,6 +44,18 @@ type BlockItem = {
   data: BlockedSlotResponseDto & { conflictingBookingIds?: number[] };
 };
 type BlockList = { message: string; data: BlockedSlotResponseDto[] };
+
+/** Client-facing availability for one artisan (see {@link AvailabilityService.describeForClients}). */
+export interface ClientAvailability {
+  summary: AvailabilitySummaryDto;
+  /** Active weekly hours, Monday-first order is left to the client. */
+  weeklyHours: PublicWeeklyHoursDto[];
+  /** Time off ending today or later: dates only, the reason stays private. */
+  upcomingTimeOff: PublicTimeOffDto[];
+}
+
+/** At most this many upcoming time-off ranges are shown to clients. */
+const MAX_PUBLIC_TIME_OFF = 10;
 
 /** Bookings in these statuses occupy a slot for concurrency/availability purposes (A4/R1a). */
 const OCCUPYING_BOOKING_STATUSES = [
@@ -56,13 +78,96 @@ export class AvailabilityService {
     private readonly bookingRepo: Repository<Booking>,
   ) {}
 
+  /**
+   * The clock every client-facing availability decision reads. Tests replace
+   * it (`jest.spyOn(service, 'now')`) instead of faking the global date.
+   */
+  now(): Date {
+    return new Date();
+  }
+
+  // ─── Client-facing availability (search, profile, favourites) ───────────────
+
+  /**
+   * Computes what clients see for each artisan: the effective state (see
+   * `summariseAvailability`), plus the active weekly hours and upcoming time
+   * off. Batched for result pages: one query each for slots, time off and
+   * PENDING/CONFIRMED bookings, whatever the number of artisans.
+   */
+  async describeForClients(
+    profiles: ReadonlyArray<
+      Pick<ArtisanProfile, 'id'> & { availabilityStatus?: string | null }
+    >,
+  ): Promise<Map<number, ClientAvailability>> {
+    const result = new Map<number, ClientAvailability>();
+    if (profiles.length === 0) return result;
+
+    const ids = [...new Set(profiles.map((p) => p.id))];
+    const now = this.now();
+    const today = platformClock(now).date;
+    const horizonEnd = addDays(today, AVAILABILITY_HORIZON_DAYS - 1);
+
+    const [slots, blocks, bookings] = await Promise.all([
+      this.slotRepo.find({
+        where: { artisanProfileId: In(ids), isActive: true },
+        order: { dayOfWeek: 'ASC', startTime: 'ASC' },
+      }),
+      this.blockRepo.find({
+        where: { artisanProfileId: In(ids), endDate: MoreThanOrEqual(today) },
+        order: { startDate: 'ASC' },
+      }),
+      this.bookingRepo.find({
+        where: {
+          artisanProfile: { id: In(ids) },
+          scheduledDate: Between(today, horizonEnd),
+          status: In(OCCUPYING_BOOKING_STATUSES),
+        },
+        relations: { artisanProfile: true },
+        select: {
+          id: true,
+          scheduledDate: true,
+          startTime: true,
+          endTime: true,
+          artisanProfile: { id: true },
+        },
+      }),
+    ]);
+
+    for (const profile of profiles) {
+      const mySlots = slots.filter((s) => s.artisanProfileId === profile.id);
+      const myBlocks = blocks.filter((b) => b.artisanProfileId === profile.id);
+      result.set(profile.id, {
+        summary: summariseAvailability({
+          status: profile.availabilityStatus,
+          slots: mySlots,
+          blocks: myBlocks,
+          bookings: bookings.filter((b) => b.artisanProfile?.id === profile.id),
+          now,
+        }),
+        weeklyHours: mySlots.map((s) => ({
+          dayOfWeek: s.dayOfWeek,
+          startTime: s.startTime.slice(0, 5),
+          endTime: s.endTime.slice(0, 5),
+        })),
+        upcomingTimeOff: myBlocks
+          .slice(0, MAX_PUBLIC_TIME_OFF)
+          .map((b) => ({ startDate: b.startDate, endDate: b.endDate })),
+      });
+    }
+    return result;
+  }
+
   // ─── Artisan self-management ─────────────────────────────────────────────────
 
   async getMyAvailability(userId: number): Promise<AvailabilityItem> {
     const profile = await this.loadProfileOrFail(userId);
+    const data = await this.buildAvailabilityDto(profile, false);
+    data.summary = (await this.describeForClients([profile])).get(
+      profile.id,
+    )?.summary;
     return {
       message: SUCCESS_MESSAGES.AVAILABILITY.RETRIEVED,
-      data: await this.buildAvailabilityDto(profile, false),
+      data,
     };
   }
 
@@ -263,6 +368,9 @@ export class AvailabilityService {
       );
 
     const data = await this.buildAvailabilityDto(profile, true);
+    data.summary = (await this.describeForClients([profile])).get(
+      profile.id,
+    )?.summary;
 
     if (date) {
       data.date = date;
@@ -321,43 +429,12 @@ export class AvailabilityService {
 
     const result: BookableWindowDto[] = [];
     for (const slot of weeklySlots) {
-      result.push(
-        ...this.subtractOccupied(slot.startTime, slot.endTime, occupied),
-      );
+      result.push(...subtractOccupied(slot.startTime, slot.endTime, occupied));
     }
     return result;
   }
 
   // ─── Private helpers ─────────────────────────────────────────────────────────
-
-  /**
-   * Fragments one [start, end) window by subtracting every overlapping
-   * occupied interval, returning the remaining open sub-windows in order.
-   * (e.g. 09:00–12:00 minus 10:00–11:00 → [09:00–10:00, 11:00–12:00]).
-   */
-  private subtractOccupied(
-    windowStart: string,
-    windowEnd: string,
-    occupied: { startTime: string; endTime: string }[],
-  ): BookableWindowDto[] {
-    const overlapping = occupied
-      .filter((o) => o.endTime > windowStart && o.startTime < windowEnd)
-      .sort((a, b) => a.startTime.localeCompare(b.startTime));
-
-    const result: BookableWindowDto[] = [];
-    let cursor = windowStart;
-    for (const o of overlapping) {
-      const gapStart = o.startTime > cursor ? o.startTime : cursor;
-      if (gapStart > cursor) {
-        result.push({ startTime: cursor, endTime: gapStart });
-      }
-      if (o.endTime > cursor) cursor = o.endTime;
-    }
-    if (cursor < windowEnd) {
-      result.push({ startTime: cursor, endTime: windowEnd });
-    }
-    return result;
-  }
 
   private async buildAvailabilityDto(
     profile: ArtisanProfile,

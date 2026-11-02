@@ -41,4 +41,6 @@ export interface ErrorResponse {
   status: 'error';
   message: string | string[];
   meta: MetaData;
+  /** Opt-in, 4xx only: what the client needs to recover (see AllExceptionsFilter). */
+  data?: unknown;
 }

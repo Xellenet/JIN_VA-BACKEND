@@ -46,6 +46,7 @@ const RANGE_BUCKETS: Record<string, AnalyticsBucket> = {
   [AnalyticsRange.LAST_30_DAYS]: AnalyticsBucket.DAY,
   [AnalyticsRange.LAST_90_DAYS]: AnalyticsBucket.WEEK,
   [AnalyticsRange.LAST_YEAR]: AnalyticsBucket.MONTH,
+  [AnalyticsRange.LAST_12_MONTHS]: AnalyticsBucket.MONTH,
   [AnalyticsRange.ALL_TIME]: AnalyticsBucket.MONTH,
 };
 
@@ -58,6 +59,18 @@ export function resolveWindow(
 
   if (range === AnalyticsRange.ALL_TIME) {
     return { range, from: null, to, bucket, previous: null };
+  }
+
+  if (range === AnalyticsRange.LAST_12_MONTHS) {
+    // From the 1st of the month 11 months ago (Accra = UTC), like the
+    // customer Spending page's `12m`.
+    const from = new Date(
+      Date.UTC(to.getUTCFullYear(), to.getUTCMonth() - 11, 1),
+    );
+    const prevFrom = new Date(
+      Date.UTC(to.getUTCFullYear(), to.getUTCMonth() - 23, 1),
+    );
+    return { range, from, to, bucket, previous: { from: prevFrom, to: from } };
   }
 
   const days = RANGE_DAYS[range] ?? 30;

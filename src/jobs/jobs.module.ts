@@ -9,6 +9,8 @@ import { JobAttachment } from './entities/job-attachment.entity';
 import { ServiceEntity } from '@services/entities/service.entity';
 import { User } from '@users/entities/user.entity';
 import { PaymentsModule } from '../payments/payments.module';
+import { ThrottlingModule } from '@common/throttling/throttling.module';
+import { CustomerAnalyticsThrottlerGuard } from '@common/throttling/customer-throttler.guards';
 
 @Module({
   imports: [
@@ -21,9 +23,11 @@ import { PaymentsModule } from '../payments/payments.module';
       User,
     ]),
     PaymentsModule,
+    // B7a: `GET /jobs/mine/summary` is rate limited per user.
+    ThrottlingModule,
   ],
   controllers: [JobsController],
-  providers: [JobsService],
+  providers: [JobsService, CustomerAnalyticsThrottlerGuard],
   exports: [JobsService],
 })
 export class JobsModule {}

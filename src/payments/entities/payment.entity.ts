@@ -11,6 +11,7 @@ import { Job } from '@jobs/entities/job.entity';
 import { User } from '@users/entities/user.entity';
 import { ArtisanProfile } from '@users/entities/artisan-profile.entity';
 import { PaymentStatus } from '@common/types/enums';
+import type { PayoutHoldReason } from '../payout-hold';
 
 @Entity('payments')
 export class Payment {
@@ -118,6 +119,57 @@ export class Payment {
 
   @Column({ name: 'fraud_flagged_by_id', type: 'int', nullable: true })
   fraudFlaggedById?: number | null;
+
+  /**
+   * Payout name check: why the payout is held (`PayoutHoldReason`), set only
+   * while the payment is PENDING_TRANSFER; null when there is no hold, or when
+   * the hold is the older "no payout method" case. Cleared when a transfer
+   * starts.
+   */
+  @Column({
+    name: 'payout_hold_reason',
+    type: 'varchar',
+    length: 40,
+    nullable: true,
+  })
+  payoutHoldReason?: PayoutHoldReason | null;
+
+  /** Checks in a row that couldn't be made (Paystack unavailable). */
+  @Column({ name: 'payout_check_attempts', type: 'int', default: 0 })
+  payoutCheckAttempts!: number;
+
+  /** When the scheduler retries a pending check; null when none is due. */
+  @Column({ name: 'payout_check_next_at', type: 'timestamptz', nullable: true })
+  payoutCheckNextAt?: Date | null;
+
+  /** When the artisan was told about a hold: once per payment. */
+  @Column({
+    name: 'payout_hold_notified_at',
+    type: 'timestamptz',
+    nullable: true,
+  })
+  payoutHoldNotifiedAt?: Date | null;
+
+  /**
+   * Saved payment methods: the customer ticked "Save this card for next
+   * time" on the last initialise. Only this (never webhook metadata alone)
+   * allows the card from a successful hosted charge to be saved.
+   */
+  @Column({ name: 'save_card_requested', type: 'boolean', default: false })
+  saveCardRequested!: boolean;
+
+  /**
+   * The reference whose money this payment holds (the hosted checkout's or a
+   * saved-method charge's). Set on the move to HELD; never refunded as a
+   * duplicate. Null on payments that were never paid.
+   */
+  @Column({
+    name: 'paid_reference',
+    type: 'varchar',
+    length: 100,
+    nullable: true,
+  })
+  paidReference!: string | null;
 
   @Column({ name: 'paid_at', type: 'timestamptz', nullable: true })
   paidAt?: Date;
