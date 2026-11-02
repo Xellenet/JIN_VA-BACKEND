@@ -177,9 +177,27 @@ async function seed() {
     },
   ];
 
-  const services = await serviceRepo.save(
-    serviceData.map((s) => serviceRepo.create(s)),
-  );
+  // The SeedServiceCatalogue migration already inserts these 8 services
+  // (without prices) on every database, so a plain save() would hit the
+  // unique name. Find each by name, in any case, and create only the missing
+  // ones. A found service gets the dev price only while it has none, so a
+  // price an admin set locally is kept; its name and description are left
+  // as they are.
+  const services: ServiceEntity[] = [];
+  for (const s of serviceData) {
+    const found = await serviceRepo
+      .createQueryBuilder('s')
+      .where('LOWER(s.name) = LOWER(:name)', { name: s.name })
+      .getOne();
+    if (!found) {
+      services.push(await serviceRepo.save(serviceRepo.create(s)));
+    } else if (found.price == null) {
+      found.price = s.price;
+      services.push(await serviceRepo.save(found));
+    } else {
+      services.push(found);
+    }
+  }
   const [
     plumbing,
     electrical,
@@ -189,7 +207,7 @@ async function seed() {
     tiling,
     cleaning,
   ] = services;
-  console.log(`✔  Created ${services.length} services`);
+  console.log(`✔  Ready: ${services.length} services`);
 
   const hashedPassword = await bcrypt.hash(SEED_PASSWORD, SALT_ROUNDS);
   const verifiedAt = new Date();
