@@ -338,6 +338,7 @@ describe('AccountPurgeService (C1.7/C1.8)', () => {
       expect(payload.lastname).toBe(VARIABLES.PURGED_LASTNAME);
 
       for (const field of [
+        'middlename',
         'username',
         'phoneNumber',
         'dateOfBirth',

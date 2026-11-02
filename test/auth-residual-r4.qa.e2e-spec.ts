@@ -79,6 +79,8 @@ const DECLARED_FIELDS = [
   'email',
   'username',
   'firstname',
+  // Sign-up form v2: additive, optional, null when not given.
+  'middlename',
   'lastname',
   'gender',
   'role',

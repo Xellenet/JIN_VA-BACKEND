@@ -14,6 +14,8 @@ import {
   IsSupportedPhoneNumber,
   NormalizePhoneNumber,
 } from '@common/validators/is-supported-phone-number.decorator';
+import { NormalizeMiddleName } from '@common/validators/middle-name.decorator';
+import { VARIABLES } from '@common/constants/variables.constants';
 import { INPUT_GENDERS } from './create-user.dto';
 
 /**
@@ -28,11 +30,17 @@ import { INPUT_GENDERS } from './create-user.dto';
  */
 export class UpdateMeDto {
   @ApiPropertyOptional({
-    example: 'johndoe',
-    description: 'Unique display username',
+    example: 'john.doe',
+    description:
+      'Display username: 3–30 letters, numbers, dots or underscores, no spaces. ' +
+      'Only a NEW value is checked, so an account whose stored username predates ' +
+      'the rule can still save other fields by leaving this out.',
   })
   @IsOptional()
   @IsString()
+  @Matches(VARIABLES.USERNAME_REGEX, {
+    message: VALIDATION_MESSAGES.USERNAME_INVALID,
+  })
   username?: string;
 
   @ApiPropertyOptional({
@@ -43,6 +51,20 @@ export class UpdateMeDto {
   @IsString()
   @MaxLength(15, { message: VALIDATION_MESSAGES.FIRSTNAME_MAX_LENGTH })
   firstname?: string;
+
+  @ApiPropertyOptional({
+    example: 'Kwame',
+    description:
+      'Middle name (max 15 chars). Trimmed; send "" or null to clear it.',
+    nullable: true,
+  })
+  @NormalizeMiddleName()
+  @IsOptional()
+  @IsString()
+  @MaxLength(VARIABLES.NAME_MAX_LENGTH, {
+    message: VALIDATION_MESSAGES.MIDDLENAME_MAX_LENGTH,
+  })
+  middlename?: string | null;
 
   @ApiPropertyOptional({
     example: 'Doe',

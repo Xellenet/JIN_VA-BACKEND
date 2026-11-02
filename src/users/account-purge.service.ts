@@ -223,6 +223,7 @@ export class AccountPurgeService {
       password: null,
       firstname: VARIABLES.PURGED_FIRSTNAME,
       lastname: VARIABLES.PURGED_LASTNAME,
+      middlename: null,
       username: null,
       phoneNumber: null,
       nationalId: null,

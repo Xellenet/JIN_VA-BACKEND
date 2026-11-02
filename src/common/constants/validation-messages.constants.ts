@@ -4,9 +4,12 @@ export const VALIDATION_MESSAGES = {
   PASSWORD_WEAK:
     'Password must be at least 8 characters long and contain a mix of letters, numbers, and symbols',
   USERNAME_REQUIRED: 'Username is required',
+  USERNAME_INVALID:
+    'Username must be 3 to 30 letters, numbers, dots or underscores, with no spaces, not starting or ending with a dot and no two dots in a row.',
   DATE_OF_BIRTH_INVALID: 'Date of Birth must be a valid ISO date string',
   FIRSTNAME_MAX_LENGTH: 'First name cannot be more than 15 characters.',
   LASTNAME_MAX_LENGTH: 'Last name cannot be more than 15 characters.',
+  MIDDLENAME_MAX_LENGTH: 'Middle name cannot be more than 15 characters.',
   /**
    * PH7: developer-facing text. Users see the frontend's per-country copy
    * ("Enter a valid Ghana number, like 024 123 4567"), not this (V6).

@@ -1202,6 +1202,7 @@ export class AuthService {
     const createUserDto = plainToInstance(CreateUserDto, {
       email: pending.email,
       firstname: dto.firstname.trim(),
+      middlename: dto.middlename ?? null,
       lastname: dto.lastname.trim(),
       phoneNumber: dto.phoneNumber,
       gender: dto.gender,

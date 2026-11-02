@@ -65,6 +65,15 @@ export class UserResponseDto {
   @Expose()
   firstname: string;
 
+  @ApiProperty({
+    example: 'Kwame',
+    description: 'Optional middle name; null when not given.',
+    nullable: true,
+    type: String,
+  })
+  @Expose()
+  middlename: string | null;
+
   @ApiProperty({ example: 'Doe', description: 'User last name' })
   @Expose()
   lastname: string;
