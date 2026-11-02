@@ -128,7 +128,7 @@ export class VerificationService {
     };
   }
 
-  async getMyVerification(userId: number) {
+  async getMyVerification(userId: number, opts: { nullIfNone?: boolean } = {}) {
     const profile = await this.profileRepo.findOne({
       where: { user: { id: userId } },
     });
@@ -139,8 +139,11 @@ export class VerificationService {
       relations: ['artisanProfile', 'reviewedBy'],
       order: { createdAt: 'DESC' },
     });
-    if (!verification)
+    if (!verification) {
+      if (opts.nullIfNone)
+        return { message: 'No verification submission yet.', data: null };
       throw new NotFoundException('No verification submission found.');
+    }
 
     return {
       message: 'Verification record retrieved.',

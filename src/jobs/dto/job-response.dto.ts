@@ -194,6 +194,14 @@ export class JobResponseDto {
   completionRequestedAt?: Date;
 
   @ApiPropertyOptional({
+    example: true,
+    description:
+      'Artisan fixes (B4): only for an ARTISAN caller — whether they have applied to this job (any application status). Absent for customers and admins.',
+  })
+  @Expose()
+  hasApplied?: boolean;
+
+  @ApiPropertyOptional({
     type: () => [JobAttachmentDto],
     description:
       'Populated on GET /jobs/:id and job creation; omitted on list endpoints for performance.',

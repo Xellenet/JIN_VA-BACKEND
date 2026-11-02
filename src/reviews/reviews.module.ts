@@ -9,6 +9,9 @@ import { ReviewModerationAction } from './entities/review-moderation-action.enti
 import { ArtisanProfile } from '@users/entities/artisan-profile.entity';
 import { User } from '@users/entities/user.entity';
 import { Job } from '@jobs/entities/job.entity';
+import { ThrottlingModule } from '@common/throttling/throttling.module';
+import { ArtisanInsightsThrottlerGuard } from '@common/throttling/artisan-throttler.guards';
+import { ReviewSummaryService } from './review-summary.service';
 
 @Module({
   imports: [
@@ -20,9 +23,16 @@ import { Job } from '@jobs/entities/job.entity';
       User,
       Job,
     ]),
+    // Artisan fixes: B7 `GET /reviews/me/summary` is rate-limited per user.
+    ThrottlingModule,
   ],
   controllers: [ReviewsController],
-  providers: [ReviewsService, PlatformRatingCacheService],
+  providers: [
+    ReviewsService,
+    PlatformRatingCacheService,
+    ReviewSummaryService,
+    ArtisanInsightsThrottlerGuard,
+  ],
   exports: [ReviewsService],
 })
 export class ReviewsModule {}

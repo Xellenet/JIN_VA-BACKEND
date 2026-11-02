@@ -398,6 +398,44 @@ describe('MessagesService', () => {
       );
     });
 
+    describe('markRead with upToMessageId (M1)', () => {
+      const updateQb = () => {
+        const qb = {
+          update: jest.fn().mockReturnThis(),
+          set: jest.fn().mockReturnThis(),
+          where: jest.fn().mockReturnThis(),
+          andWhere: jest.fn().mockReturnThis(),
+          execute: jest.fn().mockResolvedValue({ affected: 1 }),
+        };
+        messagesRepo.createQueryBuilder.mockReturnValue(qb);
+        conversationsRepo.findOne.mockResolvedValueOnce({
+          id: 7,
+          participantA: customer,
+          participantB: artisan,
+        });
+        return qb;
+      };
+
+      it('without the bound, behaves exactly as before', async () => {
+        const qb = updateQb();
+        await service.markRead(customer.id, 7);
+        expect(qb.where).toHaveBeenCalledWith(
+          'conversation_id = :conversationId AND sender_id != :userId AND is_read = false',
+          { conversationId: 7, userId: customer.id },
+        );
+        expect(qb.andWhere).not.toHaveBeenCalled();
+      });
+
+      it('with the bound, only marks messages up to that id', async () => {
+        const qb = updateQb();
+        await service.markRead(customer.id, 7, 123);
+        expect(qb.andWhere).toHaveBeenCalledWith('id <= :upToMessageId', {
+          upToMessageId: 123,
+        });
+        expect(qb.execute).toHaveBeenCalledTimes(1);
+      });
+    });
+
     it('404s on an unknown conversation', async () => {
       conversationsRepo.findOne.mockResolvedValueOnce(null);
 

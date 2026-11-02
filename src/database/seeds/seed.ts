@@ -1,4 +1,5 @@
 import { DataSource } from 'typeorm';
+import { formatBookingDate } from '../../common/utils/booking-date.util';
 import { config } from 'dotenv';
 import { SnakeNamingStrategy } from 'typeorm-naming-strategies';
 import * as bcrypt from 'bcrypt';
@@ -1297,37 +1298,37 @@ async function seed() {
       user: yaw,
       type: NotificationType.BOOKING_RECEIVED,
       title: 'New Booking Request',
-      body: 'Ama Mensah has requested a booking with you on Monday 7 July 2026 at 08:00.',
+      body: `Ama Mensah has requested a booking with you on ${formatBookingDate('2026-07-07')} at 08:00.`,
     },
     {
       user: akua,
       type: NotificationType.BOOKING_RECEIVED,
       title: 'New Booking Request',
-      body: 'Kofi Asante has requested a booking with you on Thursday 10 July 2026 at 13:00.',
+      body: `Kofi Asante has requested a booking with you on ${formatBookingDate('2026-07-10')} at 13:00.`,
     },
     {
       user: ama,
       type: NotificationType.BOOKING_CONFIRMED,
       title: 'Booking Confirmed',
-      body: 'Your booking with Yaw Osei on Monday 7 July 2026 at 08:00 has been confirmed.',
+      body: `Your booking with Yaw Osei on ${formatBookingDate('2026-07-07')} at 08:00 has been confirmed.`,
     },
     {
       user: kofi,
       type: NotificationType.BOOKING_CONFIRMED,
       title: 'Booking Confirmed',
-      body: 'Your booking with Akua Frimpong on Thursday 10 July 2026 at 13:00 has been confirmed.',
+      body: `Your booking with Akua Frimpong on ${formatBookingDate('2026-07-10')} at 13:00 has been confirmed.`,
     },
     {
       user: kwame,
       type: NotificationType.BOOKING_DECLINED,
       title: 'Booking Declined',
-      body: 'Kweku Amoah has declined your booking request for 15 July 2026. You may book another artisan.',
+      body: `Kweku Amoah has declined your booking request for ${formatBookingDate('2026-07-15')}. You may book another artisan.`,
     },
     {
       user: ama,
       type: NotificationType.BOOKING_CANCELLED,
       title: 'Booking Cancelled',
-      body: 'Your booking with Adwoa Ansah scheduled for 25 June 2026 has been cancelled.',
+      body: `Your booking with Adwoa Ansah scheduled for ${formatBookingDate('2026-06-25')} has been cancelled.`,
     },
     {
       user: yaw,

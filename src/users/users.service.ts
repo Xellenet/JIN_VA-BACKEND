@@ -11,7 +11,8 @@ import { UpdateMeDto } from './dto/update-me.dto';
 import { UserResponseDto } from './dto/user-response.dto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { User } from './entities/user.entity';
-import { EntityManager, In, IsNull, Not, Raw, Repository } from 'typeorm';
+import { EntityManager, In, IsNull, Like, Not, Raw, Repository } from 'typeorm';
+import { resolveOwnAvatarFilename } from '../uploads/avatar-path.util';
 import { normalizeEmail } from '@common/utils/email.util';
 import { UserAlreadyExists } from '@common/exceptions/user-already-exists.exception';
 import { ERROR_MESSAGES } from '@common/constants/error-messages.constants';
@@ -508,6 +509,84 @@ export class UsersService {
         excludeExtraneousValues: true,
       }),
     };
+  }
+
+  /**
+   * B1: clears the caller's profile photo. Idempotent: with no photo it just
+   * returns the profile. Storage clean-up and the security event are the
+   * controller's job, using the returned `previous` value (the stored path,
+   * which is never logged).
+   *
+   * SEC-5: `deleteStoredFile` is true only when the stored value is one of
+   * our own avatar files and no other account (soft-deleted ones included)
+   * references the same file. A `profilePicture` is public and, on older
+   * accounts, may have been set as free text, so a path alone does not prove
+   * the caller uploaded that file; a file another user still shows is never
+   * deleted on this caller's behalf.
+   *
+   * @returns the profile with `profilePicture: null`, what was stored, and
+   *   whether the stored file may be deleted from storage.
+   */
+  async clearAvatar(userId: number): Promise<{
+    previous: string | null;
+    deleteStoredFile: boolean;
+    result: { message: string; data: UserResponseDto };
+  }> {
+    const user = await this.usersRepository.findOne({
+      where: { id: userId },
+      relations: ['addresses'],
+    });
+    if (!user) {
+      throw new NotFoundException(`User with ID ${userId} not found`);
+    }
+    const previous = user.profilePicture ? user.profilePicture : null;
+    const deleteStoredFile =
+      previous !== null && !(await this.isAvatarFileShared(userId, previous));
+    let saved: User = user;
+    if (previous !== null) {
+      // `null` is what the column holds for "no photo"; the entity type
+      // predates nullable typing.
+      user.profilePicture = null as unknown as string;
+      saved = await this.usersRepository.save(user);
+      this.logger.log(`User ${userId} removed their avatar`);
+    }
+    return {
+      previous,
+      deleteStoredFile,
+      result: {
+        message: SUCCESS_MESSAGES.USER.AVATAR_REMOVED,
+        data: await this.withOwnNationalId(
+          plainToInstance(UserResponseDto, saved, {
+            excludeExtraneousValues: true,
+          }),
+        ),
+      },
+    };
+  }
+
+  /**
+   * SEC-5: whether `stored` is not one of our avatar files (so there is
+   * nothing to delete), or names a file that another account still
+   * references, in any of the forms an avatar URL can take (local path or a
+   * public storage base). Either way the caller must not delete it.
+   */
+  private async isAvatarFileShared(
+    userId: number,
+    stored: string,
+  ): Promise<boolean> {
+    const filename = resolveOwnAvatarFilename(stored);
+    if (!filename) return true;
+    // The basename is limited to `[A-Za-z0-9._-]`, so `_` is the only LIKE
+    // wildcard it can hold; over-matching is harmless because every
+    // candidate is re-checked exactly below.
+    const candidates = await this.usersRepository.find({
+      select: { id: true, profilePicture: true },
+      where: { id: Not(userId), profilePicture: Like(`%/${filename}`) },
+      withDeleted: true,
+    });
+    return (candidates ?? []).some(
+      (other) => resolveOwnAvatarFilename(other.profilePicture) === filename,
+    );
   }
 
   async findUserById(id: number): Promise<User | null> {

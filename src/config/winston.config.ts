@@ -1,6 +1,19 @@
 import * as winston from 'winston';
+import { redactLogInfo } from '@common/utils/redact.util';
+
+/**
+ * SEC-31: replaces the values of sensitive keys (passwords, codes, emails,
+ * phone numbers, card and payout details, authorization data) with
+ * `"[redacted]"` at any depth of a log line's metadata, before any transport
+ * formats it.
+ */
+export const redactFormat = winston.format(
+  (info) =>
+    redactLogInfo(info as unknown as Record<string, unknown>) as typeof info,
+);
 
 export const winstonConfig = {
+  format: redactFormat(),
   transports: [
     process.env.NODE_ENV === 'production'
       ? new winston.transports.Console({

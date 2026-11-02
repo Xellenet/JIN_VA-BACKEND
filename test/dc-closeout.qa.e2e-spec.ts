@@ -81,6 +81,12 @@ describe('admin-disputes-closeout — QA verification (e2e)', () => {
   const paystack = {
     createRefund: jest.fn(),
     initiateTransfer: jest.fn(),
+    // Payout name check: Paystack names the account as saved, so a release
+    // goes on to the transfer.
+    resolveAccount: jest.fn().mockResolvedValue({
+      status: 'resolved',
+      accountName: 'KWAME ADJEI',
+    }),
     verifyTransaction: jest.fn(),
     initializeTransaction: jest.fn(),
     verifyWebhookSignature: jest.fn().mockReturnValue(true),
@@ -284,6 +290,10 @@ describe('admin-disputes-closeout — QA verification (e2e)', () => {
         // Present so a RELEASE verdict reaches the transfer call rather than
         // short-circuiting to PENDING_TRANSFER for a missing payout method.
         paystackRecipientCode: `RCP_qa_dc_${uniq}`,
+        payoutAccountName: 'Kwame Adjei',
+        payoutAccountNumber: '0240000000',
+        payoutBankCode: 'MTN',
+        payoutAccountNameVerified: true,
       }),
     );
     createdProfileIds.push(artisanProfile.id);

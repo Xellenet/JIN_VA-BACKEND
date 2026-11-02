@@ -23,6 +23,7 @@ import { JobAttachment } from './entities/job-attachment.entity';
 import { CreateJobDto } from './dto/create-job.dto';
 import { UpdateJobDto } from './dto/update-job.dto';
 import { GetJobsQueryDto } from './dto/get-jobs-query.dto';
+import { GetMyJobsQueryDto } from './dto/get-my-jobs-query.dto';
 import {
   JobAttachmentDto,
   JobResponseDto,
@@ -41,6 +42,7 @@ import {
 import { VARIABLES } from '@common/constants/variables.constants';
 import { SUCCESS_MESSAGES } from '@common/constants/success-messages.constants';
 import { PaymentsService } from '../payments/payments.service';
+import { containsPattern } from '../payments/like-escape.util';
 import {
   APP_EVENTS,
   JobApplicationAcceptedPayload,
@@ -78,6 +80,18 @@ type JobList = {
   pagination: Pagination;
 };
 type JobItem = { message: string; data: JobResponseDto };
+
+/** B7a: account-wide job counts by status and by Overview stage. */
+export interface JobSummary {
+  byStatus: Record<Status, number>;
+  byStage: {
+    open: number;
+    in_progress: number;
+    completed: number;
+    closed: number;
+  };
+  total: number;
+}
 type AppItem = { message: string; data: ApplicationResponseDto };
 type AppList = { message: string; data: ApplicationResponseDto[] };
 
@@ -272,13 +286,37 @@ export class JobsService {
       .take(limit)
       .getMany();
 
+    const data = plainToInstance(JobResponseDto, jobs, {
+      excludeExtraneousValues: true,
+    });
+    await this.attachHasApplied(data, viewer);
     return {
       message: SUCCESS_MESSAGES.JOB.ALL_RETRIEVED,
-      data: plainToInstance(JobResponseDto, jobs, {
-        excludeExtraneousValues: true,
-      }),
+      data,
       pagination: this.paginate(total, page, limit),
     };
+  }
+
+  /**
+   * Artisan fixes (B4): sets `hasApplied` on each job for an ARTISAN caller,
+   * from one query bound to the caller's own id. Other roles get no field.
+   */
+  private async attachHasApplied(
+    jobs: JobResponseDto[],
+    viewer: JobViewer,
+  ): Promise<void> {
+    if (viewer.role !== Role.ARTISAN || jobs.length === 0) return;
+    const rows: Array<{ jobId: number | string }> =
+      await this.applicationsRepository
+        .createQueryBuilder('a')
+        .select('a.job_id', 'jobId')
+        .where('a.artisan_id = :me', { me: viewer.id })
+        .andWhere('a.job_id IN (:...jobIds)', {
+          jobIds: jobs.map((j) => j.id),
+        })
+        .getRawMany();
+    const applied = new Set(rows.map((r) => Number(r.jobId)));
+    for (const job of jobs) job.hasApplied = applied.has(Number(job.id));
   }
 
   /**
@@ -288,12 +326,23 @@ export class JobsService {
    * @param customerId - Authenticated caller's user ID.
    * @param query      - Optional filters + pagination.
    */
-  async findMine(customerId: number, query: GetJobsQueryDto): Promise<JobList> {
-    const { page = 1, limit = 10 } = query;
+  async findMine(
+    customerId: number,
+    query: GetMyJobsQueryDto,
+  ): Promise<JobList> {
+    const { page = 1, limit = 10, status, ...filters } = query;
 
     const qb = this.buildJobsQb();
     qb.where('job.customer = :customerId', { customerId });
-    this.applyJobFilters(qb, query);
+    // B7b: a stage is several statuses. One status keeps today's `=`.
+    if (status?.length === 1) {
+      qb.andWhere('job.status = :status', { status: status[0] });
+    } else if (status && status.length > 1) {
+      qb.andWhere('job.status IN (:...statuses)', { statuses: status });
+    }
+    this.applyJobFilters(qb, filters);
+    // Stable pages when two jobs share a createdAt (E-1.6).
+    qb.addOrderBy('job.id', 'DESC');
 
     const total = await qb.getCount();
     const jobs = await qb
@@ -307,6 +356,47 @@ export class JobsService {
         excludeExtraneousValues: true,
       }),
       pagination: this.paginate(total, page, limit),
+    };
+  }
+
+  /**
+   * Customer experience v2 (B7a): account-wide job counts for the Overview
+   * stage filters, so the header sentence and stage stops never depend on
+   * which page of jobs happened to load.
+   *
+   * One grouped query scoped to the caller, excluding deleted jobs. Every
+   * `Status` key is always present.
+   */
+  async getMySummary(customerId: number): Promise<{
+    message: string;
+    data: JobSummary;
+  }> {
+    const rows: Array<{ status: Status; count: string | number }> =
+      await this.jobsRepository
+        .createQueryBuilder('job')
+        .select('job.status', 'status')
+        .addSelect('COUNT(*)', 'count')
+        .where('job.customer_id = :me', { me: customerId })
+        .andWhere('job.deletedAt IS NULL')
+        .groupBy('job.status')
+        .getRawMany();
+
+    const byStatus = Object.fromEntries(
+      Object.values(Status).map((s) => [s, 0]),
+    ) as Record<Status, number>;
+    for (const row of rows) {
+      if (row.status in byStatus) byStatus[row.status] = Number(row.count);
+    }
+    const byStage = {
+      open: byStatus.OPEN,
+      in_progress: byStatus.PENDING + byStatus.IN_PROGRESS,
+      completed: byStatus.COMPLETED,
+      closed: byStatus.CANCELLED + byStatus.EXPIRED,
+    };
+    const total = Object.values(byStatus).reduce((a, b) => a + b, 0);
+    return {
+      message: 'Job summary retrieved',
+      data: { byStatus, byStage, total },
     };
   }
 
@@ -327,9 +417,11 @@ export class JobsService {
     if (!(await this.canViewJob(job, viewer))) {
       throw new NotFoundException(`Job with id ${id} not found.`);
     }
+    const data = await this.loadJobDto(id, true);
+    await this.attachHasApplied([data], viewer);
     return {
       message: SUCCESS_MESSAGES.JOB.RETRIEVED,
-      data: await this.loadJobDto(id, true),
+      data,
     };
   }
 
@@ -1077,24 +1169,28 @@ export class JobsService {
   // ─── Private helpers ─────────────────────────────────────────────────────────
 
   private buildJobsQb() {
-    return this.jobsRepository
-      .createQueryBuilder('job')
-      .leftJoinAndSelect('job.customer', 'customer')
-      .leftJoinAndSelect('job.service', 'service')
-      .orderBy('job.createdAt', 'DESC');
+    return (
+      this.jobsRepository
+        .createQueryBuilder('job')
+        .leftJoinAndSelect('job.customer', 'customer')
+        .leftJoinAndSelect('job.service', 'service')
+        // The list needs it too: artisans' actions depend on who was accepted.
+        .leftJoinAndSelect('job.acceptedArtisan', 'acceptedArtisan')
+        .orderBy('job.createdAt', 'DESC')
+    );
   }
 
   private applyJobFilters(
     qb: ReturnType<typeof this.buildJobsQb>,
-    query: GetJobsQueryDto,
+    query: Pick<GetJobsQueryDto, 'status' | 'serviceId' | 'location'>,
   ) {
     if (query.status)
       qb.andWhere('job.status = :status', { status: query.status });
     if (query.serviceId)
       qb.andWhere('job.service = :serviceId', { serviceId: query.serviceId });
     if (query.location) {
-      qb.andWhere('LOWER(job.location) LIKE :loc', {
-        loc: `%${query.location.toLowerCase()}%`,
+      qb.andWhere("LOWER(job.location) LIKE :loc ESCAPE '\\'", {
+        loc: containsPattern(query.location.toLowerCase()),
       });
     }
   }

@@ -5,6 +5,7 @@ import { Favourite } from './entities/favourite.entity';
 import { ArtisanProfile } from '@users/entities/artisan-profile.entity';
 import { Job } from '@jobs/entities/job.entity';
 import { Status } from '@common/types/enums';
+import { AvailabilityService } from '../availability/availability.service';
 
 describe('FavouritesService', () => {
   let service: FavouritesService;
@@ -50,8 +51,16 @@ describe('FavouritesService', () => {
     createQueryBuilder: jest.fn().mockReturnValue(mockQb),
   };
 
+  const availabilitySummary = { state: 'available_today' };
+  const mockAvailabilityService = {
+    describeForClients: jest.fn(),
+  };
+
   beforeEach(async () => {
     jest.clearAllMocks();
+    mockAvailabilityService.describeForClients.mockResolvedValue(
+      new Map([[7, { summary: availabilitySummary }]]),
+    );
     mockFavouritesRepo.createQueryBuilder.mockReturnValue(mockQb);
     mockJobsRepo.createQueryBuilder.mockReturnValue(mockQb);
     mockQb.getManyAndCount.mockResolvedValue([[favouriteRow], 1]);
@@ -69,10 +78,20 @@ describe('FavouritesService', () => {
           useValue: mockArtisanProfileRepo,
         },
         { provide: getRepositoryToken(Job), useValue: mockJobsRepo },
+        { provide: AvailabilityService, useValue: mockAvailabilityService },
       ],
     }).compile();
 
     service = module.get(FavouritesService);
+  });
+
+  it('attaches the client-facing availability, batched for the page', async () => {
+    const result = await service.findAll(1, {});
+    expect(mockAvailabilityService.describeForClients).toHaveBeenCalledTimes(1);
+    expect(mockAvailabilityService.describeForClients).toHaveBeenCalledWith([
+      favouriteRow.artisan,
+    ]);
+    expect(result.data[0].availability).toBe(availabilitySummary);
   });
 
   it('includes favouritedAt (the join row createdAt) and completedJobsCount per artisan', async () => {

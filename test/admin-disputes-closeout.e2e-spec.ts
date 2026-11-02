@@ -90,6 +90,12 @@ describe('admin-disputes-closeout — fix-round regressions (e2e)', () => {
   const paystack = {
     createRefund: jest.fn(),
     initiateTransfer: jest.fn(),
+    // Payout name check: Paystack names the account as saved, so a release
+    // goes on to the transfer.
+    resolveAccount: jest.fn().mockResolvedValue({
+      status: 'resolved',
+      accountName: 'KWAME ADJEI',
+    }),
     verifyTransaction: jest.fn(),
     initializeTransaction: jest.fn(),
     verifyWebhookSignature: jest.fn().mockReturnValue(true),
@@ -366,6 +372,10 @@ describe('admin-disputes-closeout — fix-round regressions (e2e)', () => {
         user: artisanUser,
         currency: 'GHS',
         paystackRecipientCode: `RCP_fix_dc_${uniq}`,
+        payoutAccountName: 'Kwame Adjei',
+        payoutAccountNumber: '0240000000',
+        payoutBankCode: 'MTN',
+        payoutAccountNameVerified: true,
       }),
     );
     createdProfileIds.push(artisanProfile.id);

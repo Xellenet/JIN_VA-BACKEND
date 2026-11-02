@@ -1,7 +1,11 @@
 import * as crypto from 'crypto';
 import { BadGatewayException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { PaystackService } from './paystack.service';
+import {
+  PaystackRequestError,
+  PaystackService,
+  maskForLog,
+} from './paystack.service';
 
 const SECRET = 'sk_test_unit';
 
@@ -21,6 +25,14 @@ describe('PaystackService', () => {
     ({
       ok,
       status: ok ? 200 : 400,
+      json: () => Promise.resolve(body),
+    }) as Response;
+
+  /** A reply with an explicit HTTP status. */
+  const replyWith = (status: number, body: unknown) =>
+    ({
+      ok: status < 400,
+      status,
       json: () => Promise.resolve(body),
     }) as Response;
 
@@ -120,6 +132,34 @@ describe('PaystackService', () => {
         currency: 'GHS',
         callback_url: 'https://app.example.com/pay/callback',
         metadata: { jobId: 1 },
+      });
+    });
+
+    it('B5c: sends no channels key at all when none are given (E-5.9)', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        reply({ status: true, message: 'ok', data: {} }),
+      );
+      await service.initializeTransaction({
+        email: 'kofi@example.com',
+        amountGhs: 10,
+        reference: 'jinva-1-2-4',
+      });
+      expect(Object.keys(lastCall().body as object)).not.toContain('channels');
+    });
+
+    it('B5c: sends the channels in the given order when provided', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        reply({ status: true, message: 'ok', data: {} }),
+      );
+      const channels = ['mobile_money', 'card', 'bank'];
+      await service.initializeTransaction({
+        email: 'kofi@example.com',
+        amountGhs: 10,
+        reference: 'jinva-1-2-5',
+        channels,
+      });
+      expect(lastCall().body).toMatchObject({
+        channels: ['mobile_money', 'card', 'bank'],
       });
     });
 
@@ -315,6 +355,138 @@ describe('PaystackService', () => {
           reason: 'x',
         }),
       ).rejects.toThrow('You cannot initiate third party payouts');
+    });
+  });
+  describe('resolveAccount', () => {
+    let logs: string[];
+    beforeEach(() => {
+      logs = [];
+      const capture = (m: unknown) => {
+        logs.push(String(m));
+      };
+      jest
+        .spyOn(
+          (service as unknown as { logger: { error: (m: unknown) => void } })
+            .logger,
+          'error',
+        )
+        .mockImplementation(capture);
+      jest
+        .spyOn(
+          (service as unknown as { logger: { warn: (m: unknown) => void } })
+            .logger,
+          'warn',
+        )
+        .mockImplementation(capture);
+    });
+
+    it('returns the account name and URL-encodes both parameters', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        reply({
+          status: true,
+          message: 'Account number resolved',
+          data: {
+            account_number: '0240000000',
+            account_name: ' KOFI  ASANTE ',
+          },
+        }),
+      );
+
+      await expect(
+        service.resolveAccount('0240000000', 'GH&01 0'),
+      ).resolves.toEqual({ status: 'resolved', accountName: 'KOFI ASANTE' });
+
+      const { url, init } = lastCall();
+      expect(url).toBe(
+        'https://api.paystack.co/bank/resolve?account_number=0240000000&bank_code=GH%2601%200',
+      );
+      expect(init.method).toBeUndefined();
+      expect(init.signal).toBeDefined();
+    });
+
+    it.each([400, 422])(
+      'maps a Paystack %i to unresolvable without logging the number',
+      async (status) => {
+        fetchSpy.mockResolvedValueOnce(
+          replyWith(status, {
+            status: false,
+            message:
+              'Could not resolve account name. Check parameters or try again.',
+          }),
+        );
+        await expect(
+          service.resolveAccount('0240000000', 'MTN'),
+        ).resolves.toEqual({ status: 'unresolvable' });
+        expect(logs.join('\n')).not.toContain('0240000000');
+        expect(logs.join('\n')).toContain('••••0000');
+      },
+    );
+
+    it.each([429, 500, 503, 200])(
+      'maps a Paystack %i refusal to unavailable',
+      async (status) => {
+        fetchSpy.mockResolvedValueOnce(
+          replyWith(status, { status: false, message: 'Rate limit exceeded' }),
+        );
+        await expect(
+          service.resolveAccount('0240000000', 'MTN'),
+        ).resolves.toEqual({ status: 'unavailable' });
+      },
+    );
+
+    it('maps a network error, a timeout and a non-JSON reply to unavailable', async () => {
+      fetchSpy.mockRejectedValueOnce(new TypeError('fetch failed'));
+      await expect(
+        service.resolveAccount('0240000000', 'MTN'),
+      ).resolves.toEqual({ status: 'unavailable' });
+
+      fetchSpy.mockRejectedValueOnce(
+        Object.assign(new Error('timed out'), { name: 'TimeoutError' }),
+      );
+      await expect(
+        service.resolveAccount('0240000000', 'VOD'),
+      ).resolves.toEqual({ status: 'unavailable' });
+
+      fetchSpy.mockResolvedValueOnce({
+        ok: false,
+        status: 502,
+        json: () => Promise.reject(new SyntaxError('Unexpected token <')),
+      } as unknown as Response);
+      await expect(
+        service.resolveAccount('0240000000', 'ATL'),
+      ).resolves.toEqual({ status: 'unavailable' });
+
+      expect(logs.join('\n')).not.toContain('0240000000');
+    });
+
+    it('treats a reply without a name as unavailable', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        reply({ status: true, message: 'ok', data: { account_name: '  ' } }),
+      );
+      await expect(
+        service.resolveAccount('0240000000', 'MTN'),
+      ).resolves.toEqual({ status: 'unavailable' });
+
+      fetchSpy.mockResolvedValueOnce(
+        reply({ status: true, message: 'ok', data: null }),
+      );
+      await expect(
+        service.resolveAccount('0240000000', 'MTN'),
+      ).resolves.toEqual({ status: 'unavailable' });
+    });
+  });
+
+  describe('PaystackRequestError and maskForLog', () => {
+    it('is still a 502 and carries the upstream status', () => {
+      const err = new PaystackRequestError('nope', 422);
+      expect(err.getStatus()).toBe(502);
+      expect(err.upstreamStatus).toBe(422);
+    });
+
+    it('keeps only the last 4 characters', () => {
+      expect(maskForLog('0240001234')).toBe('••••1234');
+      expect(maskForLog('123')).toBe('••••');
+      expect(maskForLog(null)).toBe('••••');
     });
   });
 });

@@ -197,6 +197,12 @@ export enum NotificationType {
   PAYMENT_REFUNDED = 'PAYMENT_REFUNDED',
   /** PR3: [Admin] an artisan payout failed and needs manual attention. */
   PAYMENT_TRANSFER_FAILED = 'PAYMENT_TRANSFER_FAILED',
+  /** Payout name check: [Artisan] a payout is held until they fix their payment details. */
+  PAYOUT_ON_HOLD = 'PAYOUT_ON_HOLD',
+  /** Idempotent payments: [Customer] a duplicate payment was refunded automatically. */
+  DUPLICATE_PAYMENT_REFUNDED = 'DUPLICATE_PAYMENT_REFUNDED',
+  /** Idempotent payments: [Admin] an automatic duplicate refund needs attention. */
+  PAYMENT_REFUND_NEEDS_ATTENTION = 'PAYMENT_REFUND_NEEDS_ATTENTION',
 
   /** PR3: [Admin] a new dispute was filed and awaits review. */
   DISPUTE_FILED = 'DISPUTE_FILED',
@@ -301,6 +307,8 @@ export enum AnalyticsRange {
   LAST_30_DAYS = '30d',
   LAST_90_DAYS = '90d',
   LAST_YEAR = '1y',
+  /** Artisan fixes (B3): calendar months, as on the customer Spending page. */
+  LAST_12_MONTHS = '12m',
   ALL_TIME = 'all',
 }
 

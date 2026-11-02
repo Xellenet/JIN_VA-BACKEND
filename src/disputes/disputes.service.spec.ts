@@ -36,6 +36,7 @@ import {
 import { APP_EVENTS } from '@common/events/app.events';
 import { formatGhs } from '@common/utils/currency.util';
 import type { User } from '@users/entities/user.entity';
+import { qbMock } from '../customer-insights/testing/qb-mock';
 
 /**
  * Covers the settled behaviour this module already had (PD4's both-parties
@@ -118,7 +119,7 @@ describe('DisputesService', () => {
     createQueryBuilder: jest.Mock;
   };
   let bookingRepo: { findOne: jest.Mock };
-  let jobRepo: { findOne: jest.Mock };
+  let jobRepo: { findOne: jest.Mock; createQueryBuilder: jest.Mock };
   let paymentRepo: { findOne: jest.Mock };
   let emitter: { emit: jest.Mock };
   let messagesService: { getConversationBetween: jest.Mock };
@@ -152,7 +153,10 @@ describe('DisputesService', () => {
       createQueryBuilder: jest.fn(() => updateQb),
     };
     bookingRepo = { findOne: jest.fn() };
-    jobRepo = { findOne: jest.fn().mockResolvedValue(null) };
+    jobRepo = {
+      findOne: jest.fn().mockResolvedValue(null),
+      createQueryBuilder: jest.fn(() => qbMock({ getRawMany: [] })),
+    };
     paymentRepo = { findOne: jest.fn().mockResolvedValue(null) };
     emitter = { emit: jest.fn() };
     messagesService = {
@@ -1566,6 +1570,58 @@ describe('DisputesService', () => {
       // dispute id and nothing else, so there is no parameter an admin could
       // substitute to reach an unrelated conversation.
       expect(service.getConversationForDispute).toHaveLength(1);
+    });
+  });
+
+  describe('party list (B5): jobId and responseDue', () => {
+    const disputes = [
+      {
+        id: 1,
+        bookingId: 77,
+        booking: { id: 77 },
+        raisedById: customerUser.id,
+        status: DisputeStatus.OPEN,
+        response: null,
+      },
+      {
+        id: 2,
+        bookingId: 78,
+        booking: { id: 78 },
+        raisedById: artisanUser.id,
+        status: DisputeStatus.OPEN,
+        response: null,
+      },
+    ] as unknown as Dispute[];
+
+    beforeEach(() => {
+      disputeRepo.createQueryBuilder.mockReturnValue(
+        qbMock({ getMany: disputes }),
+      );
+      jobRepo.createQueryBuilder.mockReturnValue(
+        qbMock({ getRawMany: [{ jobId: '501', bookingId: '77' }] }),
+      );
+    });
+
+    it('adds the linked job and whether my response is due', async () => {
+      const res = await service.getMyDisputes(artisanUser.id);
+      expect(res.data.map((d) => [d.id, d.jobId, d.responseDue])).toEqual([
+        [1, 501, true],
+        [2, null, false],
+      ]);
+    });
+
+    it('?responseDue=true keeps only those waiting on me', async () => {
+      const res = await service.getMyDisputes(artisanUser.id, {
+        responseDue: true,
+      });
+      expect(res.data.map((d) => d.id)).toEqual([1]);
+    });
+
+    it('skips the job lookup when there are no bookings', async () => {
+      disputeRepo.createQueryBuilder.mockReturnValue(qbMock({ getMany: [] }));
+      const res = await service.getMyDisputes(artisanUser.id);
+      expect(res.data).toEqual([]);
+      expect(jobRepo.createQueryBuilder).not.toHaveBeenCalled();
     });
   });
 

@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   HttpException,
   HttpStatus,
   InternalServerErrorException,
@@ -231,6 +232,37 @@ describe('AllExceptionsFilter', () => {
       );
 
       expect(body.meta.details).toBeUndefined();
+    });
+  });
+
+  describe('opt-in data on a 4xx (idempotent payments)', () => {
+    it('carries the resource the client needs to recover, as top-level data', () => {
+      const body = render(
+        new ConflictException({
+          errorCode: 'PAYMENT_ATTEMPT_ACTIVE',
+          message: 'A payment is waiting for approval on your phone.',
+          data: {
+            reference: 'jinva-ch-7-1',
+            kind: 'mobile_money',
+            when: new Date(0),
+          },
+        }),
+      );
+      expect(body.meta.error).toBe('PAYMENT_ATTEMPT_ACTIVE');
+      expect(body.data).toEqual({
+        reference: 'jinva-ch-7-1',
+        kind: 'mobile_money',
+        when: '1970-01-01T00:00:00.000Z',
+      });
+    });
+
+    it('is absent when not given, and dropped on a 5xx', () => {
+      expect(render(new ConflictException('x')).data).toBeUndefined();
+      expect(
+        render(
+          new InternalServerErrorException({ message: 'x', data: { a: 1 } }),
+        ).data,
+      ).toBeUndefined();
     });
   });
 

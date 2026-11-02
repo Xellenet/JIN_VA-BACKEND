@@ -25,6 +25,8 @@ import {
   NormalizePhoneNumber,
 } from '@common/validators/is-supported-phone-number.decorator';
 import { INPUT_GENDERS } from '@users/dto/create-user.dto';
+import { NormalizeMiddleName } from '@common/validators/middle-name.decorator';
+import { VARIABLES } from '@common/constants/variables.constants';
 
 /** Rejects whitespace-only strings, which `computeProfileCompleteness` trims to empty. */
 const NOT_BLANK = /\S/;
@@ -54,6 +56,19 @@ export class CompleteSocialSignupDto {
   @Matches(NOT_BLANK, { message: 'firstname should not be empty' })
   @MaxLength(15, { message: VALIDATION_MESSAGES.FIRSTNAME_MAX_LENGTH })
   firstname: string;
+
+  @ApiPropertyOptional({
+    example: 'Kwame',
+    description: 'Optional. Trimmed; blank is stored as null.',
+    nullable: true,
+  })
+  @NormalizeMiddleName()
+  @IsOptional()
+  @IsString()
+  @MaxLength(VARIABLES.NAME_MAX_LENGTH, {
+    message: VALIDATION_MESSAGES.MIDDLENAME_MAX_LENGTH,
+  })
+  middlename?: string | null;
 
   @ApiProperty({ example: 'Doe', description: 'Prefilled from Google.' })
   @IsString()

@@ -218,4 +218,15 @@ export class PartyDisputeResponseDto {
    * and the dispute is still OPEN or UNDER_REVIEW.
    */
   @Expose() @ApiProperty() canRespond!: boolean;
+
+  /**
+   * Artisan fixes (B5): the job linked to the dispute's booking, or `null`
+   * when no job exists for it.
+   */
+  @Expose()
+  @ApiProperty({ type: Number, nullable: true })
+  jobId!: number | null;
+
+  /** Artisan fixes (B5): same rule as `canRespond`, named for the list badge. */
+  @Expose() @ApiProperty() responseDue!: boolean;
 }

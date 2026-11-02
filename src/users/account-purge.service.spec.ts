@@ -338,6 +338,7 @@ describe('AccountPurgeService (C1.7/C1.8)', () => {
       expect(payload.lastname).toBe(VARIABLES.PURGED_LASTNAME);
 
       for (const field of [
+        'middlename',
         'username',
         'phoneNumber',
         'dateOfBirth',
@@ -383,6 +384,7 @@ describe('AccountPurgeService (C1.7/C1.8)', () => {
         'payoutType',
         'paystackRecipientCode',
         'payoutAccountName',
+        'payoutAccountNameVerified',
         'payoutAccountNumber',
         'payoutBankCode',
       ]) {
@@ -391,9 +393,27 @@ describe('AccountPurgeService (C1.7/C1.8)', () => {
       expect(profilePayload!.isProfileComplete).toBe(false);
     });
 
-    it('deletes the residual tokens, push devices and saved addresses', async () => {
+    it('deletes the residual tokens, push devices, saved addresses, payment settings, saved payment methods and security events', async () => {
       await runPurge();
-      expect(mockQueryBuilder.delete).toHaveBeenCalledTimes(3);
+      expect(mockQueryBuilder.delete).toHaveBeenCalledTimes(6);
+    });
+
+    // T-9 / SEC-37 (Customer Experience v2): both new tables are purged, by
+    // the raw `user_id` column like every other residual table.
+    it('deletes the customer payment settings and account security events', async () => {
+      await runPurge();
+
+      const deletedFrom = allArgs<{ name: string } | undefined>(
+        mockQueryBuilder.from,
+        0,
+      ).map((entity) => entity?.name);
+      expect(deletedFrom).toEqual(
+        expect.arrayContaining([
+          'CustomerPaymentSettings',
+          'CustomerPaymentMethod',
+          'AccountSecurityEvent',
+        ]),
+      );
     });
 
     /**
@@ -603,8 +623,11 @@ describe('AccountPurgeService (C1.7/C1.8)', () => {
       expect(touchedEntities).not.toContain('Job');
       expect(touchedEntities).not.toContain('Booking');
       expect(touchedEntities.sort()).toEqual([
+        'AccountSecurityEvent',
         'Address',
         'ArtisanProfile',
+        'CustomerPaymentMethod',
+        'CustomerPaymentSettings',
         'CustomerProfile',
         'DeviceToken',
         'UserToken',

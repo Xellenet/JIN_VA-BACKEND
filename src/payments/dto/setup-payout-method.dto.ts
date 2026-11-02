@@ -1,42 +1,28 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsIn, IsString, MinLength } from 'class-validator';
+import { ApiPropertyOptional } from '@nestjs/swagger';
+import { Transform } from 'class-transformer';
+import { IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { ResolvePayoutAccountDto } from './resolve-payout-account.dto';
 
-export class SetupPayoutMethodDto {
-  @ApiProperty({
-    enum: ['mobile_money', 'bank'],
+/**
+ * `POST /payments/payout-method`. The server looks the account name up
+ * itself and stores that name; `accountName` is only used when the lookup is
+ * unavailable, so it is optional here but required in that case (400).
+ */
+export class SetupPayoutMethodDto extends ResolvePayoutAccountDto {
+  @ApiPropertyOptional({
     description:
-      'mobile_money for MTN/Vodafone/AirtelTigo, bank for bank account',
+      'Full name on the account. Ignored when the server can look the name up; required when the lookup is unavailable.',
+    example: 'Kofi Asante',
   })
-  // QA PAY-13: IsEnum with an array printed "must be one of the following
-  // values: " with an empty list.
-  @IsIn(['mobile_money', 'bank'], {
-    message: 'type must be mobile_money or bank',
+  // A blank name is "no name typed", not a validation error.
+  @Transform(({ value }: { value: unknown }) => {
+    if (typeof value !== 'string') return value;
+    const name = value.replace(/\s+/g, ' ').trim();
+    return name === '' ? undefined : name;
   })
-  type!: 'mobile_money' | 'bank';
-
-  @ApiProperty({ description: 'Full name on the account' })
+  @IsOptional()
   @IsString()
   @MinLength(2)
-  accountName!: string;
-
-  @ApiProperty({
-    description:
-      'Phone number for mobile money (e.g. 0241234567), or bank account number',
-  })
-  @IsString()
-  @MinLength(8)
-  accountNumber!: string;
-
-  @ApiProperty({
-    description:
-      "Mobile money: 'MTN' | 'VOD' | 'ATL'. Bank: Paystack bank code (see Paystack /bank?country=ghana).",
-    examples: {
-      mtn: { value: 'MTN' },
-      vodafone: { value: 'VOD' },
-      airtel: { value: 'ATL' },
-    },
-  })
-  @IsString()
-  @MinLength(2)
-  bankCode!: string;
+  @MaxLength(200)
+  accountName?: string;
 }

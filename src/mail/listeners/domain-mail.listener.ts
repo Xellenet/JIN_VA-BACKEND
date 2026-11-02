@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { formatBookingDate } from '@common/utils/booking-date.util';
 import { OnEvent } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Not, Repository } from 'typeorm';
@@ -40,6 +41,7 @@ import type {
   PayoutReleasedPayload,
   PaymentRefundedPayload,
   PaymentTransferFailedPayload,
+  PayoutOnHoldPayload,
   DisputeFiledPayload,
   DisputeOutcomePayload,
 } from '@common/events/app.events';
@@ -205,7 +207,7 @@ export class DomainMailListener {
       await this.mailService.sendMail(user.email, APP_EVENTS.BOOKING_RECEIVED, {
         firstname: user.firstname,
         customerName: payload.customerName,
-        scheduledDate: payload.scheduledDate,
+        scheduledDate: formatBookingDate(payload.scheduledDate),
         bookingId: payload.bookingId,
         dashboardUrl: this.dashboardUrl,
         appName: this.appName,
@@ -238,7 +240,7 @@ export class DomainMailListener {
         {
           firstname: user.firstname,
           artisanName: payload.artisanName,
-          scheduledDate: payload.scheduledDate,
+          scheduledDate: formatBookingDate(payload.scheduledDate),
           bookingId: payload.bookingId,
           dashboardUrl: this.dashboardUrl,
           appName: this.appName,
@@ -268,7 +270,7 @@ export class DomainMailListener {
       await this.mailService.sendMail(user.email, APP_EVENTS.BOOKING_DECLINED, {
         firstname: user.firstname,
         artisanName: payload.artisanName,
-        scheduledDate: payload.scheduledDate,
+        scheduledDate: formatBookingDate(payload.scheduledDate),
         bookingId: payload.bookingId,
         dashboardUrl: this.dashboardUrl,
         appName: this.appName,
@@ -302,7 +304,7 @@ export class DomainMailListener {
         {
           firstname: user.firstname,
           customerName: payload.customerName,
-          scheduledDate: payload.scheduledDate,
+          scheduledDate: formatBookingDate(payload.scheduledDate),
           bookingId: payload.bookingId,
           appName: this.appName,
           year: this.year,
@@ -335,7 +337,7 @@ export class DomainMailListener {
         APP_EVENTS.BOOKING_COMPLETED,
         {
           firstname: user.firstname,
-          scheduledDate: payload.scheduledDate,
+          scheduledDate: formatBookingDate(payload.scheduledDate),
           bookingId: payload.bookingId,
           appName: this.appName,
           year: this.year,
@@ -363,7 +365,7 @@ export class DomainMailListener {
       if (!user) return;
       await this.mailService.sendMail(user.email, APP_EVENTS.BOOKING_EXPIRED, {
         firstname: user.firstname,
-        scheduledDate: payload.scheduledDate,
+        scheduledDate: formatBookingDate(payload.scheduledDate),
         bookingId: payload.bookingId,
         appName: this.appName,
         year: this.year,
@@ -391,7 +393,7 @@ export class DomainMailListener {
       await this.mailService.sendMail(user.email, APP_EVENTS.BOOKING_NO_SHOW, {
         firstname: user.firstname,
         flaggedByName: payload.flaggedByName,
-        scheduledDate: payload.scheduledDate,
+        scheduledDate: formatBookingDate(payload.scheduledDate),
         bookingId: payload.bookingId,
         appName: this.appName,
         year: this.year,
@@ -435,7 +437,7 @@ export class DomainMailListener {
           : APP_EVENTS.BOOKING_REMINDER_2H;
       await this.mailService.sendMail(user.email, eventKey, {
         firstname: user.firstname,
-        scheduledDate: payload.scheduledDate,
+        scheduledDate: formatBookingDate(payload.scheduledDate),
         startTime: payload.startTime.slice(0, 5),
         bookingId: payload.bookingId,
         hoursOut: payload.milestone === '24H' ? '24 hours' : '2 hours',
@@ -805,6 +807,30 @@ export class DomainMailListener {
           },
         ],
         ...this.jobLink(user.role, payload.jobId),
+      }),
+    );
+  }
+
+  /** Payout name check: once per payment, with the fix-it link. */
+  @OnEvent(APP_EVENTS.PAYOUT_ON_HOLD, { async: true })
+  async handlePayoutOnHold(payload: PayoutOnHoldPayload): Promise<void> {
+    const cause =
+      payload.reason === 'payout_account_not_found'
+        ? "We couldn't find your payout account."
+        : "The name on your payout account doesn't match.";
+    await this.notify(
+      payload.artisanUserId,
+      NotificationType.PAYOUT_ON_HOLD,
+      APP_EVENTS.PAYOUT_ON_HOLD,
+      () => ({
+        heading: 'Your payout is on hold',
+        paragraphs: [
+          `We couldn't send your payout for ${payload.jobTitle}. ${cause}`,
+          'Update your payment details to receive it.',
+        ],
+        details: [{ label: 'Job', value: payload.jobTitle }],
+        actionPath: '/dashboard/artisan/settings?tab=payments',
+        actionLabel: 'Update payment details',
       }),
     );
   }

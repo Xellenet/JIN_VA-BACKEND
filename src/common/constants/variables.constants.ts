@@ -3,6 +3,16 @@ export const VARIABLES = {
   SALT_OR_ROUNDS: 12,
   PASSWORD_REGEX:
     /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*])[A-Za-z\d!@#$%^&*]{8,128}$/,
+  /**
+   * Sign-up form v2: what a NEW username may look like (register, admin
+   * create, PATCH /users/me). 3–30 letters, numbers, dots and underscores; no
+   * spaces; not starting or ending with a dot; no two dots in a row. Applied
+   * to incoming values only — usernames stored before this rule stay valid for
+   * login and display, and are only checked again when their owner changes them.
+   */
+  USERNAME_REGEX: /^(?!\.)(?!.*\.\.)(?!.*\.$)[A-Za-z0-9._]{3,30}$/,
+  /** The `@MaxLength` shared by firstname, middlename and lastname. */
+  NAME_MAX_LENGTH: 15,
   TOKEN_EXAMPLE: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...',
   EMAIL_VERIFICATION_TOKEN_EXPIRES_IN_MINUTES: 7,
   PASSWORD_RESET_TOKEN_EXPIRES_IN_MINUTES: 60,

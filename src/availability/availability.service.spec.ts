@@ -330,6 +330,107 @@ describe('AvailabilityService', () => {
     });
   });
 
+  describe('describeForClients (what clients see)', () => {
+    // Monday 2 Nov 2026, 10:00 in Accra.
+    const monday10 = new Date('2026-11-02T10:00:00.000Z');
+    const slot = (
+      artisanProfileId: number,
+      dayOfWeek: number,
+      startTime: string,
+      endTime: string,
+    ) => ({ artisanProfileId, dayOfWeek, startTime, endTime, isActive: true });
+
+    beforeEach(() => {
+      jest.spyOn(service, 'now').mockReturnValue(monday10);
+    });
+
+    it('returns nothing, without querying, for an empty page', async () => {
+      const result = await service.describeForClients([]);
+      expect(result.size).toBe(0);
+      expect(slotRepo.find).not.toHaveBeenCalled();
+    });
+
+    it('loads slots, time off and bookings once for the whole page (no N+1)', async () => {
+      slotRepo.find.mockResolvedValue([
+        slot(1, 1, '08:00:00', '12:00:00'),
+        slot(1, 1, '13:00:00', '17:00:00'),
+        slot(2, 1, '08:00:00', '17:00:00'),
+      ]);
+      blockRepo.find.mockResolvedValue([
+        {
+          artisanProfileId: 2,
+          startDate: '2026-11-01',
+          endDate: '2026-11-12',
+          reason: 'Family wedding',
+        },
+      ]);
+      const result = await service.describeForClients([
+        { id: 1, availabilityStatus: AvailabilityStatus.AVAILABLE },
+        { id: 2, availabilityStatus: AvailabilityStatus.AVAILABLE },
+        { id: 3, availabilityStatus: AvailabilityStatus.BUSY },
+      ]);
+
+      expect(slotRepo.find).toHaveBeenCalledTimes(1);
+      expect(blockRepo.find).toHaveBeenCalledTimes(1);
+      expect(bookingRepo.find).toHaveBeenCalledTimes(1);
+      expect(slotRepo.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { artisanProfileId: In([1, 2, 3]), isActive: true },
+        }),
+      );
+
+      expect(result.get(1)).toMatchObject({
+        summary: {
+          state: 'available_today',
+          today: '2026-11-02',
+          todayHours: [
+            { startTime: '08:00', endTime: '12:00' },
+            { startTime: '13:00', endTime: '17:00' },
+          ],
+        },
+        weeklyHours: [
+          { dayOfWeek: 1, startTime: '08:00', endTime: '12:00' },
+          { dayOfWeek: 1, startTime: '13:00', endTime: '17:00' },
+        ],
+        upcomingTimeOff: [],
+      });
+      expect(result.get(2)?.summary).toMatchObject({
+        state: 'on_time_off',
+        onTimeOffUntil: '2026-11-12',
+      });
+      // The reason for time off is private to the artisan.
+      expect(result.get(2)?.upcomingTimeOff).toEqual([
+        { startDate: '2026-11-01', endDate: '2026-11-12' },
+      ]);
+      expect(result.get(3)?.summary.state).toBe('busy');
+    });
+
+    it('treats a day fully taken by bookings as not available', async () => {
+      slotRepo.find.mockResolvedValue([slot(1, 1, '08:00', '12:00')]);
+      bookingRepo.find.mockResolvedValue([
+        {
+          artisanProfile: { id: 1 },
+          scheduledDate: '2026-11-02',
+          startTime: '08:00:00',
+          endTime: '12:00:00',
+        },
+      ]);
+      const result = await service.describeForClients([
+        { id: 1, availabilityStatus: AvailabilityStatus.AVAILABLE },
+      ]);
+      expect(result.get(1)?.summary).toMatchObject({
+        state: 'next_available',
+        nextAvailableDate: '2026-11-09',
+      });
+    });
+
+    it("adds the summary to the artisan's own availability", async () => {
+      slotRepo.find.mockResolvedValue([slot(30, 1, '08:00', '17:00')]);
+      const result = await service.getMyAvailability(90);
+      expect(result.data.summary?.state).toBe('available_today');
+    });
+  });
+
   describe('getArtisanAvailability (public)', () => {
     it('404s for an unknown artisan profile', async () => {
       profileRepo.findOne.mockResolvedValue(null);
@@ -351,6 +452,7 @@ describe('AvailabilityService', () => {
     it('adds bookable windows for a requested date', async () => {
       slotRepo.find
         .mockResolvedValueOnce([]) // buildAvailabilityDto
+        .mockResolvedValueOnce([]) // describeForClients (summary)
         .mockResolvedValueOnce([{ startTime: '09:00', endTime: '12:00' }]);
       const result = await service.getArtisanAvailability(30, '2026-11-02');
       expect(result.data.date).toBe('2026-11-02');

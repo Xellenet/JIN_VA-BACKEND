@@ -6,10 +6,14 @@ import { SharedMediaService } from './shared-media.service';
 import { LocalStorageProvider } from './providers/local-storage.provider';
 import { S3StorageProvider } from './providers/s3-storage.provider';
 import { StorageProviderFactory } from './providers/storage-provider.factory';
+import { ThrottlingModule } from '@common/throttling/throttling.module';
+import { ProfileMediaWriteThrottlerGuard } from '@common/throttling/customer-throttler.guards';
 
 @Module({
+  imports: [ThrottlingModule],
   controllers: [UploadsController],
   providers: [
+    ProfileMediaWriteThrottlerGuard,
     UploadsService,
     KycMediaService,
     SharedMediaService,

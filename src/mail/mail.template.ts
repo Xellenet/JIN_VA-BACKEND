@@ -25,6 +25,7 @@ const ACTIVITY_SUBJECTS: Record<string, string> = {
   [APP_EVENTS.PAYOUT_RELEASED]: 'Your Payout Has Been Released',
   [APP_EVENTS.PAYMENT_REFUNDED]: 'Your Refund Has Been Issued',
   [APP_EVENTS.PAYMENT_TRANSFER_FAILED]: 'Payout Transfer Failed',
+  [APP_EVENTS.PAYOUT_ON_HOLD]: 'Your Payout Is On Hold',
   [APP_EVENTS.DISPUTE_FILED]: 'A Dispute Has Been Filed',
   [APP_EVENTS.DISPUTE_RESOLVED]: 'Your Dispute Has Been Resolved',
   [APP_EVENTS.DISPUTE_CLOSED]: 'Your Dispute Has Been Closed',

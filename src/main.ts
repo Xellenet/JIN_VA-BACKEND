@@ -54,6 +54,9 @@ async function bootstrap() {
     // Required for the browser to send/receive the HttpOnly refresh + session
     // cookies (S1/S2) cross-origin between the frontend and API domains.
     credentials: true,
+    // Idempotent payments: the browser may read whether a POST was a replay.
+    // (Request headers such as Idempotency-Key are reflected by default.)
+    exposedHeaders: ['Idempotency-Replayed'],
   });
 
   // Required for reading the HttpOnly refresh-token / session cookies (S1/S2).

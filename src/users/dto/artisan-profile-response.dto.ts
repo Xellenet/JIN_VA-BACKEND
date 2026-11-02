@@ -3,6 +3,60 @@ import { Expose, Transform, Type } from 'class-transformer';
 import { UserResponseDto } from './user-response.dto';
 import { ServiceResponseDto } from '@services/dto/service-response.dto';
 import { PayoutType } from '@common/types/enums';
+import { bankNameFor } from '../../payments/bank-list';
+
+/** Artisan fixes (B2/H11): the masked payout destination. */
+export interface PayoutDestination {
+  type: 'mobile_money' | 'bank';
+  label: string;
+  last4: string;
+  accountName: string | null;
+  /**
+   * True when `accountName` is the name Paystack's lookup returned, false
+   * when the artisan typed it (lookup unavailable), null for methods saved
+   * before the lookup existed.
+   */
+  accountNameVerified: boolean | null;
+}
+
+const MOBILE_MONEY_LABELS: Record<string, string> = {
+  MTN: 'MTN MoMo',
+  VOD: 'Telecel Cash',
+  ATL: 'AirtelTigo Money',
+};
+
+/**
+ * The payout destination as the artisan should see it ("MTN MoMo ••1234"):
+ * provider label and last four digits only, never the full number. `null`
+ * until a payout method is registered.
+ */
+export function payoutDestinationOf(profile: {
+  payoutType?: PayoutType | string | null;
+  payoutAccountNumber?: string | null;
+  payoutAccountName?: string | null;
+  payoutAccountNameVerified?: boolean | null;
+  payoutBankCode?: string | null;
+  paystackRecipientCode?: string | null;
+}): PayoutDestination | null {
+  const number = profile?.payoutAccountNumber?.replace(/\s+/g, '') ?? '';
+  if (!profile?.payoutType || !number) return null;
+  const code = (profile.payoutBankCode ?? '').trim();
+  const isMobile =
+    String(profile.payoutType) === String(PayoutType.MOBILE_MONEY);
+  const label = isMobile
+    ? (MOBILE_MONEY_LABELS[code.toUpperCase()] ?? 'Mobile money')
+    : (bankNameFor(code) ?? 'Bank account');
+  return {
+    type: isMobile ? 'mobile_money' : 'bank',
+    label,
+    last4: number.slice(-4),
+    accountName: profile.payoutAccountName?.trim() || null,
+    accountNameVerified:
+      typeof profile.payoutAccountNameVerified === 'boolean'
+        ? profile.payoutAccountNameVerified
+        : null,
+  };
+}
 
 /** Masks all but the last 4 characters of a payout account/phone number. */
 function maskPayoutAccountNumber(value?: string): string | undefined {
@@ -140,6 +194,25 @@ export class ArtisanProfileResponseDto {
   })
   @Expose()
   payoutBankCode?: string;
+
+  @ApiProperty({
+    required: false,
+    nullable: true,
+    example: {
+      type: 'mobile_money',
+      label: 'MTN MoMo',
+      last4: '1234',
+      accountName: 'Yaw Osei',
+      accountNameVerified: true,
+    },
+    description:
+      'Artisan fixes: masked payout destination (label and last 4 only); null when no payout method is set.',
+  })
+  @Expose()
+  @Transform(({ obj }: { obj: Parameters<typeof payoutDestinationOf>[0] }) =>
+    payoutDestinationOf(obj),
+  )
+  payoutDestination!: PayoutDestination | null;
 
   @ApiProperty({ type: [ServiceResponseDto], required: false })
   @Expose()

@@ -42,6 +42,13 @@ export class User {
   @Column()
   firstname: string;
 
+  /**
+   * Sign-up form v2: optional. NULL when not given (never ''). Short display
+   * names stay first + last; only legal-name contexts add it.
+   */
+  @Column({ type: 'varchar', nullable: true })
+  middlename: string | null;
+
   @Column()
   lastname: string;
 

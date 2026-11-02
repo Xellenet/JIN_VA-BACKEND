@@ -37,4 +37,47 @@ export const THROTTLER_NAMES = {
    * practically huntable.
    */
   DISPUTE_WRITE: 'dispute-write',
+  /**
+   * Customer Experience v2: the customer's read-only aggregates (job summary,
+   * overview rail, spending analytics, paginated payment history and its
+   * filter options). Each query is a handful of aggregates scoped to the
+   * caller, so the limit only stops a script from hammering them.
+   */
+  CUSTOMER_ANALYTICS: 'customer-analytics',
+  /** `GET /payments/history/export.csv`: a streamed export of up to 10,000 rows. */
+  CUSTOMER_EXPORT: 'customer-export',
+  /** `PATCH /users/me/payment-settings`. */
+  PAYMENT_SETTINGS_WRITE: 'payment-settings-write',
+  /**
+   * The profile-photo writes: `POST /users/me/avatar`, `POST /uploads/avatar`
+   * and `DELETE /users/me/avatar`. Each upload costs storage and processing.
+   */
+  PROFILE_MEDIA_WRITE: 'profile-media-write',
+  /** `GET /notifications/:id`. */
+  NOTIFICATION_READ: 'notification-read',
+  /**
+   * Artisan fixes: the artisan's read-only aggregates (overview, earnings
+   * statement, analytics, review summary) and the cached bank list.
+   */
+  ARTISAN_INSIGHTS: 'artisan-insights',
+  /** `GET /payments/my-earnings/export.csv`: a streamed export of up to 10,000 rows. */
+  ARTISAN_EXPORT: 'artisan-export',
+  /**
+   * `POST /payments/payout-method/resolve` and `POST /payments/payout-method`.
+   * Each call is a Paystack account name lookup, which reveals who owns a
+   * number, so the limit is low enough to make enumeration impractical.
+   */
+  PAYOUT_ACCOUNT_LOOKUP: 'payout-account-lookup',
+  /**
+   * Saved payment methods: `POST /users/me/payment-methods/resolve` and
+   * `POST /users/me/payment-methods/mobile-money`. Each is a name lookup, so
+   * the limit is as low as the payout lookup's.
+   */
+  PAYMENT_METHOD_LOOKUP: 'payment-method-lookup',
+  /** `PATCH .../payment-methods/:id/default` and `DELETE .../payment-methods/:id`. */
+  PAYMENT_METHODS_WRITE: 'payment-methods-write',
+  /** `POST /payments/:jobId/charge` and `POST /payments/charges/:reference/otp`. */
+  PAYMENT_CHARGE: 'payment-charge',
+  /** `GET /payments/charges/:reference/status` (polled while waiting). */
+  PAYMENT_CHARGE_STATUS: 'payment-charge-status',
 } as const;

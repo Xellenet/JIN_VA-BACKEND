@@ -4,13 +4,32 @@ import {
   Logger,
   NotFoundException,
   ServiceUnavailableException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { DataSource, EntityManager, In, Repository } from 'typeorm';
+import {
+  DataSource,
+  EntityManager,
+  In,
+  LessThanOrEqual,
+  Repository,
+} from 'typeorm';
 import { Payment } from './entities/payment.entity';
-import { PaystackService } from './paystack.service';
+import { PaymentCharge } from './entities/payment-charge.entity';
+import { CHARGE_MESSAGES } from './charge-outcome';
+import { PaymentAttemptsService } from './payment-attempts.service';
+import { DuplicateRefundService } from './duplicate-refund.service';
+import {
+  PaymentMethodsService,
+  type PaystackAuthorization,
+} from '../payment-methods/payment-methods.service';
+import {
+  maskForLog,
+  PaystackService,
+  type ResolveAccountResult,
+} from './paystack.service';
 import { Job } from '@jobs/entities/job.entity';
 import { User } from '@users/entities/user.entity';
 import { ArtisanProfile } from '@users/entities/artisan-profile.entity';
@@ -21,17 +40,60 @@ import {
   PayoutType,
 } from '@common/types/enums';
 import { AdminAuditService } from '../admin-audit/admin-audit.service';
+import { CustomerPaymentSettings } from '../payment-settings/entities/customer-payment-settings.entity';
+import { orderCheckoutChannels } from '../payment-settings/checkout-channels';
 import { APP_EVENTS } from '@common/events/app.events';
+import {
+  ACCOUNT_NAME_NOT_FOUND,
+  ACCOUNT_NAME_REQUIRED,
+} from './payout-account';
+import { payoutNamesMatch } from './payout-name-match';
+import {
+  ARTISAN_ACTION_HOLDS,
+  needsArtisanAction,
+  type PayoutHoldReason,
+  nextPayoutCheckAt,
+  PAYOUT_ACCOUNT_NOT_FOUND,
+  PAYOUT_ACCOUNT_NOT_FOUND_MESSAGE,
+  PAYOUT_CHECK_MAX_ATTEMPTS,
+  PAYOUT_CHECK_PENDING,
+  PAYOUT_CHECK_PENDING_MESSAGE,
+  PAYOUT_NAME_MISMATCH,
+  PAYOUT_NAME_MISMATCH_MESSAGE,
+} from './payout-hold';
 import type {
   PaymentReceiptPayload,
   PaymentSecuredPayload,
   PayoutReleasedPayload,
   PaymentRefundedPayload,
   PaymentTransferFailedPayload,
+  PayoutOnHoldPayload,
 } from '@common/events/app.events';
+
+/** `POST /payments/initialize` when the job has no payment due. */
+export const NO_PENDING_HOSTED_PAYMENT =
+  'No pending payment found for this job. Has the artisan accepted yet?';
 
 /** security-report.md finding #8: hard upper bound on admin list `limit`. */
 const MAX_ADMIN_PAGE_LIMIT = 100;
+
+/** Payout name check: how many due checks the scheduler retries per run. */
+const PAYOUT_CHECK_BATCH = 50;
+/** How many held payouts are retried when the artisan saves new details. */
+const HELD_PAYOUT_RETRY_LIMIT = 20;
+
+/**
+ * The outcome of a payout name check, with the payout details it checked
+ * (compared again under the lock). Never logged: it carries the full number.
+ */
+interface PayoutNameCheck {
+  outcome: 'match' | 'mismatch' | 'not_found' | 'unavailable';
+  /** Paystack's name for the account, when it named one. */
+  resolvedName?: string;
+  recipientCode: string | null;
+  accountNumber: string | null;
+  bankCode: string | null;
+}
 
 @Injectable()
 export class PaymentsService {
@@ -65,6 +127,15 @@ export class PaymentsService {
     private readonly eventEmitter: EventEmitter2,
     /** AT5: audit rows for admin refunds and fraud flags. */
     private readonly auditService: AdminAuditService,
+    /** Saved payment methods: direct charge attempts, each with its own reference. */
+    @InjectRepository(PaymentCharge)
+    private readonly chargeRepo: Repository<PaymentCharge>,
+    /** Saved payment methods: saving the card from an opted-in hosted charge. */
+    private readonly paymentMethods: PaymentMethodsService,
+    /** Idempotent payments: one active attempt per job. */
+    private readonly attempts: PaymentAttemptsService,
+    /** Idempotent payments: automatic refund of a duplicate payment. */
+    private readonly refunds: DuplicateRefundService,
   ) {
     // ConfigService.get() always returns environment variables as strings
     // (process.env is never coerced), whether the value comes from a .env
@@ -244,6 +315,31 @@ export class PaymentsService {
     }
   }
 
+  /**
+   * Payout name check: tells the artisan their payout is on hold and what to
+   * fix. Best-effort and after commit, like the other emitters.
+   */
+  private async emitPayoutOnHold(
+    payment: Payment,
+    reason: PayoutOnHoldPayload['reason'],
+  ): Promise<void> {
+    try {
+      const ctx = await this.resolvePaymentContext(payment);
+      if (ctx.artisanUserId === null) return;
+      this.eventEmitter.emit(APP_EVENTS.PAYOUT_ON_HOLD, {
+        artisanUserId: ctx.artisanUserId,
+        paymentId: payment.id,
+        jobId: payment.jobId,
+        jobTitle: ctx.jobTitle,
+        reason,
+      } as PayoutOnHoldPayload);
+    } catch (err) {
+      this.logger.error(
+        `Failed to emit PAYOUT_ON_HOLD for payment ${payment.id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
   // ─── Called internally by JobsService ────────────────────────────────────────
 
   /**
@@ -330,9 +426,69 @@ export class PaymentsService {
   }
 
   /**
-   * Initiates the Paystack transfer to the artisan.
-   * Called by JobsService when the customer confirms job completion, and by
-   * {@link retryPendingTransfer} for an artisan-triggered retry.
+   * Payout name check, made **before** the capture's transaction so a slow
+   * Paystack lookup never holds the payment row lock. Never throws: a lookup
+   * that errors counts as unavailable. The account details it checked are
+   * kept, so the transaction can tell if they changed in the meantime.
+   */
+  private async checkPayoutName(
+    profile: ArtisanProfile,
+  ): Promise<PayoutNameCheck> {
+    const checked = {
+      recipientCode: profile.paystackRecipientCode ?? null,
+      accountNumber: profile.payoutAccountNumber ?? null,
+      bankCode: profile.payoutBankCode ?? null,
+    };
+    // A recipient with no number or bank on file can't be checked against
+    // anything: the artisan has to set their details again.
+    if (!checked.accountNumber || !checked.bankCode) {
+      return { ...checked, outcome: 'not_found' };
+    }
+    let result: ResolveAccountResult;
+    try {
+      result = await this.paystack.resolveAccount(
+        checked.accountNumber,
+        checked.bankCode,
+      );
+    } catch {
+      result = { status: 'unavailable' };
+    }
+    if (result.status === 'unavailable') {
+      return { ...checked, outcome: 'unavailable' };
+    }
+    if (result.status === 'unresolvable') {
+      return { ...checked, outcome: 'not_found' };
+    }
+    return {
+      ...checked,
+      outcome: payoutNamesMatch(profile.payoutAccountName, result.accountName)
+        ? 'match'
+        : 'mismatch',
+      resolvedName: result.accountName,
+    };
+  }
+
+  /**
+   * Initiates the Paystack transfer to the artisan. Every transfer attempt
+   * goes through here: the client confirming completion and the 48 h
+   * auto-complete (both via JobsService), the artisan's retry
+   * ({@link retryPendingTransfer}), an admin/dispute release
+   * ({@link releaseWithheldPayment}), the scheduler's retry of a pending name
+   * check ({@link retryDuePayoutChecks}) and the retry after the artisan
+   * fixes their payout details ({@link setupPayoutMethod}).
+   *
+   * Payout name check: before any transfer, the payout account is looked up
+   * again with Paystack and its name compared with the saved one
+   * ({@link payoutNamesMatch}). The lookup runs before the transaction; the
+   * payment's state is then re-checked under the lock as before.
+   * - match → transfer (an unverified or legacy method becomes verified, with
+   *   Paystack's spelling of the name);
+   * - name differs, or the account can't be found → no transfer: the payment
+   *   is parked at PENDING_TRANSFER with a hold reason, the payout method is
+   *   marked not verified and the artisan is told once;
+   * - lookup unavailable → no transfer, PENDING_TRANSFER with
+   *   `payout_check_pending`, retried by the scheduler with backoff; the
+   *   artisan is not blamed or notified.
    *
    * security-report.md finding #3: wrapped in a transaction that takes a
    * `pessimistic_write` lock on the Payment row before reading its status,
@@ -343,13 +499,13 @@ export class PaymentsService {
    * see the `alreadyCaptured` check below for why that alone isn't quite
    * enough and what closes the remaining gap.
    *
-   * The Paystack call is deliberately made *inside* this transaction/lock
-   * (not after commit) specifically so a concurrent caller cannot start a
-   * second attempt while the first is in flight. If the transfer call
-   * itself throws, we still want the TRANSFER_FAILED status write to
-   * persist, so the error is captured and re-thrown *after* the transaction
-   * block resolves rather than thrown from inside it (which would roll the
-   * status change back too).
+   * The Paystack transfer call is deliberately made *inside* this
+   * transaction/lock (not after commit) specifically so a concurrent caller
+   * cannot start a second attempt while the first is in flight. If the
+   * transfer call itself throws, we still want the TRANSFER_FAILED status
+   * write to persist, so the error is captured and re-thrown *after* the
+   * transaction block resolves rather than thrown from inside it (which
+   * would roll the status change back too).
    */
   async capturePayment(reference: string, jobId: number): Promise<void> {
     let captureError: Error | undefined;
@@ -360,6 +516,14 @@ export class PaymentsService {
      * got rolled back would notify about a state change that never persisted).
      */
     let failedPayment: Payment | undefined;
+    /** Set when a hold needs the artisan told (first time for this payment). */
+    let heldForArtisan:
+      | { payment: Payment; reason: PayoutOnHoldPayload['reason'] }
+      | undefined;
+    /** Set when the scheduler has given up on a pending check. */
+    let checkGaveUp: Payment | undefined;
+
+    const check = await this.precheckPayoutName(reference);
 
     await this.dataSource.transaction(async (manager) => {
       const paymentRepo = manager.getRepository(Payment);
@@ -403,7 +567,8 @@ export class PaymentsService {
         return;
       }
 
-      const profile = await manager.getRepository(ArtisanProfile).findOne({
+      const profileRepo = manager.getRepository(ArtisanProfile);
+      const profile = await profileRepo.findOne({
         where: { id: payment.artisanProfileId },
       });
       if (!profile?.paystackRecipientCode) {
@@ -411,14 +576,93 @@ export class PaymentsService {
           `Artisan ${payment.artisanProfileId} has no payout method — marking PENDING_TRANSFER`,
         );
         payment.status = PaymentStatus.PENDING_TRANSFER;
+        this.clearPayoutHold(payment);
         await paymentRepo.save(payment);
         return;
+      }
+
+      // The check must be for the payout method on file now. If there was
+      // none (the payment changed state between the check and the lock) or
+      // the artisan changed their details in between, nothing is sent: the
+      // payment waits for a fresh check like any unavailable lookup.
+      const current =
+        check &&
+        check.recipientCode === profile.paystackRecipientCode &&
+        check.accountNumber === (profile.payoutAccountNumber ?? null) &&
+        check.bankCode === (profile.payoutBankCode ?? null);
+      const outcome = current ? check.outcome : 'unavailable';
+      const masked = maskForLog(profile.payoutAccountNumber);
+
+      if (outcome === 'mismatch' || outcome === 'not_found') {
+        const reason =
+          outcome === 'mismatch'
+            ? PAYOUT_NAME_MISMATCH
+            : PAYOUT_ACCOUNT_NOT_FOUND;
+        // Told once per payment, however often it is retried.
+        const tell = !payment.payoutHoldNotifiedAt;
+        payment.status = PaymentStatus.PENDING_TRANSFER;
+        payment.payoutHoldReason = reason;
+        payment.payoutCheckAttempts = 0;
+        payment.payoutCheckNextAt = null;
+        if (tell) payment.payoutHoldNotifiedAt = new Date();
+        await paymentRepo.save(payment);
+        // Only the method that was checked; one saved since is left alone.
+        await profileRepo.update(
+          {
+            id: profile.id,
+            payoutAccountNumber: profile.payoutAccountNumber,
+            payoutBankCode: profile.payoutBankCode,
+          },
+          { payoutAccountNameVerified: false },
+        );
+        this.logger.warn(
+          `Payout held: job=${jobId} payment=${payment.id} account=${masked} reason=${reason}`,
+        );
+        if (tell) heldForArtisan = { payment, reason };
+        return;
+      }
+
+      if (outcome === 'unavailable') {
+        const attempts =
+          payment.payoutHoldReason === PAYOUT_CHECK_PENDING
+            ? (payment.payoutCheckAttempts ?? 0) + 1
+            : 1;
+        payment.status = PaymentStatus.PENDING_TRANSFER;
+        payment.payoutHoldReason = PAYOUT_CHECK_PENDING;
+        payment.payoutCheckAttempts = attempts;
+        payment.payoutCheckNextAt = nextPayoutCheckAt(attempts, new Date());
+        await paymentRepo.save(payment);
+        this.logger.warn(
+          `Payout name check unavailable: job=${jobId} payment=${payment.id} account=${masked} attempt=${attempts}` +
+            (payment.payoutCheckNextAt
+              ? ` — retrying at ${payment.payoutCheckNextAt.toISOString()}`
+              : ' — automatic retries stopped; needs an admin'),
+        );
+        if (attempts === PAYOUT_CHECK_MAX_ATTEMPTS) checkGaveUp = payment;
+        return;
+      }
+
+      // Name matches. A method saved while the lookup was unavailable (or
+      // before it existed) is now verified, with Paystack's spelling.
+      if (profile.payoutAccountNameVerified !== true && check?.resolvedName) {
+        await profileRepo.update(
+          {
+            id: profile.id,
+            payoutAccountNumber: profile.payoutAccountNumber,
+            payoutBankCode: profile.payoutBankCode,
+          },
+          {
+            payoutAccountNameVerified: true,
+            payoutAccountName: check.resolvedName,
+          },
+        );
       }
 
       // Reset to HELD before (re)attempting — this is the "transfer in flight"
       // base state; the webhook flips it to RELEASED on success or this method
       // flips it to TRANSFER_FAILED below if the attempt itself errors out.
       payment.status = PaymentStatus.HELD;
+      this.clearPayoutHold(payment);
       const transferRef = `jinva-tr-${jobId}-${Date.now()}`;
       payment.transferReference = transferRef;
       await paymentRepo.save(payment);
@@ -450,6 +694,20 @@ export class PaymentsService {
       }
     });
 
+    if (heldForArtisan) {
+      await this.emitPayoutOnHold(
+        heldForArtisan.payment,
+        heldForArtisan.reason,
+      );
+    }
+
+    if (checkGaveUp) {
+      await this.emitTransferFailed(
+        checkGaveUp,
+        `The payout account name couldn't be checked after ${PAYOUT_CHECK_MAX_ATTEMPTS} tries, so automatic retries have stopped. Release it again once the account lookup works.`,
+      );
+    }
+
     if (failedPayment) {
       await this.emitTransferFailed(
         failedPayment,
@@ -458,6 +716,39 @@ export class PaymentsService {
     }
 
     if (captureError) throw captureError;
+  }
+
+  /**
+   * Reads the payment and payout method without a lock and, when a transfer
+   * could follow, runs the payout name check. Undefined when no transfer can
+   * follow (unknown payment, not capturable, a transfer already in flight,
+   * or no payout method); the transaction re-checks all of that anyway.
+   */
+  private async precheckPayoutName(
+    reference: string,
+  ): Promise<PayoutNameCheck | undefined> {
+    const payment = await this.repo.findOne({ where: { reference } });
+    if (!payment) return undefined;
+    if (payment.status === PaymentStatus.HELD && payment.transferCode) {
+      return undefined;
+    }
+    const capturable: PaymentStatus[] = [
+      PaymentStatus.HELD,
+      PaymentStatus.PENDING_TRANSFER,
+      PaymentStatus.TRANSFER_FAILED,
+    ];
+    if (!capturable.includes(payment.status)) return undefined;
+    const profile = await this.profileRepo.findOne({
+      where: { id: payment.artisanProfileId },
+    });
+    if (!profile?.paystackRecipientCode) return undefined;
+    return this.checkPayoutName(profile);
+  }
+
+  private clearPayoutHold(payment: Payment): void {
+    payment.payoutHoldReason = null;
+    payment.payoutCheckAttempts = 0;
+    payment.payoutCheckNextAt = null;
   }
 
   /**
@@ -488,7 +779,10 @@ export class PaymentsService {
 
       if (payment.status === PaymentStatus.HELD) {
         try {
-          await this.paystack.createRefund(payment.reference, payment.amount);
+          await this.paystack.createRefund(
+            payment.paidReference ?? payment.reference,
+            payment.amount,
+          );
         } catch (err) {
           // QA JOB-18: the caller cancels the job only after this succeeds, so
           // a refused refund leaves both the job and the payment untouched.
@@ -553,100 +847,178 @@ export class PaymentsService {
    * payment. Reusing the existing session avoids both risks entirely and
    * keeps `reference` a true 1:1, immutable key for the life of the row.
    */
-  async initializePayment(customerId: number, jobId: number) {
-    const payment = await this.repo.findOne({
-      where: { jobId, customerId, status: PaymentStatus.PENDING },
-    });
-    if (!payment) {
-      throw new NotFoundException(
-        'No pending payment found for this job. Has the artisan accepted yet?',
+  /**
+   * B5c: the checkout channels for the customer's stored preference, with the
+   * preferred one first, or `undefined` when there is no preference. Reading
+   * the preference must never stop a payment: any error is logged without
+   * personal data and checkout proceeds as if nothing were saved (AC-5.6).
+   */
+  private async checkoutChannelsFor(
+    customerId: number,
+  ): Promise<string[] | undefined> {
+    try {
+      const settings = await this.dataSource
+        .getRepository(CustomerPaymentSettings)
+        .findOne({
+          where: { userId: customerId },
+          select: { id: true, preferredChannel: true },
+        });
+      return orderCheckoutChannels(settings?.preferredChannel ?? null);
+    } catch (err) {
+      this.logger.warn(
+        `Could not read checkout preference; using the default channels (${
+          (err as Error)?.name ?? 'Error'
+        })`,
+      );
+      return undefined;
+    }
+  }
+
+  async initializePayment(
+    customerId: number,
+    jobId: number,
+    opts: { saveCard?: boolean } = {},
+  ) {
+    // Idempotent payments: one active attempt per job. The same hosted
+    // attempt comes back while it is open (Paystack refuses a reused
+    // reference, so its session is stored on the attempt); a paid job is
+    // 409 ALREADY_PAID; an active saved-method charge is 409
+    // PAYMENT_ATTEMPT_ACTIVE.
+    const claim = await this.attempts.claim(
+      customerId,
+      jobId,
+      { kind: 'hosted' },
+      this.settle,
+      NO_PENDING_HOSTED_PAYMENT,
+    );
+    const { payment } = claim;
+    let charge = claim.charge;
+
+    // Saved payment methods: the customer's "Save this card for next time"
+    // choice, recorded on the payment row by the server. Only this allows
+    // the card from this payment's charge.success to be saved; webhook
+    // metadata is never trusted alone. The latest choice wins.
+    const wantSave = opts.saveCard === true;
+    if (wantSave !== (payment.saveCardRequested === true)) {
+      payment.saveCardRequested = wantSave;
+      await this.repo.update(
+        { id: payment.id },
+        { saveCardRequested: wantSave },
       );
     }
 
-    if (payment.authorizationUrl && payment.accessCode) {
-      return {
-        message:
-          'Payment already initialized. Redirect the customer to the authorization URL.',
-        data: {
-          reference: payment.reference,
-          authorizationUrl: payment.authorizationUrl,
-          accessCode: payment.accessCode,
-          amount: payment.amount,
-          currency: payment.currency,
-        },
-      };
+    const session = (c: PaymentCharge, again: boolean) => ({
+      message: again
+        ? 'Payment already initialized. Redirect the customer to the authorization URL.'
+        : 'Payment initialized. Redirect the customer to the authorization URL.',
+      data: {
+        reference: c.reference,
+        authorizationUrl: c.authorizationUrl as string,
+        accessCode: c.accessCode as string,
+        amount: payment.amount,
+        currency: payment.currency,
+      },
+    });
+
+    if (claim.outcome === 'existing') {
+      // A concurrent initialise may still be waiting for Paystack's answer.
+      for (let i = 0; i < 10 && !charge.authorizationUrl; i++) {
+        await new Promise((r) => setTimeout(r, 300));
+        charge =
+          (await this.chargeRepo.findOne({ where: { id: charge.id } })) ??
+          charge;
+      }
+      if (charge.authorizationUrl && charge.accessCode) {
+        return session(charge, true);
+      }
+      throw PaymentAttemptsService.attemptActive(charge, jobId);
     }
 
     const customer = await this.userRepo.findOneOrFail({
       where: { id: customerId },
     });
+    const channels = await this.checkoutChannelsFor(customerId);
 
-    let result: {
-      authorization_url: string;
-      access_code: string;
-      reference: string;
-    };
+    let result: { authorization_url: string; access_code: string };
     try {
       result = await this.paystack.initializeTransaction({
         email: customer.email,
         amountGhs: payment.amount,
-        reference: payment.reference,
+        reference: charge.reference,
         callbackUrl: this.config.get('PAYSTACK_CALLBACK_URL'),
-        metadata: { jobId: payment.jobId, customerId, paymentId: payment.id },
+        metadata: {
+          jobId: payment.jobId,
+          customerId,
+          paymentId: payment.id,
+          chargeId: charge.id,
+          ...(wantSave ? { save_card: true } : {}),
+        },
+        // B5c: only when the customer saved a preference. Without one the
+        // Paystack payload carries no `channels` key, exactly as before.
+        ...(channels ? { channels } : {}),
       });
     } catch (err) {
-      // requirements.md API-needs item #7 / qa-report.md's own suggested
-      // direction: translate Paystack's specific "duplicate reference"
-      // rejection into a clean, customer-facing error instead of the
-      // generic InternalServerErrorException PaystackService throws on any
-      // non-`status:true` response. This can still happen even with the
-      // reuse-check above on a genuine race — two near-simultaneous
-      // `initialize` calls for the same payment, both reading a still-empty
-      // `authorizationUrl` before either has saved. Re-check the row first:
-      // the racing call may have already won and persisted a usable session.
+      // A checkout opened before attempts were tracked keeps its session on
+      // the payment row: Paystack refuses its reference again, so reuse it.
       if (
         err instanceof Error &&
-        /duplicate transaction reference/i.test(err.message)
+        /duplicate transaction reference/i.test(err.message) &&
+        charge.reference === payment.reference &&
+        payment.authorizationUrl &&
+        payment.accessCode
       ) {
-        const refreshed = await this.repo.findOne({
-          where: { id: payment.id },
-        });
-        if (refreshed?.authorizationUrl && refreshed?.accessCode) {
-          return {
-            message:
-              'Payment already initialized. Redirect the customer to the authorization URL.',
-            data: {
-              reference: refreshed.reference,
-              authorizationUrl: refreshed.authorizationUrl,
-              accessCode: refreshed.accessCode,
-              amount: refreshed.amount,
-              currency: refreshed.currency,
-            },
-          };
-        }
-        throw new BadRequestException(
-          'A payment attempt for this job is already being processed. Please wait a moment and try again.',
+        result = {
+          authorization_url: payment.authorizationUrl,
+          access_code: payment.accessCode,
+        };
+      } else {
+        // Nothing was opened: release the attempt so the customer can retry.
+        await this.chargeRepo.update(
+          { id: charge.id, status: 'hosted_open' },
+          { status: 'failed', action: null },
         );
+        throw err;
       }
-      throw err;
     }
 
-    payment.authorizationUrl = result.authorization_url;
-    payment.accessCode = result.access_code;
-    await this.repo.save(payment);
-
-    return {
-      message:
-        'Payment initialized. Redirect the customer to the authorization URL.',
-      data: {
-        reference: payment.reference,
+    await this.chargeRepo.update(
+      { id: charge.id },
+      {
         authorizationUrl: result.authorization_url,
         accessCode: result.access_code,
-        amount: payment.amount,
-        currency: payment.currency,
       },
-    };
+    );
+    charge = {
+      ...charge,
+      authorizationUrl: result.authorization_url,
+      accessCode: result.access_code,
+    } as PaymentCharge;
+    if (charge.reference === payment.reference) {
+      // Kept on the payment row too, for anything still reading it there.
+      await this.repo.update(
+        { id: payment.id },
+        {
+          authorizationUrl: result.authorization_url,
+          accessCode: result.access_code,
+        },
+      );
+    }
+    return session(charge, false);
   }
+
+  /**
+   * `GET /payments/jobs/:jobId/attempt`: whether the job is paid, the active
+   * attempt to resume, and duplicate payments refunded for it.
+   */
+  getJobPaymentState(customerId: number, jobId: number) {
+    return this.attempts.jobState(customerId, jobId, this.settle);
+  }
+
+  /** The verified-success path every caller shares (webhook, verify, status). */
+  private readonly settle = (
+    chargeId: number,
+    data: Record<string, unknown>,
+  ): Promise<void> => this.applyChargeSuccess(chargeId, data);
 
   /**
    * security-report.md finding #5: previously returned the raw `Payment`
@@ -693,7 +1065,11 @@ export class PaymentsService {
    * payment's reference.
    */
   async verifyPayment(customerId: number, reference: string) {
-    const payment = await this.repo.findOne({ where: { reference } });
+    // Any attempt's reference (hosted or saved), or the payment's own.
+    let charge = await this.chargeRepo.findOne({ where: { reference } });
+    let payment = charge
+      ? await this.repo.findOne({ where: { id: charge.paymentId } })
+      : await this.repo.findOne({ where: { reference } });
     if (!payment || payment.customerId !== customerId) {
       throw new NotFoundException('Payment not found.');
     }
@@ -701,43 +1077,29 @@ export class PaymentsService {
     const remote = await this.paystack.verifyTransaction(reference);
 
     // Reconcile: if Paystack confirms success and our webhook hasn't landed
-    // yet, flip to HELD right now instead of leaving the customer staring at
-    // a stale PENDING. We deliberately do NOT set a FAILED/CANCELLED state on
-    // a failed/abandoned remote status — the payment stays PENDING so the
-    // customer can simply try "Pay Now" again (matching the documented
-    // mid-flow-failure behavior).
-    if (
-      remote.status === 'success' &&
-      payment.status === PaymentStatus.PENDING
-    ) {
-      // security-report.md finding #6: never trust a reference match alone —
-      // confirm Paystack actually reports the same amount/currency we
-      // recorded at holdPayment time before flipping to HELD. A mismatch is
-      // logged and routed to manual review (payment left PENDING) instead of
-      // being auto-reconciled.
-      const expectedPesewas = Math.round(Number(payment.amount) * 100);
-      if (remote.amount !== expectedPesewas || remote.currency !== 'GHS') {
-        this.logger.error(
-          `verifyPayment: amount/currency mismatch for ref=${reference} — ` +
-            `Paystack reports ${remote.amount} ${remote.currency}, expected ${expectedPesewas} GHS pesewas. ` +
-            `Leaving PENDING for manual review instead of auto-reconciling.`,
-        );
-      } else {
-        payment.status = PaymentStatus.HELD;
-        payment.channel = remote.channel;
-        payment.paidAt = remote.paid_at ? new Date(remote.paid_at) : new Date();
-        await this.repo.save(payment);
-        // PD1/PD2: this branch is already guarded to a genuine PENDING → HELD
-        // transition, so reconciling here can't double-notify a customer whose
-        // charge.success webhook also landed.
-        await this.emitPaymentHeld(payment);
-      }
+    // yet, settle it now through the same locked transition as the webhook
+    // (HELD, or a refunded duplicate when another payment already holds the
+    // job). A failed/abandoned remote status changes nothing here; the
+    // attempt is released by the attempt rules, and the customer can pay
+    // again. security-report.md finding #6: the amount and currency are
+    // checked inside the transition; a mismatch is left for manual review.
+    if (remote.status === 'success') {
+      charge ??= await this.linkPaymentReference(payment);
+      await this.applyChargeSuccess(charge.id, {
+        reference,
+        amount: remote.amount,
+        currency: remote.currency,
+        channel: remote.channel,
+        paid_at: remote.paid_at,
+      });
+      payment =
+        (await this.repo.findOne({ where: { id: payment.id } })) ?? payment;
     }
 
     return {
       message: 'Payment verification complete.',
       data: {
-        reference: payment.reference,
+        reference,
         jobId: payment.jobId,
         status: payment.status,
         remoteStatus: remote.status,
@@ -887,6 +1249,24 @@ export class PaymentsService {
    * did not, so those cases are re-read after the call and turned into
    * explicit errors for the caller to surface.
    */
+  /** Payout name check: why an admin/dispute release sent nothing. */
+  private static adminHoldMessage(reason: PayoutHoldReason): string {
+    if (reason === PAYOUT_CHECK_PENDING) {
+      return (
+        "The artisan's payout account couldn't be checked right now, so nothing was transferred. " +
+        'It stays withheld and the check is retried automatically.'
+      );
+    }
+    const cause =
+      reason === PAYOUT_NAME_MISMATCH
+        ? "the name on the artisan's payout account doesn't match the name they saved"
+        : "the artisan's payout account couldn't be found";
+    return (
+      `Nothing was transferred because ${cause}. ` +
+      'It stays withheld and is sent once they update their payment details.'
+    );
+  }
+
   async releaseWithheldPayment(paymentId: number) {
     const payment = await this.repo.findOne({ where: { id: paymentId } });
     if (!payment) {
@@ -917,6 +1297,14 @@ export class PaymentsService {
     await this.capturePayment(payment.reference, payment.jobId);
 
     const after = await this.repo.findOne({ where: { id: paymentId } });
+    if (
+      after?.status === PaymentStatus.PENDING_TRANSFER &&
+      after.payoutHoldReason
+    ) {
+      throw new BadRequestException(
+        PaymentsService.adminHoldMessage(after.payoutHoldReason),
+      );
+    }
     if (after?.status === PaymentStatus.PENDING_TRANSFER) {
       throw new BadRequestException(
         'The artisan has no payout method registered, so the withheld amount could not be transferred. ' +
@@ -1069,7 +1457,12 @@ export class PaymentsService {
         );
       }
 
-      await this.paystack.createRefund(payment.reference, refundAmount);
+      // The reference whose money the payment holds (a saved-method charge
+      // has its own); the payment's own reference for older payments.
+      await this.paystack.createRefund(
+        payment.paidReference ?? payment.reference,
+        refundAmount,
+      );
       payment.refundedAmount = +(alreadyRefunded + refundAmount).toFixed(2);
       const fullyRefunded = payment.refundedAmount >= Number(payment.amount);
       if (fullyRefunded) {
@@ -1139,49 +1532,214 @@ export class PaymentsService {
       case 'transfer.failed':
       case 'transfer.reversed':
         return this.onTransferFailed(event.event, event.data);
+      case 'refund.pending':
+      case 'refund.processing':
+      case 'refund.processed':
+      case 'refund.failed':
+        return this.refunds.onRefundWebhook(event.event, event.data ?? {});
     }
   }
 
+  /**
+   * Every successful charge (hosted or saved method) resolves to its
+   * attempt row and goes through {@link applyChargeSuccess}: one locked
+   * transition, idempotent on Paystack's retries.
+   */
   private async onChargeSuccess(data: Record<string, unknown>) {
-    const reference = data.reference as string;
-    const payment = await this.repo.findOne({ where: { reference } });
-    if (!payment) {
-      this.logger.warn(`charge.success: no payment for reference ${reference}`);
-      return;
+    const reference = typeof data.reference === 'string' ? data.reference : '';
+    let charge = reference
+      ? await this.chargeRepo.findOne({ where: { reference } })
+      : null;
+    if (!charge) {
+      const payment = reference
+        ? await this.repo.findOne({ where: { reference } })
+        : null;
+      if (!payment) {
+        this.logger.warn(
+          `charge.success: no payment for reference ${reference}`,
+        );
+        return;
+      }
+      // A hosted checkout opened before attempts were tracked.
+      charge = await this.linkPaymentReference(payment);
     }
+    await this.applyChargeSuccess(charge.id, data);
+  }
 
-    // security-report.md finding #6: cross-check the amount/currency
-    // Paystack reports as paid against what we recorded at holdPayment time
-    // before trusting "success" — a reference match alone isn't a
-    // sufficient guarantee the correct amount was actually charged.
-    const paidAmountPesewas = Number(data.amount);
-    const paidCurrency = (data.currency as string | undefined) ?? 'GHS';
-    const expectedPesewas = Math.round(Number(payment.amount) * 100);
-    if (paidAmountPesewas !== expectedPesewas || paidCurrency !== 'GHS') {
-      this.logger.error(
-        `charge.success: amount/currency mismatch for ref=${reference} — ` +
-          `Paystack reports ${paidAmountPesewas} ${paidCurrency}, expected ${expectedPesewas} GHS pesewas. ` +
-          `Refusing to auto-reconcile; needs manual review.`,
+  /**
+   * The attempt row for a payment's own reference, created (not active) when
+   * a checkout from before attempts were tracked reports back.
+   */
+  private async linkPaymentReference(payment: Payment): Promise<PaymentCharge> {
+    const existing = await this.chargeRepo.findOne({
+      where: { reference: payment.reference },
+    });
+    if (existing) return existing;
+    try {
+      await this.chargeRepo.insert({
+        paymentId: payment.id,
+        customerId: payment.customerId,
+        reference: payment.reference,
+        methodType: 'hosted',
+        paymentMethodId: null,
+        status: 'expired',
+        action: null,
+        message: null,
+        authorizationUrl: payment.authorizationUrl ?? null,
+        accessCode: payment.accessCode ?? null,
+      });
+    } catch {
+      // A concurrent delivery inserted it first.
+    }
+    return this.chargeRepo.findOneOrFail({
+      where: { reference: payment.reference },
+    });
+  }
+
+  /**
+   * Saved payment methods: keeps the card from an opted-in hosted charge.
+   * Never fails the webhook; logs the outcome without any card data.
+   */
+  private async saveCardBestEffort(
+    payment: Payment,
+    authorization: PaystackAuthorization | undefined,
+  ): Promise<void> {
+    try {
+      const outcome = await this.paymentMethods.saveCardFromAuthorization(
+        payment.customerId,
+        authorization,
       );
+      this.logger.log(`Card save for payment ${payment.id}: ${outcome}`);
+    } catch (err) {
+      this.logger.warn(
+        `Card save for payment ${payment.id} failed: ${(err as Error)?.name ?? 'Error'}`,
+      );
+    }
+  }
+
+  /**
+   * A charge succeeded (webhook or verify), whichever way it was paid. Under
+   * a lock on the payment row:
+   *
+   * - The attempt already succeeded or was already handled as a duplicate:
+   *   nothing (a redelivered webhook, or a verify after it).
+   * - Paystack's amount or currency differs: left for manual review.
+   * - The payment is PENDING: PENDING → HELD, recording this reference as
+   *   the one holding the money; notified once.
+   * - The job is already paid by another reference (or no longer due): this
+   *   is a duplicate. It is marked so and refunded automatically
+   *   ({@link DuplicateRefundService}); the reference holding the job's
+   *   money is never refunded.
+   */
+  async applyChargeSuccess(
+    chargeId: number,
+    data: Record<string, unknown>,
+  ): Promise<void> {
+    const reference = typeof data.reference === 'string' ? data.reference : '';
+    const result = await this.dataSource.transaction(async (manager) => {
+      const charges = manager.getRepository(PaymentCharge);
+      const first = await charges.findOne({ where: { id: chargeId } });
+      if (!first) return null;
+      const payment = await manager.getRepository(Payment).findOne({
+        where: { id: first.paymentId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!payment) return null;
+      // Re-read under the payment lock: a concurrent delivery may have won.
+      const charge =
+        (await charges.findOne({ where: { id: chargeId } })) ?? first;
+      if (charge.status === 'succeeded' || charge.status === 'duplicate') {
+        return null;
+      }
+
+      const paidAmountPesewas = Number(data.amount);
+      const paidCurrency = (data.currency as string | undefined) ?? 'GHS';
+      const expectedPesewas = Math.round(Number(payment.amount) * 100);
+      if (paidAmountPesewas !== expectedPesewas || paidCurrency !== 'GHS') {
+        this.logger.error(
+          `charge.success: amount/currency mismatch for ref=${reference} — ` +
+            `Paystack reports ${paidAmountPesewas} ${paidCurrency}, expected ${expectedPesewas} GHS pesewas. ` +
+            `Refusing to auto-reconcile; needs manual review.`,
+        );
+        return null;
+      }
+      const channel =
+        (data.channel as string | undefined) ??
+        (charge.methodType === 'hosted' ? null : charge.methodType);
+
+      if (payment.status !== PaymentStatus.PENDING) {
+        if (DuplicateRefundService.holdsMoney(payment, charge.reference)) {
+          // This reference already holds the job's money (a checkout from
+          // before attempts were tracked): record it, never refund it.
+          await charges.update(
+            { id: charge.id },
+            { status: 'succeeded', action: null, message: null, channel },
+          );
+          return null;
+        }
+        await charges.update(
+          { id: charge.id },
+          {
+            status: 'duplicate',
+            action: null,
+            message: CHARGE_MESSAGES.DUPLICATE,
+            channel,
+            refundStatus: 'pending',
+            refundAmount: +(paidAmountPesewas / 100).toFixed(2),
+            refundNextAt: new Date(),
+          },
+        );
+        this.logger.error(
+          `charge.success: payment ${payment.id} (job ${payment.jobId}) is ${payment.status}; ` +
+            `ref=${reference} is a second payment and is being refunded automatically.`,
+        );
+        return { kind: 'duplicate' as const, payment, charge };
+      }
+
+      payment.status = PaymentStatus.HELD;
+      payment.channel = channel ?? payment.channel;
+      payment.paidAt = data.paid_at
+        ? new Date(data.paid_at as string)
+        : new Date();
+      payment.paidReference = charge.reference;
+      await manager.getRepository(Payment).save(payment);
+      await charges.update(
+        { id: charge.id },
+        { status: 'succeeded', action: null, message: null, channel },
+      );
+      return { kind: 'held' as const, payment, charge };
+    });
+
+    if (!result) return;
+    if (result.kind === 'duplicate') {
+      try {
+        await this.refunds.process(result.charge.id);
+      } catch (err) {
+        // Still `pending`: the scheduler retries it.
+        this.logger.error(
+          `Refund of duplicate ${reference} not started: ${(err as Error)?.message ?? 'Error'}`,
+        );
+      }
       return;
     }
 
-    // PD1/PD2: Paystack can (and does) redeliver a webhook. Record whether
-    // this call is the one that actually moved the payment into HELD, so a
-    // redelivered charge.success replays the (idempotent) status write without
-    // sending the customer a second receipt and the artisan a second
-    // payment-secured notice.
-    const isFirstHold = payment.status !== PaymentStatus.HELD;
+    const held = result.payment;
+    this.logger.log(`Payment HELD: ref=${reference} channel=${held.channel}`);
+    await this.emitPaymentHeld(held);
+    if (result.charge.methodType === 'hosted' && held.saveCardRequested) {
+      await this.saveCardBestEffort(
+        held,
+        data.authorization as PaystackAuthorization | undefined,
+      );
+    }
+  }
 
-    payment.status = PaymentStatus.HELD;
-    payment.channel = data.channel as string;
-    payment.paidAt = new Date(data.paid_at as string);
-    await this.repo.save(payment);
-    this.logger.log(
-      `Payment HELD: ref=${reference} channel=${payment.channel}`,
-    );
-
-    if (isFirstHold) await this.emitPaymentHeld(payment);
+  /** Kept for callers of the saved-method path. */
+  applySavedChargeSuccess(
+    chargeId: number,
+    data: Record<string, unknown>,
+  ): Promise<void> {
+    return this.applyChargeSuccess(chargeId, data);
   }
 
   private async onTransferSuccess(data: Record<string, unknown>) {
@@ -1241,12 +1799,17 @@ export class PaymentsService {
   /**
    * Registers the artisan's mobile money or bank account with Paystack and
    * stores the recipient_code on their profile for future payouts.
+   *
+   * The account name is looked up on the server and the looked-up name is
+   * what is stored (never the client's): a number Paystack can't resolve is
+   * refused with 422; when the lookup is unavailable the typed name is used,
+   * stored as not verified, so a Paystack outage never blocks the save.
    */
   async setupPayoutMethod(
     artisanUserId: number,
     dto: {
       type: 'mobile_money' | 'bank';
-      accountName: string;
+      accountName?: string;
       accountNumber: string;
       bankCode: string;
     },
@@ -1256,11 +1819,26 @@ export class PaymentsService {
     });
     if (!profile) throw new NotFoundException('Artisan profile not found.');
 
+    const lookup = await this.paystack.resolveAccount(
+      dto.accountNumber,
+      dto.bankCode,
+    );
+    if (lookup.status === 'unresolvable') {
+      throw new UnprocessableEntityException(ACCOUNT_NAME_NOT_FOUND);
+    }
+    const verified = lookup.status === 'resolved';
+    const accountName = verified
+      ? lookup.accountName
+      : (dto.accountName ?? '').trim();
+    if (accountName.length < 2) {
+      throw new BadRequestException(ACCOUNT_NAME_REQUIRED);
+    }
+
     const paystackType =
       dto.type === 'mobile_money' ? 'mobile_money' : 'ghipss';
     const recipient = await this.paystack.createTransferRecipient({
       type: paystackType,
-      name: dto.accountName,
+      name: accountName,
       accountNumber: dto.accountNumber,
       bankCode: dto.bankCode,
     });
@@ -1268,12 +1846,107 @@ export class PaymentsService {
     profile.payoutType =
       dto.type === 'mobile_money' ? PayoutType.MOBILE_MONEY : PayoutType.BANK;
     profile.paystackRecipientCode = recipient.recipient_code;
-    profile.payoutAccountName = dto.accountName;
+    profile.payoutAccountName = accountName;
+    profile.payoutAccountNameVerified = verified;
     profile.payoutAccountNumber = dto.accountNumber;
     profile.payoutBankCode = dto.bankCode;
     await this.profileRepo.save(profile);
 
-    return { message: 'Payout method registered successfully.' };
+    const held = await this.retryHeldPayouts(profile.id);
+
+    return {
+      message: 'Payout method registered successfully.',
+      data: {
+        accountName,
+        accountNameVerified: verified,
+        payoutsRetried: held.retried,
+        payoutsStillOnHold: held.stillOnHold,
+      },
+    };
+  }
+
+  /**
+   * Payout name check: once the artisan saves new payout details, retries
+   * their payouts held for a name that didn't match or an account that
+   * couldn't be found. Each goes through {@link capturePayment}, so the new
+   * details are checked again before anything is sent. Best-effort: a
+   * failure here never fails the save (the artisan can still retry).
+   */
+  private async retryHeldPayouts(
+    artisanProfileId: number,
+  ): Promise<{ retried: number; stillOnHold: number }> {
+    let held: Payment[];
+    try {
+      held = await this.repo.find({
+        where: {
+          artisanProfileId,
+          status: PaymentStatus.PENDING_TRANSFER,
+          payoutHoldReason: In([...ARTISAN_ACTION_HOLDS]),
+        },
+        order: { id: 'ASC' },
+        take: HELD_PAYOUT_RETRY_LIMIT,
+      });
+    } catch (err) {
+      this.logger.error(
+        `Could not list held payouts for artisan ${artisanProfileId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return { retried: 0, stillOnHold: 0 };
+    }
+    let stillOnHold = 0;
+    for (const p of held) {
+      try {
+        await this.capturePayment(p.reference, p.jobId);
+      } catch (err) {
+        this.logger.error(
+          `Retry of held payout ${p.id} failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      const after = await this.repo
+        .findOne({ where: { id: p.id } })
+        .catch(() => null);
+      if (after && needsArtisanAction(after.payoutHoldReason)) stillOnHold++;
+    }
+    if (held.length > 0) {
+      this.logger.log(
+        `Retried ${held.length} held payout(s) for artisan ${artisanProfileId}; ${stillOnHold} still on hold.`,
+      );
+    }
+    return { retried: held.length, stillOnHold };
+  }
+
+  /**
+   * Payout name check: the scheduler's retry of payouts whose check couldn't
+   * be made (Paystack unavailable), once each one's backoff has passed. Each
+   * goes through {@link capturePayment}, which re-checks the state under the
+   * lock, so a payout already sent or retried elsewhere is left alone.
+   */
+  async retryDuePayoutChecks(
+    now: Date = new Date(),
+  ): Promise<{ candidates: number; sent: number; failed: number }> {
+    const due = await this.repo.find({
+      where: {
+        status: PaymentStatus.PENDING_TRANSFER,
+        payoutHoldReason: PAYOUT_CHECK_PENDING,
+        payoutCheckNextAt: LessThanOrEqual(now),
+      },
+      order: { payoutCheckNextAt: 'ASC' },
+      take: PAYOUT_CHECK_BATCH,
+    });
+    let sent = 0;
+    let failed = 0;
+    for (const p of due) {
+      try {
+        await this.capturePayment(p.reference, p.jobId);
+        const after = await this.repo.findOne({ where: { id: p.id } });
+        if (after?.transferCode && after.status === PaymentStatus.HELD) sent++;
+      } catch (err) {
+        failed++;
+        this.logger.error(
+          `Payout check retry for payment ${p.id} failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    return { candidates: due.length, sent, failed };
   }
 
   async retryPendingTransfer(artisanUserId: number, jobId: number) {
@@ -1301,6 +1974,23 @@ export class PaymentsService {
         'No retryable transfer for this job on your account.',
       );
     await this.capturePayment(payment.reference, jobId);
+
+    // Payout name check: say so when nothing was sent, rather than "retry
+    // initiated" for a payout that is still on hold.
+    const after = await this.repo.findOne({ where: { id: payment.id } });
+    if (after?.status === PaymentStatus.PENDING_TRANSFER) {
+      if (after.payoutHoldReason === PAYOUT_NAME_MISMATCH) {
+        throw new UnprocessableEntityException(PAYOUT_NAME_MISMATCH_MESSAGE);
+      }
+      if (after.payoutHoldReason === PAYOUT_ACCOUNT_NOT_FOUND) {
+        throw new UnprocessableEntityException(
+          PAYOUT_ACCOUNT_NOT_FOUND_MESSAGE,
+        );
+      }
+      if (after.payoutHoldReason === PAYOUT_CHECK_PENDING) {
+        throw new ServiceUnavailableException(PAYOUT_CHECK_PENDING_MESSAGE);
+      }
+    }
     return { message: 'Transfer retry initiated.' };
   }
 }

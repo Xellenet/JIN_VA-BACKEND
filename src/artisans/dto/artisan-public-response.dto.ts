@@ -1,6 +1,11 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Expose, Type } from 'class-transformer';
 import { ServiceResponseDto } from '@services/dto/service-response.dto';
+import {
+  AvailabilitySummaryDto,
+  PublicTimeOffDto,
+  PublicWeeklyHoursDto,
+} from '../../availability/dto/availability-response.dto';
 
 /**
  * Minimal user snapshot exposed on a public artisan profile.
@@ -81,6 +86,29 @@ export class ArtisanPublicResponseDto {
   })
   @Expose()
   availabilityStatus: string;
+
+  @ApiPropertyOptional({
+    type: AvailabilitySummaryDto,
+    description:
+      'What clients see: the effective availability computed in Africa/Accra time from ' +
+      "the artisan's weekly hours, time off, status and bookings. Prefer this over " +
+      '`availabilityStatus`, which is only the manual status.',
+  })
+  availability?: AvailabilitySummaryDto;
+
+  @ApiPropertyOptional({
+    type: [PublicWeeklyHoursDto],
+    description:
+      'GET /artisans/:id only: active weekly working hours (several windows per day possible).',
+  })
+  weeklyHours?: PublicWeeklyHoursDto[];
+
+  @ApiPropertyOptional({
+    type: [PublicTimeOffDto],
+    description:
+      'GET /artisans/:id only: time off ending today or later, dates only (the reason is private), at most 10.',
+  })
+  upcomingTimeOff?: PublicTimeOffDto[];
 
   @ApiProperty({
     example: false,

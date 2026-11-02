@@ -134,6 +134,18 @@ export class ArtisanProfile {
   @Column({ name: 'payout_account_name', nullable: true })
   payoutAccountName?: string;
 
+  /**
+   * Whether `payoutAccountName` is the name Paystack's account lookup
+   * returned (true) or the name the artisan typed because the lookup was
+   * unavailable (false). Null for methods saved before the lookup existed.
+   */
+  @Column({
+    name: 'payout_account_name_verified',
+    type: 'boolean',
+    nullable: true,
+  })
+  payoutAccountNameVerified?: boolean | null;
+
   /** Phone number (mobile money) or account number (bank) */
   @Column({ name: 'payout_account_number', nullable: true })
   payoutAccountNumber?: string;
