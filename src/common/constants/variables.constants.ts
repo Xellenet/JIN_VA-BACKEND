@@ -19,6 +19,31 @@ export const VARIABLES = {
   ACCESS_TOKEN_EXPIRES_IN_MINUTES: 15,
   REFRESH_TOKEN_EXPIRES_IN_DAYS: 7,
   RESEND_VERIFICATION_COOLDOWN_SECONDS: 60,
+
+  /**
+   * AUTH V2 — 6-digit email codes (sign-up, code login, password reset).
+   * See `src/auth/codes/auth-code.service.ts`.
+   */
+  AUTH_CODE_LENGTH: 6,
+  AUTH_CODE_TTL_MINUTES: 10,
+  /** The 5th wrong try kills the code. */
+  AUTH_CODE_MAX_ATTEMPTS: 5,
+  AUTH_CODE_RESEND_COOLDOWN_SECONDS: 60,
+  /** Codes per email, per purpose, per rolling-from-first-send hour. */
+  AUTH_CODE_MAX_PER_HOUR: 5,
+  /**
+   * The minimum time `register`, `code/request` and `password/forgot` take,
+   * so the answer for an address with an account and one without arrives
+   * after the same delay. Override with `AUTH_RESPONSE_FLOOR_MS`.
+   */
+  AUTH_RESPONSE_FLOOR_MS: 400,
+  /** Password-login failures (per email or per IP) before Turnstile is asked for. */
+  LOGIN_FAILURES_BEFORE_TURNSTILE: 3,
+  LOGIN_FAILURE_WINDOW_MINUTES: 15,
+  TURNSTILE_SITEVERIFY_URL:
+    'https://challenges.cloudflare.com/turnstile/v0/siteverify',
+  /** Default `TURNSTILE_TIMEOUT_MS`. */
+  TURNSTILE_TIMEOUT_MS: 3000,
   /**
    * C1: the account-recovery window. A soft-deleted account is restorable by
    * its owner for this many days after `deletedAt`; the purge job targets
