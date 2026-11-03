@@ -91,6 +91,14 @@ export class MailTemplateService {
         return 'Your JinVa Account Has Been Deleted';
       case 'user.account-restored':
         return 'Your JinVa Account Has Been Restored';
+      case 'auth.code':
+        return 'Your JinVa code';
+      case 'auth.signup-attempt':
+        return 'Someone tried to sign up with your address';
+      case 'auth.new-sign-in':
+        return 'New sign-in to your JinVa account';
+      case 'auth.password-changed':
+        return 'Your password was changed';
       case 'artisan.profile.verified':
         return 'Your Identity Has Been Verified';
       case 'artisan.verification.rejected':

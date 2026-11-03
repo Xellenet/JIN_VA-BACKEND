@@ -5,6 +5,7 @@ import { MailService } from './mail.service';
 import { MailTemplateService } from './mail.template';
 import { UserMailListener } from './listeners/user-mail.listener';
 import { DomainMailListener } from './listeners/domain-mail.listener';
+import { AuthMailListener } from './listeners/auth-mail.listener';
 import { MailProviderFactory } from './providers/mail-provider.factory';
 import { ResendMailProvider } from './providers/resend-mail.provider';
 import { SmtpMailProvider } from './providers/smtp-mail.provider';
@@ -22,6 +23,7 @@ import { Message } from '../messages/entities/message.entity';
     MailTemplateService,
     UserMailListener,
     DomainMailListener,
+    AuthMailListener,
     // BI4: the transport seam, wired exactly like `UploadsModule` wires its
     // storage providers — both implementations registered, the factory picks
     // one from `MAIL_PROVIDER`.

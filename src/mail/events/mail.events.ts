@@ -17,6 +17,14 @@ export const MailEvent = {
   ACCOUNT_DELETED: 'user.account-deleted',
   /** C1.4: sent when a soft-deleted account is restored inside its window. */
   ACCOUNT_RESTORED: 'user.account-restored',
+  /** Auth v2: a 6-digit code (sign-up, login or password reset). No link. */
+  AUTH_CODE: 'auth.code',
+  /** Auth v2: sent to an existing owner when someone registers with their address. */
+  AUTH_SIGNUP_ATTEMPT: 'auth.signup-attempt',
+  /** Auth v2: on each new sign-in (password, code or Google). */
+  AUTH_NEW_SIGN_IN: 'auth.new-sign-in',
+  /** Auth v2: after a password reset by code. */
+  AUTH_PASSWORD_CHANGED: 'auth.password-changed',
 } as const;
 
 export interface UserRegisteredPayload {
@@ -76,6 +84,38 @@ export interface AccountRestoredPayload {
   firstname: string;
 }
 
+/** What the code is for, which decides the email's wording. */
+export type AuthCodeMailKind = 'signup' | 'login' | 'password_reset';
+
+export interface AuthCodePayload {
+  email: string;
+  firstname: string;
+  /** The plain code. Lives only in memory on its way to the template; never logged. */
+  code: string;
+  kind: AuthCodeMailKind;
+  expiresInMinutes: number;
+}
+
+export interface AuthSignupAttemptPayload {
+  email: string;
+  firstname: string;
+}
+
+export interface AuthNewSignInPayload {
+  email: string;
+  firstname: string;
+  signedInAt: Date;
+  /** Approximate, from the user agent ("Chrome on Windows"). */
+  device: string;
+  method: 'password' | 'code' | 'google';
+}
+
+export interface AuthPasswordChangedPayload {
+  email: string;
+  firstname: string;
+  changedAt: Date;
+}
+
 export type MailEventPayloads = {
   [MailEvent.USER_REGISTERED]: UserRegisteredPayload;
   [MailEvent.ORDER_PLACED]: OrderPlacedPayload;
@@ -86,4 +126,8 @@ export type MailEventPayloads = {
   [MailEvent.SOCIAL_USER_REGISTERED]: SocialUserRegisteredPayload;
   [MailEvent.ACCOUNT_DELETED]: AccountDeletedPayload;
   [MailEvent.ACCOUNT_RESTORED]: AccountRestoredPayload;
+  [MailEvent.AUTH_CODE]: AuthCodePayload;
+  [MailEvent.AUTH_SIGNUP_ATTEMPT]: AuthSignupAttemptPayload;
+  [MailEvent.AUTH_NEW_SIGN_IN]: AuthNewSignInPayload;
+  [MailEvent.AUTH_PASSWORD_CHANGED]: AuthPasswordChangedPayload;
 };
