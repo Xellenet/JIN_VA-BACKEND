@@ -1,6 +1,13 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
-import { IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { Transform, Type } from 'class-transformer';
+import {
+  IsBoolean,
+  IsInt,
+  IsOptional,
+  IsString,
+  Max,
+  Min,
+} from 'class-validator';
 
 /**
  * Query parameters accepted by `GET /services`.
@@ -37,4 +44,22 @@ export class GetServicesQueryDto {
   @Max(200)
   @Type(() => Number)
   limit?: number;
+
+  /**
+   * Admins only: include hidden services. Ignored for everyone else, so the
+   * public catalogue never shows a hidden service.
+   */
+  @ApiPropertyOptional({
+    example: true,
+    description:
+      'ADMIN only: include hidden services. Ignored for any other caller.',
+  })
+  @IsOptional()
+  @Transform(({ value }): boolean | undefined => {
+    if (value === 'true' || value === true) return true;
+    if (value === 'false' || value === false) return false;
+    return undefined;
+  })
+  @IsBoolean()
+  includeInactive?: boolean;
 }

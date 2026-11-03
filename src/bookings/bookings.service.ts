@@ -125,6 +125,11 @@ export class BookingsService {
       throw new NotFoundException(
         `Service with id ${dto.serviceId} not found.`,
       );
+    // A service an admin has hidden takes no new bookings.
+    if (service.isActive === false)
+      throw new BadRequestException(
+        'That service type is no longer offered. Choose another one.',
+      );
     // QA BK-08: the booked service must be one this artisan offers.
     if (!(profile.services ?? []).some((s) => s.id === service.id)) {
       throw new BadRequestException(
