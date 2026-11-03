@@ -595,6 +595,25 @@ describe('ArtisansService self-management', () => {
       expect(profileRepo.save).not.toHaveBeenCalled();
     });
 
+    it('keeps a hidden service already on the profile but refuses adding a new one', async () => {
+      // baseProfile() already offers service 1.
+      const { service, servicesRepo, profileRepo } = setup(baseProfile());
+      servicesRepo.findBy.mockResolvedValueOnce([
+        { id: 1, name: 'Plumbing', isActive: false },
+      ]);
+      await service.updateMe(90, { serviceIds: [1] } as never);
+      expect(profileRepo.save).toHaveBeenCalledTimes(1);
+
+      servicesRepo.findBy.mockResolvedValueOnce([
+        { id: 1, name: 'Plumbing' },
+        { id: 2, name: 'Tiling', isActive: false },
+      ]);
+      await expect(
+        service.updateMe(90, { serviceIds: [1, 2] } as never),
+      ).rejects.toThrow('That service type is no longer offered.');
+      expect(profileRepo.save).toHaveBeenCalledTimes(1);
+    });
+
     it('clearing services and the rate drops the artisan out of search', async () => {
       const { service, profileRepo, servicesRepo } = setup(baseProfile());
       const result = await service.updateMe(90, {
@@ -646,6 +665,19 @@ describe('ArtisansService self-management', () => {
       servicesRepo.findOne.mockResolvedValue({ id: 1, name: 'Plumbing' });
       await expect(service.addService(90, 1)).rejects.toThrow(
         ConflictException,
+      );
+      expect(profileRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('400s for a service an admin has hidden', async () => {
+      const { service, servicesRepo, profileRepo } = setup(baseProfile());
+      servicesRepo.findOne.mockResolvedValue({
+        id: 2,
+        name: 'Tiling',
+        isActive: false,
+      });
+      await expect(service.addService(90, 2)).rejects.toThrow(
+        'That service type is no longer offered. Choose another one.',
       );
       expect(profileRepo.save).not.toHaveBeenCalled();
     });

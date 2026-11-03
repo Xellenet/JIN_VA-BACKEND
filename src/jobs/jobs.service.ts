@@ -161,6 +161,11 @@ export class JobsService {
       throw new NotFoundException(
         `Service with id ${createJobDto.serviceId} not found.`,
       );
+    // A service an admin has hidden takes no new jobs.
+    if (service.isActive === false)
+      throw new BadRequestException(
+        'That service type is no longer offered. Choose another one.',
+      );
 
     const { serviceId: _serviceId, attachmentUrls, ...payload } = createJobDto;
 

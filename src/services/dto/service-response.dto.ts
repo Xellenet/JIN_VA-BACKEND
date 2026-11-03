@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { Expose } from 'class-transformer';
+import { Expose, Transform } from 'class-transformer';
 
 export class ServiceResponseDto {
   @ApiProperty({ description: 'The unique identifier of the service.' })
@@ -17,9 +17,20 @@ export class ServiceResponseDto {
   @Expose()
   description?: string;
 
-  @ApiProperty({ description: 'The price of the service.', required: false })
+  @ApiProperty({
+    description:
+      'Typical starting price in GHS, as a decimal string (e.g. "150.00"). null until an admin sets one.',
+    required: false,
+    nullable: true,
+    type: String,
+  })
   @Expose()
-  price?: number;
+  // Postgres returns a decimal as "150.00", but a just-saved entity holds the
+  // number the admin sent; give every response the same "150.00" form.
+  @Transform(({ value }: { value: unknown }) =>
+    value == null || value === '' ? null : Number(value).toFixed(2),
+  )
+  price?: string | null;
 
   @ApiProperty({
     description:
@@ -28,6 +39,14 @@ export class ServiceResponseDto {
   })
   @Expose()
   estimatedDurationMins!: number;
+
+  @ApiProperty({
+    description:
+      'false when an admin has hidden the service. Only admins see hidden services in lists.',
+    example: true,
+  })
+  @Expose()
+  isActive!: boolean;
 
   @ApiProperty()
   @Expose()

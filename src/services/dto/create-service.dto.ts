@@ -1,16 +1,20 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import {
+  IsBoolean,
   IsInt,
   IsNotEmpty,
   IsNumber,
   IsOptional,
   IsString,
   Max,
+  MaxLength,
   Min,
+  MinLength,
   ValidateIf,
 } from 'class-validator';
 import { VARIABLES } from '@common/constants/variables.constants';
+import { TrimText } from '@common/validators/trim-text.decorator';
 
 export class CreateServiceDto {
   @ApiProperty({ example: 'Plumbing' })
@@ -20,14 +24,23 @@ export class CreateServiceDto {
     typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : value,
   )
   @IsString()
-  @IsNotEmpty()
+  @IsNotEmpty({ message: 'Enter a service name.' })
+  @MinLength(2, { message: 'The service name must be at least 2 characters.' })
+  @MaxLength(60, {
+    message: 'The service name must be 60 characters or fewer.',
+  })
   name: string;
 
   @ApiPropertyOptional({
     example: 'Pipe repairs, drain cleaning, bathroom fittings.',
+    description: 'Up to 500 characters. Trimmed; an empty string clears it.',
   })
   @IsOptional()
+  @TrimText()
   @IsString()
+  @MaxLength(500, {
+    message: 'The description must be 500 characters or fewer.',
+  })
   description?: string;
 
   @ApiPropertyOptional({
@@ -59,4 +72,17 @@ export class CreateServiceDto {
   @Min(0.01, { message: 'price must be greater than 0' })
   @Max(1_000_000)
   price?: number | null;
+
+  /**
+   * false hides the service from the public catalogue (see
+   * ServiceEntity.isActive). New services are visible unless sent false.
+   */
+  @ApiPropertyOptional({
+    example: true,
+    description:
+      'Visible in the public catalogue. false hides it from new jobs, bookings and artisan profiles; existing records keep it.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
 }

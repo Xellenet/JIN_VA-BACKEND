@@ -9,11 +9,13 @@ import {
   Patch,
   Post,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
   ApiBearerAuth,
+  ApiConflictResponse,
   ApiCreatedResponse,
   ApiForbiddenResponse,
   ApiNotFoundResponse,
@@ -23,6 +25,7 @@ import {
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { OptionalJwtAuthGuard } from '../auth/guards/optional-jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '@common/decorators/roles.decorator';
 import { Role } from '@common/types/enums';
@@ -46,8 +49,8 @@ export class ServicesController {
 
   /**
    * Creates a new service category in the platform catalogue.
-   * The `name` field must be unique — attempting to create a duplicate name
-   * returns 400.
+   * The `name` field must be unique regardless of case — a duplicate returns
+   * 409.
    *
    * @param createServiceDto - Name and optional description for the new service.
    * @returns The created service wrapped in a `{ message, data }` envelope.
@@ -61,15 +64,16 @@ export class ServicesController {
     summary: 'Create a new service category (ADMIN only)',
     description:
       'Adds a new service type to the platform catalogue. ' +
-      'Service names are case-sensitive and must be unique. ' +
+      'Service names are unique regardless of case (409 on a duplicate). ' +
       'Artisans can later associate their profiles with entries from this catalogue.',
   })
   @ApiCreatedResponse({
     description: 'Service created successfully',
     type: ServiceResponseDto,
   })
-  @ApiBadRequestResponse({
-    description: 'Validation failed or a service with this name already exists',
+  @ApiBadRequestResponse({ description: 'Validation failed' })
+  @ApiConflictResponse({
+    description: 'A service with this name (in any case) already exists',
   })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT' })
   @ApiForbiddenResponse({ description: 'Caller does not have the ADMIN role' })
@@ -78,7 +82,8 @@ export class ServicesController {
   }
 
   /**
-   * Returns a paginated list of all service categories.
+   * Returns a paginated list of the visible service categories. Admins can
+   * add `includeInactive=true` to also see hidden ones, with usage counts.
    * Supports optional case-insensitive name search via the `search` query param.
    * Defaults to page 1 with up to 100 results per page — sufficient to load
    * the entire catalogue in a single call for most UIs while still capping
@@ -88,19 +93,25 @@ export class ServicesController {
    * @returns Paginated array of service categories.
    */
   @Get()
+  @UseGuards(OptionalJwtAuthGuard)
   @ApiOperation({
     summary: 'List all service categories — public',
     description:
       'Returns a paginated, searchable list of service categories. ' +
       'Use the optional `search` param for a case-insensitive name substring match. ' +
-      'Default limit is 100 (max 200) — enough to load the full catalogue in one call.',
+      'Default limit is 100 (max 200) — enough to load the full catalogue in one call. ' +
+      'Hidden services are left out; an ADMIN may pass `includeInactive=true` to include them ' +
+      '(each item then also carries `usage: { artisans, bookings, jobs }`).',
   })
   @ApiOkResponse({
     description: 'Services retrieved successfully',
     type: [ServiceResponseDto],
   })
-  findAll(@Query() query: GetServicesQueryDto) {
-    return this.servicesService.findAll(query);
+  findAll(
+    @Query() query: GetServicesQueryDto,
+    @Req() req: { user?: { role?: Role } },
+  ) {
+    return this.servicesService.findAll(query, req.user?.role === Role.ADMIN);
   }
 
   /**
@@ -149,7 +160,8 @@ export class ServicesController {
     type: ServiceResponseDto,
   })
   @ApiNotFoundResponse({ description: 'No service found with the given ID' })
-  @ApiBadRequestResponse({
+  @ApiBadRequestResponse({ description: 'Validation failed' })
+  @ApiConflictResponse({
     description: 'New name is already used by a different service',
   })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT' })
@@ -162,10 +174,9 @@ export class ServicesController {
   }
 
   /**
-   * Permanently deletes a service category.
-   * This is a hard delete — the record is removed from the database.
-   * Consider checking for artisan profiles or active job postings linked
-   * to this service before deleting in production.
+   * Permanently deletes a service category that nothing uses. A service that
+   * artisans offer, or that jobs or bookings refer to, is refused with 409
+   * naming the counts; hide it instead (`PATCH` with `isActive: false`).
    *
    * @param id - The service ID to delete.
    * @returns A `{ message }` confirmation (no data field).
@@ -179,10 +190,13 @@ export class ServicesController {
     summary: 'Delete a service category (ADMIN only)',
     description:
       'Permanently removes a service from the catalogue. ' +
-      'This is a hard delete — there is no soft-delete or recovery mechanism. ' +
-      'Ensure no active jobs or artisan profiles reference this service before deleting.',
+      'This is a hard delete, so it is refused (409) while any artisan offers the service ' +
+      'or any job or booking refers to it. Hide such a service with PATCH `isActive: false` instead.',
   })
   @ApiOkResponse({ description: 'Service deleted successfully' })
+  @ApiConflictResponse({
+    description: 'The service is in use by artisans, jobs or bookings',
+  })
   @ApiNotFoundResponse({ description: 'No service found with the given ID' })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT' })
   @ApiForbiddenResponse({ description: 'Caller does not have the ADMIN role' })
