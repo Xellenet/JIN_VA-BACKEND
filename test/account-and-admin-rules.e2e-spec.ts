@@ -155,7 +155,15 @@ describe('Account and admin rules (fix group 9, Minor list)', () => {
       [mixed],
     );
     expect(row.email).toBe(mixed.toLowerCase());
-    expect((await register(mixed.toLowerCase(), '2')).status).toBe(409);
+    // Auth v2: a taken address no longer answers 409. The same address in
+    // another case is the same address: it shares the first sign-up's
+    // per-address cooldown (429) and never creates a second account.
+    expect((await register(mixed.toLowerCase(), '2')).status).toBe(429);
+    const [{ count }]: Array<{ count: string }> = await dataSource.query(
+      'SELECT COUNT(*) AS count FROM users WHERE LOWER(email) = LOWER($1)',
+      [mixed],
+    );
+    expect(Number(count)).toBe(1);
     await users.update(
       { email: mixed.toLowerCase() },
       { accountVerified: true },
