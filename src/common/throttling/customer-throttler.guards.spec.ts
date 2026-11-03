@@ -20,6 +20,10 @@ import {
   ArtisanInsightsThrottlerGuard,
   PayoutAccountLookupThrottlerGuard,
 } from './artisan-throttler.guards';
+import {
+  ADMIN_RATE_LIMIT_ERROR_CODES,
+  AdminInsightsThrottlerGuard,
+} from './admin-throttler.guards';
 
 type GuardClass = new (...args: never[]) => UserKeyedThrottlerGuard;
 
@@ -67,6 +71,11 @@ const CASES: Array<{
     Guard: PayoutAccountLookupThrottlerGuard,
     name: THROTTLER_NAMES.PAYOUT_ACCOUNT_LOOKUP,
     code: ARTISAN_RATE_LIMIT_ERROR_CODES.PAYOUT_ACCOUNT_LOOKUP,
+  },
+  {
+    Guard: AdminInsightsThrottlerGuard,
+    name: THROTTLER_NAMES.ADMIN_INSIGHTS,
+    code: ADMIN_RATE_LIMIT_ERROR_CODES.ADMIN_INSIGHTS,
   },
 ];
 

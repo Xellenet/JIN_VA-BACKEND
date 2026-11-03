@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { authV2TestDoubles } from './testing/auth-v2-test-providers';
 import { AccountBannedException } from '@common/exceptions/account-banned.exception';
 import { AuthService, SOCIAL_SIGNUP_EXPIRED_ERROR_CODE } from './auth.service';
 import {
@@ -64,6 +65,10 @@ describe('AuthService', () => {
     verificationToken: 'token',
   };
   const mockUsersService = {
+    findUsernamesStartingWith: jest.fn().mockResolvedValue([]),
+    isUsernameTaken: jest.fn().mockResolvedValue(false),
+    isPhoneRegistered: jest.fn().mockResolvedValue(false),
+    spendPasswordHashCost: jest.fn().mockResolvedValue(undefined),
     findUserByEmail: jest.fn(),
     findUserById: jest.fn(),
     isEmailRegistered: jest.fn(),
@@ -101,7 +106,10 @@ describe('AuthService', () => {
     consumeState: jest.fn(),
   };
 
+  let doubles: ReturnType<typeof authV2TestDoubles>;
+
   beforeEach(async () => {
+    doubles = authV2TestDoubles();
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AuthService,
@@ -116,6 +124,7 @@ describe('AuthService', () => {
         // The real in-memory store: the pending-signup tests are about what
         // it ends up holding, not about which methods were called on it.
         PendingSocialSignupService,
+        ...doubles.providers,
       ],
     }).compile();
 
@@ -155,7 +164,12 @@ describe('AuthService', () => {
     expect(service).toBeDefined();
   });
 
-  describe('registerUser', () => {
+  describe('registerUser (auth v2)', () => {
+    const ok = {
+      allowed: true,
+      resendAvailableAt: new Date('2026-11-03T10:01:00.000Z'),
+    };
+
     it('should throw BadRequestException if email is missing', async () => {
       await expect(
         service.registerUser({ password: 'pass' } as CreateUserDto),
@@ -166,12 +180,13 @@ describe('AuthService', () => {
       const dto: CreateUserDto = {
         email: 'test@example.com',
         password: 'pass',
+        firstname: 'Kofi',
+        lastname: 'Asante',
       } as CreateUserDto;
       const loggerSpy = jest.spyOn(service['logger'], 'log');
       mockUsersService.isEmailRegistered.mockResolvedValueOnce(false);
-      mockUsersService.createUser.mockResolvedValueOnce({ data: mockUser });
-      mockUserTokenService.createToken.mockResolvedValueOnce({
-        token: 'verification-token',
+      mockUsersService.createUserInTransaction.mockResolvedValueOnce({
+        data: mockUser,
       });
 
       await service.registerUser(dto);
@@ -201,84 +216,222 @@ describe('AuthService', () => {
       expect(mockUsersService.isEmailRegistered).not.toHaveBeenCalled();
     });
 
-    it('should throw UserAlreadyExists if user already exists', async () => {
-      const dto: CreateUserDto = {
-        email: 'test@example.com',
-        password: 'pass',
-      } as CreateUserDto;
-      mockUsersService.isEmailRegistered.mockResolvedValueOnce(true);
-
-      await expect(service.registerUser(dto)).rejects.toThrow(
-        UserAlreadyExists,
-      );
-      expect(mockUsersService.isEmailRegistered).toHaveBeenCalledWith(
-        dto.email,
-      );
-    });
-
-    /**
-     * C1.6: the existence check must span soft-deleted rows, and the rejection
-     * must be the *same* exception a live account produces.
-     *
-     * Before this, registration checked `findUserByEmail` (soft-delete
-     * filtered), so a deleted address skipped this branch entirely and was
-     * rejected downstream by the `users.email` unique constraint — a 409 with
-     * a different message and no `meta.error`. One unauthenticated probe then
-     * classified any address as live / deleted / free. The assertion that
-     * `findUserByEmail` is *not* consulted is the regression guard: swapping
-     * back to it silently reopens the leak.
-     */
-    it('rejects a taken address through one live-or-deleted-blind check, never the soft-delete-filtered lookup', async () => {
-      const dto: CreateUserDto = {
-        email: 'deleted@example.com',
-        password: 'pass',
-      } as CreateUserDto;
-      mockUsersService.isEmailRegistered.mockResolvedValueOnce(true);
-
-      let rejection: unknown;
-      try {
-        await service.registerUser(dto);
-      } catch (err) {
-        rejection = err;
-      }
-
-      // Live and soft-deleted are the same branch now, so they cannot produce
-      // different messages or a different `meta.error`.
-      expect(rejection).toBeInstanceOf(UserAlreadyExists);
-      expect((rejection as UserAlreadyExists).message).toBe(
-        ERROR_MESSAGES.USER.EMAIL_ALREADY_EXISTS(dto.email),
-      );
-      expect(mockUsersService.findUserByEmail).not.toHaveBeenCalled();
-      expect(mockUsersService.createUser).not.toHaveBeenCalled();
-    });
-
-    it('should create, emit event, and return user if not exists', async () => {
-      const dto: CreateUserDto = {
-        email: 'new@example.com',
-        password: 'pass',
+    it('creates the account with a generated username, sends a sign-up code, and returns { email, resendAvailableAt } with no session', async () => {
+      const dto = {
+        email: 'New@Example.com',
+        password: 'Fict1onal!',
+        firstname: 'Kofi',
+        lastname: 'Asanté',
         role: Role.CUSTOMER,
       } as CreateUserDto;
       mockUsersService.isEmailRegistered.mockResolvedValueOnce(false);
-      mockUsersService.createUser.mockResolvedValueOnce({ data: mockUser });
-      mockUserTokenService.createToken.mockResolvedValueOnce({
-        token: 'verification-token',
+      mockUsersService.findUsernamesStartingWith.mockResolvedValueOnce([
+        'kofi.asante',
+      ]);
+      mockUsersService.createUserInTransaction.mockResolvedValueOnce({
+        data: mockUser,
       });
 
       const result = await service.registerUser(dto);
 
-      expect(mockUsersService.isEmailRegistered).toHaveBeenCalledWith(
-        dto.email,
-      );
-      expect(mockUsersService.createUser).toHaveBeenCalledWith(dto);
-      expect(mockEmitter.emit).toHaveBeenCalledWith(
-        expect.any(String),
+      expect(mockUsersService.createUserInTransaction).toHaveBeenCalledWith(
         expect.objectContaining({
-          email: mockUser.email,
-          firstname: mockUser.firstname,
+          email: 'new@example.com',
+          username: 'kofi.asante2',
         }),
+        {},
       );
-      expect(result).toBeInstanceOf(UserResponseDto);
-      expect(result.email).toEqual(mockUser.email);
+      expect(doubles.codeAuth.deliverCode).toHaveBeenCalledWith(
+        expect.any(String),
+        'signup',
+        mockUser,
+        'signup',
+        undefined,
+      );
+      expect(doubles.accountSecurity.recordBestEffort).toHaveBeenCalledWith(
+        expect.objectContaining({ event: 'auth.signup' }),
+      );
+      expect(mockUserTokenService.createJWTTokens).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        message: expect.any(String) as string,
+        data: {
+          email: 'new@example.com',
+          resendAvailableAt: ok.resendAvailableAt.toISOString(),
+        },
+      });
+    });
+
+    it('keeps a free username an old client sent', async () => {
+      mockUsersService.isEmailRegistered.mockResolvedValueOnce(false);
+      mockUsersService.createUserInTransaction.mockResolvedValueOnce({
+        data: mockUser,
+      });
+
+      await service.registerUser({
+        email: 'old@example.com',
+        password: 'Fict1onal!',
+        firstname: 'Ama',
+        lastname: 'Mensah',
+        username: 'ama_m',
+      } as CreateUserDto);
+
+      expect(mockUsersService.createUserInTransaction).toHaveBeenCalledWith(
+        expect.objectContaining({ username: 'ama_m' }),
+        {},
+      );
+    });
+
+    it('retries with the next username after losing a race for one', async () => {
+      const { QueryFailedError } = await import('typeorm');
+      const violation = Object.assign(
+        new QueryFailedError('INSERT', [], new Error('duplicate')),
+        {
+          code: '23505',
+          detail: 'Key (lower(username::text))=(ama.mensah) already exists.',
+        },
+      );
+      mockUsersService.isEmailRegistered.mockResolvedValueOnce(false);
+      mockUsersService.findUsernamesStartingWith
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce(['ama.mensah']);
+      mockUsersService.createUserInTransaction
+        .mockRejectedValueOnce(violation)
+        .mockResolvedValueOnce({ data: mockUser });
+
+      await service.registerUser({
+        email: 'race@example.com',
+        password: 'Fict1onal!',
+        firstname: 'Ama',
+        lastname: 'Mensah',
+      } as CreateUserDto);
+
+      const usernames = mockUsersService.createUserInTransaction.mock.calls.map(
+        ([d]: [CreateUserDto]) => d.username,
+      );
+      expect(usernames).toEqual(['ama.mensah', 'ama.mensah2']);
+    });
+
+    /**
+     * Auth v2 (replaces C1.6's 409): a taken address — live or soft-deleted —
+     * answers exactly like a new one. Nothing is created, the password is
+     * hashed anyway, and the live owner is emailed instead.
+     */
+    it('answers a taken address exactly like a new one, creates nothing and emails the owner', async () => {
+      const dto = {
+        email: 'taken@example.com',
+        password: 'Fict1onal!',
+        firstname: 'Kofi',
+        lastname: 'Asante',
+      } as CreateUserDto;
+      mockUsersService.isEmailRegistered.mockResolvedValueOnce(true);
+      mockUsersService.findUserByEmail.mockResolvedValueOnce(mockUser);
+
+      const result = await service.registerUser(dto);
+
+      expect(result).toEqual({
+        message: expect.any(String) as string,
+        data: {
+          email: 'taken@example.com',
+          resendAvailableAt: ok.resendAvailableAt.toISOString(),
+        },
+      });
+      expect(mockUsersService.spendPasswordHashCost).toHaveBeenCalledWith(
+        'Fict1onal!',
+      );
+      expect(mockUsersService.createUserInTransaction).not.toHaveBeenCalled();
+      expect(mockUsersService.createUser).not.toHaveBeenCalled();
+      // A code is still generated and discarded, so the cost matches.
+      expect(doubles.codeAuth.deliverCode).toHaveBeenCalledWith(
+        expect.any(String),
+        'signup',
+        null,
+      );
+      expect(mockEmitter.emit).toHaveBeenCalledWith(
+        MailEvent.AUTH_SIGNUP_ATTEMPT,
+        { email: mockUser.email, firstname: mockUser.firstname },
+      );
+    });
+
+    it('sends an unverified owner a fresh sign-up code instead', async () => {
+      const unverified = { ...mockUser, accountVerified: false };
+      mockUsersService.isEmailRegistered.mockResolvedValueOnce(true);
+      mockUsersService.findUserByEmail.mockResolvedValueOnce(unverified);
+
+      await service.registerUser({
+        email: unverified.email,
+        password: 'Fict1onal!',
+      } as CreateUserDto);
+
+      expect(doubles.codeAuth.deliverCode).toHaveBeenCalledWith(
+        expect.any(String),
+        'signup',
+        unverified,
+        'signup',
+        undefined,
+      );
+      expect(mockEmitter.emit).not.toHaveBeenCalledWith(
+        MailEvent.AUTH_SIGNUP_ATTEMPT,
+        expect.anything(),
+      );
+    });
+
+    it('emails nobody for a soft-deleted address, and still answers the same', async () => {
+      mockUsersService.isEmailRegistered.mockResolvedValueOnce(true);
+      mockUsersService.findUserByEmail.mockResolvedValueOnce(null);
+
+      const result = await service.registerUser({
+        email: 'deleted@example.com',
+        password: 'Fict1onal!',
+      } as CreateUserDto);
+
+      expect(result.data.email).toBe('deleted@example.com');
+      expect(mockEmitter.emit).not.toHaveBeenCalled();
+    });
+
+    it('answers a sign-up that loses the race for its address like a taken one', async () => {
+      mockUsersService.isEmailRegistered.mockResolvedValueOnce(false);
+      mockUsersService.createUserInTransaction.mockRejectedValueOnce(
+        new UserAlreadyExists('taken'),
+      );
+
+      const result = await service.registerUser({
+        email: 'twice@example.com',
+        password: 'Fict1onal!',
+        firstname: 'Ama',
+        lastname: 'Mensah',
+      } as CreateUserDto);
+
+      expect(result.data.email).toBe('twice@example.com');
+      expect(doubles.codeAuth.deliverCode).not.toHaveBeenCalled();
+    });
+
+    it('refuses a phone number in use with 409 PHONE_NUMBER_IN_USE, before looking at the email', async () => {
+      mockUsersService.isPhoneRegistered.mockResolvedValueOnce(true);
+
+      await expect(
+        service.registerUser({
+          email: 'phone@example.com',
+          password: 'Fict1onal!',
+          phoneNumber: '+233241234567',
+        } as CreateUserDto),
+      ).rejects.toMatchObject({
+        status: 409,
+        response: { errorCode: 'PHONE_NUMBER_IN_USE' },
+      });
+      expect(mockUsersService.isEmailRegistered).not.toHaveBeenCalled();
+    });
+
+    it('passes the per-address 429 through for every address', async () => {
+      const limited = new Error('limited');
+      doubles.codeAuth.reserveOrThrow.mockRejectedValueOnce(limited);
+      mockUsersService.isEmailRegistered.mockResolvedValueOnce(true);
+
+      await expect(
+        service.registerUser({
+          email: 'busy@example.com',
+          password: 'Fict1onal!',
+        } as CreateUserDto),
+      ).rejects.toBe(limited);
     });
   });
 
@@ -390,6 +543,118 @@ describe('AuthService', () => {
    * a caller with the correct password for a still-restorable account may
    * learn anything at all.
    */
+  describe('loginUser — auth v2 Turnstile after failures', () => {
+    const ctx = { ip: '198.51.100.20', userAgent: null };
+    const wrong = async (email: string) => {
+      mockUsersService.findUserByEmail.mockResolvedValueOnce(null);
+      await service
+        .loginUser({ email, password: 'Wrong#Pass1' }, ctx)
+        .catch(() => undefined);
+    };
+
+    it('answers TURNSTILE_REQUIRED (401) after 3 failures, before checking the password, until a token passes', async () => {
+      doubles.turnstile.isEnabled.mockReturnValue(true);
+      const { HttpException } = await import('@nestjs/common');
+      doubles.turnstile.assertPassed.mockImplementation(
+        (
+          token: unknown,
+          _action: string,
+          _ip: unknown,
+          failed: { status: number; errorCode: string },
+        ) =>
+          token === 'good'
+            ? Promise.resolve()
+            : Promise.reject(
+                new HttpException(
+                  { errorCode: failed.errorCode },
+                  failed.status,
+                ),
+              ),
+      );
+      for (let i = 0; i < 3; i++) await wrong('esi@example.com');
+      expect(doubles.turnstile.assertPassed).not.toHaveBeenCalled();
+      mockUsersService.findUserByEmail.mockClear();
+
+      const blocked = (await service
+        .loginUser({ email: 'esi@example.com', password: 'Wrong#Pass1' }, ctx)
+        .catch((e: unknown) => e)) as {
+        getStatus(): number;
+        getResponse(): unknown;
+      };
+      expect(blocked.getStatus()).toBe(401);
+      expect(blocked.getResponse()).toMatchObject({
+        errorCode: 'TURNSTILE_REQUIRED',
+      });
+      expect(mockUsersService.findUserByEmail).not.toHaveBeenCalled();
+      expect(doubles.turnstile.assertPassed).toHaveBeenCalledWith(
+        undefined,
+        'login',
+        ctx.ip,
+        {
+          status: 401,
+          errorCode: 'TURNSTILE_REQUIRED',
+        },
+      );
+
+      // Same for another address from the same IP (per-IP count).
+      await expect(
+        service.loginUser(
+          { email: 'other@example.com', password: 'x'.repeat(8) },
+          ctx,
+        ),
+      ).rejects.toMatchObject({
+        response: { errorCode: 'TURNSTILE_REQUIRED' },
+      });
+
+      // With a passing token the login goes ahead as normal.
+      mockUsersService.findUserByEmail.mockResolvedValueOnce(mockUser);
+      mockUserTokenService.createJWTTokens.mockResolvedValueOnce({
+        access_token: 'a',
+        refresh_token: 'r',
+        expires_at: new Date(),
+      });
+      await expect(
+        service.loginUser(
+          {
+            email: mockUser.email,
+            password: 'Right#Pass1',
+            turnstileToken: 'good',
+          },
+          ctx,
+        ),
+      ).resolves.toMatchObject({ refreshToken: 'r' });
+    });
+
+    it('never asks when Turnstile is not configured', async () => {
+      doubles.turnstile.isEnabled.mockReturnValue(false);
+      for (let i = 0; i < 5; i++) await wrong('esi@example.com');
+      expect(doubles.turnstile.assertPassed).not.toHaveBeenCalled();
+    });
+
+    it('records the sign-in with its method and sends the new-sign-in email', async () => {
+      mockUsersService.findUserByEmail.mockResolvedValueOnce(mockUser);
+      mockUserTokenService.createJWTTokens.mockResolvedValueOnce({
+        access_token: 'a',
+        refresh_token: 'r',
+        expires_at: new Date(),
+      });
+      await service.loginUser(
+        { email: mockUser.email, password: 'Right#Pass1' },
+        ctx,
+      );
+      expect(doubles.accountSecurity.recordBestEffort).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'auth.login',
+          details: { method: 'password' },
+        }),
+      );
+      expect(mockEmitter.emit).toHaveBeenCalledWith(
+        MailEvent.AUTH_NEW_SIGN_IN,
+        expect.objectContaining({ email: mockUser.email, method: 'password' }),
+      );
+    });
+  });
+
   describe('loginUser — soft-deleted accounts (C1.4)', () => {
     const dto: LoginDto = { email: 'gone@example.com', password: 'pass' };
 
@@ -1658,11 +1923,8 @@ describe('AuthService', () => {
 
     it('POST /auth/register returns no password key and no hash anywhere in the body', async () => {
       mockUsersService.isEmailRegistered.mockResolvedValueOnce(false);
-      mockUsersService.createUser.mockResolvedValueOnce({
+      mockUsersService.createUserInTransaction.mockResolvedValueOnce({
         data: rowWithSecrets(),
-      });
-      mockUserTokenService.createToken.mockResolvedValueOnce({
-        token: 'verification-token',
       });
 
       const result = await service.registerUser({
@@ -1671,7 +1933,13 @@ describe('AuthService', () => {
         role: Role.ARTISAN,
       } as CreateUserDto);
 
-      assertClean(result, result);
+      // Auth v2: the body carries no user at all, only where the code went.
+      expect(JSON.stringify(result)).not.toContain('$2b$');
+      expect(JSON.stringify(result)).not.toContain('password');
+      expect(Object.keys(result.data).sort()).toEqual([
+        'email',
+        'resendAvailableAt',
+      ]);
     });
 
     it('POST /auth/change-password returns no password key, including the hash it just computed', async () => {
@@ -1896,6 +2164,69 @@ describe('AuthService', () => {
         } finally {
           jest.useRealTimers();
         }
+      });
+    });
+
+    describe('completeSocialSignup — auth v2: phone only', () => {
+      it('takes the role chosen before Google and the names Google gave, with only a phone', async () => {
+        const { result } = await service.completeSocialSignup(key, {
+          phoneNumber: '+233245551234',
+        });
+        const [dto, options] = createCall();
+        expect(dto).toEqual(
+          expect.objectContaining({
+            role: Role.ARTISAN,
+            firstname: 'Ama',
+            lastname: 'Owusu',
+            username: 'ama.owusu',
+          }),
+        );
+        expect(dto.gender).toBeUndefined();
+        expect(options.artisanProfile).toEqual(
+          expect.objectContaining({
+            location: undefined,
+            serviceIds: undefined,
+          }),
+        );
+        expect(mockUsersService.servicesExist).not.toHaveBeenCalled();
+        expect(result.data.role).toBe(Role.ARTISAN);
+        expect(doubles.accountSecurity.recordBestEffort).toHaveBeenCalledWith(
+          expect.objectContaining({
+            event: 'auth.signup',
+            details: { method: 'google' },
+          }),
+        );
+      });
+
+      it('asks for a role only when the flow started without one, keeping the entry', async () => {
+        const noRole = pendingStore.create({ ...KEY_PROFILE });
+        await expect(
+          service.completeSocialSignup(noRole, {
+            phoneNumber: '+233245551234',
+          }),
+        ).rejects.toThrow(BadRequestException);
+        expect(pendingStore.peek(noRole)).not.toBeNull();
+      });
+
+      it('refuses when Google gave no name and none was typed', async () => {
+        const nameless = pendingStore.create({
+          ...KEY_PROFILE,
+          lastname: '',
+          suggestedRole: Role.CUSTOMER,
+        });
+        await expect(
+          service.completeSocialSignup(nameless, {
+            phoneNumber: '+233245551234',
+          }),
+        ).rejects.toThrow('lastname should not be empty');
+      });
+
+      it('refuses an expired entry before anything else', async () => {
+        await expect(
+          service.completeSocialSignup('missing', {
+            phoneNumber: '+233245551234',
+          }),
+        ).rejects.toThrow(UnauthorizedException);
       });
     });
 

@@ -133,4 +133,52 @@ export class PlatformAnalyticsCacheService implements OnModuleInit {
     this.cache.set(range, fresh);
     return { ...fresh, cached: false };
   }
+
+  // ─── Short-TTL memo (admin insights) ───────────────────────────────────────
+
+  private readonly memoEntries = new Map<
+    string,
+    { value: unknown; expiresAt: number }
+  >();
+  private readonly memoInFlight = new Map<string, Promise<unknown>>();
+
+  /**
+   * A short-TTL, on-demand cache next to the cron-refreshed rollups above,
+   * used by `GET /admin/analytics/insights`. Separate storage, so the
+   * existing `get`/`refresh` behaviour is untouched.
+   *
+   * - Computed on first request, not at startup or on the cron: the insights
+   *   are only needed when an admin opens those tabs.
+   * - `ttlMs` for a complete result; a result that reports `degraded`
+   *   sections is kept only for `degradedTtlMs`, so a transient failure heals
+   *   on the next request soon after rather than being served for minutes.
+   * - One build in flight per key: concurrent requests share it, so the
+   *   number of queries per range is bounded however many admins click.
+   * - A build that throws is not cached and rejects every waiter.
+   */
+  async memo<T extends { degraded?: unknown[] }>(
+    key: string,
+    ttlMs: number,
+    degradedTtlMs: number,
+    compute: () => Promise<T>,
+    now: () => number = Date.now,
+  ): Promise<T & { cached: boolean }> {
+    const hit = this.memoEntries.get(key);
+    if (hit && hit.expiresAt > now()) {
+      return { ...(hit.value as T), cached: true };
+    }
+
+    let pending = this.memoInFlight.get(key) as Promise<T> | undefined;
+    if (!pending) {
+      pending = compute().finally(() => this.memoInFlight.delete(key));
+      this.memoInFlight.set(key, pending);
+    }
+    const value = await pending;
+    const degraded = Array.isArray(value.degraded) && value.degraded.length > 0;
+    this.memoEntries.set(key, {
+      value,
+      expiresAt: now() + (degraded ? degradedTtlMs : ttlMs),
+    });
+    return { ...value, cached: false };
+  }
 }

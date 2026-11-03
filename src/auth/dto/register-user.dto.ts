@@ -1,7 +1,15 @@
-import { ApiProperty, OmitType } from '@nestjs/swagger';
-import { IsIn, IsNotEmpty, IsString, MaxLength } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional, OmitType } from '@nestjs/swagger';
+import {
+  IsIn,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  Matches,
+  MaxLength,
+} from 'class-validator';
 import { Gender } from '@common/types/enums';
 import { VALIDATION_MESSAGES } from '@common/constants/validation-messages.constants';
+import { VARIABLES } from '@common/constants/variables.constants';
 import {
   IsSupportedPhoneNumber,
   NormalizePhoneNumber,
@@ -11,20 +19,21 @@ import { CreateUserDto, INPUT_GENDERS } from '@users/dto/create-user.dto';
 /**
  * Body of `POST /auth/register` (email/password self-registration).
  *
- * PH6 + DI5: phone and gender are **required** here. `CreateUserDto` keeps
- * them optional because it is also used for social account creation and by
- * the admin `POST /users` route, so this DTO redeclares the two fields rather
- * than changing the shared one.
+ * Auth v2: `username` and `gender` are **optional**. The username is
+ * generated from the first and last name when it isn't sent; an old client
+ * that still sends one has it validated by the existing rule (and gets a
+ * generated one instead if it's already taken). Gender is asked later, in
+ * Settings. Phone stays required (PH6).
  *
  * `OmitType` (not plain `extends CreateUserDto`) matters: class-validator
  * merges a subclass's rules with the parent's for the same property, so the
- * parent's `@IsOptional()` would still skip validation of a missing value.
- * Omitting the fields drops those rules, and every other field keeps
- * `CreateUserDto`'s validators and transforms unchanged.
+ * parent's rules would still apply. Omitting the fields drops those rules, and
+ * every other field keeps `CreateUserDto`'s validators and transforms.
  */
 export class RegisterUserDto extends OmitType(CreateUserDto, [
   'phoneNumber',
   'gender',
+  'username',
   // SEC-5: no free-text avatar URL at signup. A photo is only ever set by
   // uploading one (`POST /users/me/avatar`), so a new account can never
   // point at another user's avatar file.
@@ -44,12 +53,34 @@ export class RegisterUserDto extends OmitType(CreateUserDto, [
   @IsSupportedPhoneNumber()
   phoneNumber: string;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     enum: INPUT_GENDERS,
     example: Gender.FEMALE,
-    description: 'Required (DI5). MALE or FEMALE only.',
+    description:
+      'Optional (auth v2). Old clients may still send it; MALE or FEMALE only.',
   })
-  @IsNotEmpty({ message: VALIDATION_MESSAGES.GENDER_REQUIRED })
+  @IsOptional()
   @IsIn(INPUT_GENDERS, { message: VALIDATION_MESSAGES.GENDER_INVALID })
-  gender: Gender.MALE | Gender.FEMALE;
+  gender?: Gender.MALE | Gender.FEMALE;
+
+  @ApiPropertyOptional({
+    example: 'kofi.asante',
+    description:
+      'Optional (auth v2): generated from the name when absent. When sent it ' +
+      'must match the username rule; a taken one is replaced by a generated one.',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(VARIABLES.USERNAME_REGEX, {
+    message: VALIDATION_MESSAGES.USERNAME_INVALID,
+  })
+  username?: string;
+
+  @ApiPropertyOptional({
+    description: 'Cloudflare Turnstile token (action `register`).',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2048)
+  turnstileToken?: string;
 }

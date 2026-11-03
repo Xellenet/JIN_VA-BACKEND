@@ -161,7 +161,10 @@ describe('Missing-token guard (AUTH-12, AUTH-24)', () => {
     }
     expect((await reload(pending.id)).accountVerified).toBeFalsy();
 
-    // The real link from registration still verifies the account.
+    // A real link still verifies the account. Since auth v2 registration
+    // emails a code, so the link is issued here the way the old flow did —
+    // links already sent keep working until they expire.
+    await tokens.createToken(pending, Token.EMAIL_VERIFICATION, 7);
     const [row]: Array<{ token: string }> = await dataSource.query(
       'SELECT token FROM user_tokens WHERE user_id = $1 AND type = $2',
       [pending.id, Token.EMAIL_VERIFICATION],

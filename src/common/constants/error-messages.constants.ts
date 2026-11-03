@@ -11,6 +11,8 @@ function joinClauses(clauses: string[]): string {
 export const ERROR_MESSAGES = {
   USER: {
     EMAIL_REQUIRED: 'Email is required',
+    /** Auth v2: `PATCH /users/me` with a username someone else has. */
+    USERNAME_TAKEN: 'That username is taken. Try another.',
     /** QA CUS-07: a national ID is set once. */
     NATIONAL_ID_LOCKED:
       "Your national ID is already saved and can't be changed here. Contact support if it needs correcting.",
@@ -58,6 +60,15 @@ export const ERROR_MESSAGES = {
   },
   AUTH: {
     INVALID_CREDENTIALS: 'Invalid email or password',
+    /** Auth v2: one message for a wrong, expired, used or never-sent code. */
+    CODE_INVALID: "That code didn't work. Check it or ask for a new one.",
+    CODE_ATTEMPTS_EXCEEDED:
+      'Too many wrong tries for that code. Ask for a new one.',
+    /** Auth v2: the per-email resend cooldown or hourly cap. */
+    CODE_SEND_LIMITED: (seconds: number) =>
+      `Please wait about ${seconds} second${seconds === 1 ? '' : 's'} before asking for another code.`,
+    PHONE_NUMBER_IN_USE: 'Phone number already in use',
+    SOCIAL_SIGNUP_ROLE_REQUIRED: 'Choose how you will use JinVa.',
     UNAUTHORIZED: 'Unauthorized access',
     EMAIL_NOT_VERIFIED: 'Please verify your email before logging in.',
     ROLE_NOT_ALLOWED: 'Only CUSTOMER or ARTISAN accounts may self-register.',

@@ -517,6 +517,96 @@ describe('UsersService', () => {
     });
   });
 
+  describe('usernames (auth v2)', () => {
+    const withName = (username: string) => ({
+      ...mockUser,
+      username,
+      addresses: [],
+    });
+
+    it('refuses a username another account has, case-insensitively, with 409 USERNAME_TAKEN', async () => {
+      mockUsersRepository.findOne.mockResolvedValueOnce(withName('ama.owusu'));
+      mockUserQb.getExists.mockResolvedValueOnce(true);
+
+      const err = await service
+        .updateMe(mockUser.id, { username: 'Kofi.Asante' })
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(ConflictException);
+      expect((err as ConflictException).getResponse()).toMatchObject({
+        errorCode: 'USERNAME_TAKEN',
+      });
+      expect(mockUserQb.withDeleted).toHaveBeenCalled();
+      expect(mockUserQb.where).toHaveBeenCalledWith(
+        'LOWER(u.username) = LOWER(:username)',
+        { username: 'Kofi.Asante' },
+      );
+      expect(mockUserQb.andWhere).toHaveBeenCalledWith(
+        'u.id <> :exceptUserId',
+        {
+          exceptUserId: mockUser.id,
+        },
+      );
+      expect(mockUsersRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('saves a free username, and re-saving your own in another case needs no check', async () => {
+      mockUsersRepository.findOne
+        .mockResolvedValueOnce(withName('ama.owusu'))
+        .mockResolvedValueOnce(withName('ama.owusu'));
+      await service.updateMe(mockUser.id, { username: 'Ama.Owusu' });
+      expect(mockUserQb.getExists).not.toHaveBeenCalled();
+      expect(mockUsersRepository.update).toHaveBeenCalledWith(mockUser.id, {
+        username: 'Ama.Owusu',
+      });
+    });
+
+    it('lists the taken names that start with a base, escaping LIKE wildcards', async () => {
+      const qb = {
+        withDeleted: jest.fn().mockReturnThis(),
+        select: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        getRawMany: jest
+          .fn()
+          .mockResolvedValue([
+            { username: 'kofi.asante' },
+            { username: 'kofi.asante2' },
+          ]),
+      };
+      mockUsersRepository.createQueryBuilder.mockReturnValueOnce(qb as never);
+      expect(await service.findUsernamesStartingWith('kofi.asante')).toEqual([
+        'kofi.asante',
+        'kofi.asante2',
+      ]);
+      expect(qb.withDeleted).toHaveBeenCalled();
+      mockUsersRepository.createQueryBuilder.mockReturnValueOnce(qb as never);
+      await service.findUsernamesStartingWith('a_b%');
+      expect(qb.where).toHaveBeenLastCalledWith(
+        'LOWER(u.username) LIKE :prefix',
+        {
+          prefix: 'a\\_b\\%%',
+        },
+      );
+    });
+
+    it('checks a phone number across live and deleted accounts', async () => {
+      mockUsersRepository.findOne.mockResolvedValueOnce({ id: 3 });
+      expect(await service.isPhoneRegistered('+233241234567')).toBe(true);
+      expect(mockUsersRepository.findOne).toHaveBeenCalledWith(
+        expect.objectContaining({ withDeleted: true }),
+      );
+      mockUsersRepository.findOne.mockResolvedValueOnce(null);
+      expect(await service.isPhoneRegistered('+233241234568')).toBe(false);
+      expect(await service.isPhoneRegistered('')).toBe(false);
+    });
+
+    it('spends one bcrypt hash for a taken address at sign-up', async () => {
+      const started = Date.now();
+      await service.spendPasswordHashCost('Fict1onal!');
+      expect(Date.now() - started).toBeGreaterThan(5);
+    });
+  });
+
   describe('deleteMe', () => {
     const deletedAt = new Date('2026-09-07T10:15:00.000Z');
 

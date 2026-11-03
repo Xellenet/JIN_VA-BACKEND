@@ -31,31 +31,48 @@ import { VARIABLES } from '@common/constants/variables.constants';
 /** Rejects whitespace-only strings, which `computeProfileCompleteness` trims to empty. */
 const NOT_BLANK = /\S/;
 
-/** The artisan-only fields are validated only when the chosen role is ARTISAN. */
-const isArtisan = (o: CompleteSocialSignupDto) => o.role === Role.ARTISAN;
+/**
+ * The artisan-only fields are validated unless the body explicitly says
+ * CUSTOMER — with `role` omitted, the role comes from the pending signup and
+ * may be ARTISAN.
+ */
+const isArtisan = (o: CompleteSocialSignupDto) => o.role !== Role.CUSTOMER;
 
 /**
- * Body of `POST /auth/social/complete`: what a brand-new social user picks and
- * fills in before their account is created.
+ * Body of `POST /auth/social/complete`: what a brand-new social user fills in
+ * before their account is created.
  *
- * The personal fields reuse `CreateUserDto`'s validators. The required
- * artisan fields are exactly the ones `computeProfileCompleteness` requires
- * (plus three optional extras, bio among them since B1), so an artisan created
- * this way is searchable immediately. For a CUSTOMER they are not validated
- * and are ignored.
+ * Auth v2: only `phoneNumber` is required. The role defaults to the one
+ * chosen before Google, the names to what Google supplied, gender is asked
+ * later in Settings, and an artisan's services, area and rate are filled in
+ * from the setup checklist. Old clients that still send any of them keep
+ * working: each is validated as before when present, and an artisan who sends
+ * the full set is searchable immediately. For a CUSTOMER the artisan fields
+ * are ignored.
  */
 export class CompleteSocialSignupDto {
-  @ApiProperty({ enum: [Role.CUSTOMER, Role.ARTISAN], example: Role.ARTISAN })
+  @ApiPropertyOptional({
+    enum: [Role.CUSTOMER, Role.ARTISAN],
+    example: Role.ARTISAN,
+    description:
+      'Auth v2: optional. Defaults to the role chosen before Google (`suggestedRole`); ' +
+      'required only when the flow started without one.',
+  })
+  @IsOptional()
   @IsIn([Role.CUSTOMER, Role.ARTISAN], {
     message: VALIDATION_MESSAGES.ROLE_INVALID,
   })
-  role: Role.CUSTOMER | Role.ARTISAN;
+  role?: Role.CUSTOMER | Role.ARTISAN;
 
-  @ApiProperty({ example: 'John', description: 'Prefilled from Google.' })
+  @ApiPropertyOptional({
+    example: 'John',
+    description: 'Optional (auth v2): defaults to the name Google supplied.',
+  })
+  @IsOptional()
   @IsString()
   @Matches(NOT_BLANK, { message: 'firstname should not be empty' })
   @MaxLength(15, { message: VALIDATION_MESSAGES.FIRSTNAME_MAX_LENGTH })
-  firstname: string;
+  firstname?: string;
 
   @ApiPropertyOptional({
     example: 'Kwame',
@@ -70,11 +87,15 @@ export class CompleteSocialSignupDto {
   })
   middlename?: string | null;
 
-  @ApiProperty({ example: 'Doe', description: 'Prefilled from Google.' })
+  @ApiPropertyOptional({
+    example: 'Doe',
+    description: 'Optional (auth v2): defaults to the name Google supplied.',
+  })
+  @IsOptional()
   @IsString()
   @Matches(NOT_BLANK, { message: 'lastname should not be empty' })
   @MaxLength(15, { message: VALIDATION_MESSAGES.LASTNAME_MAX_LENGTH })
-  lastname: string;
+  lastname?: string;
 
   @ApiProperty({
     example: '+233241234567',
@@ -90,14 +111,14 @@ export class CompleteSocialSignupDto {
   @IsSupportedPhoneNumber()
   phoneNumber: string;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     enum: INPUT_GENDERS,
     example: Gender.MALE,
-    description: 'Required (DI5). MALE or FEMALE only.',
+    description: 'Optional (auth v2). MALE or FEMALE only when sent.',
   })
-  @IsNotEmpty({ message: VALIDATION_MESSAGES.GENDER_REQUIRED })
+  @IsOptional()
   @IsIn(INPUT_GENDERS, { message: VALIDATION_MESSAGES.GENDER_INVALID })
-  gender: Gender.MALE | Gender.FEMALE;
+  gender?: Gender.MALE | Gender.FEMALE;
 
   @ApiPropertyOptional({ example: '1995-10-25' })
   @IsOptional()
@@ -109,9 +130,11 @@ export class CompleteSocialSignupDto {
   @ApiPropertyOptional({
     example: [1, 2],
     type: [Number],
-    description: 'ARTISAN only (required). Every id must exist.',
+    description:
+      'ARTISAN only, optional (auth v2: set in the setup checklist). Every id must exist.',
   })
   @ValidateIf(isArtisan)
+  @IsOptional()
   @IsArray()
   @ArrayMinSize(1, { message: 'Select at least one service' })
   @ArrayUnique()
@@ -120,9 +143,10 @@ export class CompleteSocialSignupDto {
 
   @ApiPropertyOptional({
     example: 'Accra, Ghana',
-    description: 'ARTISAN only (required).',
+    description: 'ARTISAN only, optional (auth v2: no area at sign-up).',
   })
   @ValidateIf(isArtisan)
+  @IsOptional()
   @IsString()
   @Matches(NOT_BLANK, { message: 'location should not be empty' })
   @MaxLength(150)
@@ -130,9 +154,10 @@ export class CompleteSocialSignupDto {
 
   @ApiPropertyOptional({
     example: 45.5,
-    description: 'ARTISAN only (required).',
+    description: 'ARTISAN only, optional (auth v2).',
   })
   @ValidateIf(isArtisan)
+  @IsOptional()
   @IsNumber({ maxDecimalPlaces: 2 })
   @IsPositive()
   hourlyRate?: number;
@@ -174,4 +199,12 @@ export class CompleteSocialSignupDto {
   @Min(0)
   @Max(80)
   experienceYears?: number;
+
+  @ApiPropertyOptional({
+    description: 'Accepted and ignored (auth v2 bodies may carry it).',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2048)
+  turnstileToken?: string;
 }
