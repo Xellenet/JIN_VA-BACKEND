@@ -277,6 +277,14 @@ export class UserTokenService {
     return { access_token, refresh_token, expires_at };
   }
 
+  /**
+   * Auth v2: removes every one-time token of a type for a user — a password
+   * reset by code also kills any reset link still sitting in their inbox.
+   */
+  async revokeTokensOfType(userId: number, type: Token): Promise<void> {
+    await this.tokenRepo.delete({ user: { id: userId }, type });
+  }
+
   async revokeRefreshTokenForUser(userId: number): Promise<void> {
     this.logger.log(`Revoking refresh tokens for user with id: ${userId}`);
     await this.tokenRepo.delete({ user: { id: userId }, type: Token.REFRESH });

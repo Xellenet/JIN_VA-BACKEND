@@ -9,6 +9,7 @@ import { ERROR_MESSAGES } from '@common/constants/error-messages.constants';
 import { UserAlreadyExists } from '@common/exceptions/user-already-exists.exception';
 import { CreateUserDto } from '@users/dto/create-user.dto';
 import { UsersService } from '@users/users.service';
+import type { CreateUserOptions } from '@users/users.service';
 import { plainToInstance } from 'class-transformer';
 import { UserResponseDto } from '@users/dto/user-response.dto';
 import { LoginDto } from './dto/login.dto';
@@ -57,8 +58,41 @@ import {
   SecurityAlertPayload,
 } from '@common/events/app.events';
 import { hashEmailForLog } from '@common/utils/log-identifier.util';
+import { normalizeEmail } from '@common/utils/email.util';
+import { QueryFailedError } from 'typeorm';
+import { HttpStatus } from '@nestjs/common';
+import { PHONE_NUMBER_IN_USE_ERROR_CODE } from '@common/filters/typeorm-exception.filter';
+import { AccountSecurityService } from '../account-security/account-security.service';
+import type { AuthSignupAttemptPayload } from 'mail/events/mail.events';
+import { AuthSessionService, ClientContext } from './auth-session.service';
+import { CodeAuthService } from './code-auth.service';
+import { AuthCodeService } from './codes/auth-code.service';
+import { LoginFailureTracker } from './login-failure-tracker.service';
+import {
+  TURNSTILE_REQUIRED_ERROR_CODE,
+  TurnstileService,
+} from './turnstile/turnstile.service';
+import type { RegisterData } from './dto/auth-code.dto';
+import {
+  responseFloorMs,
+  withMinimumDuration,
+} from './utils/response-floor.util';
+import {
+  firstFreeUsername,
+  usernameBase,
+} from './utils/username-generator.util';
 
 const SELF_REGISTERABLE_ROLES = [Role.CUSTOMER, Role.ARTISAN];
+
+/** How many times sign-up re-picks a username after losing a race for it. */
+const USERNAME_RETRIES = 5;
+
+/** A unique violation on the given column (detail names it, e.g. `Key (lower(username::text))=…`). */
+function isUniqueViolationOn(err: unknown, column: string): boolean {
+  if (!(err instanceof QueryFailedError)) return false;
+  const pg = err as QueryFailedError & { code?: string; detail?: string };
+  return pg.code === '23505' && (pg.detail ?? '').includes(column);
+}
 
 /**
  * `meta.error` on every `/auth/social/*` refusal caused by a missing, unknown
@@ -77,40 +111,49 @@ export class AuthService {
     private readonly socialAuthStrategyFactory: SocialAuthStrategyFactory,
     private readonly oauthStateService: OAuthStateService,
     private readonly pendingSocialSignupService: PendingSocialSignupService,
+    private readonly sessions: AuthSessionService,
+    private readonly codeAuth: CodeAuthService,
+    private readonly authCodes: AuthCodeService,
+    private readonly accountSecurity: AccountSecurityService,
+    private readonly turnstile: TurnstileService,
+    private readonly loginFailures: LoginFailureTracker,
   ) {}
 
   /**
-   * Register a new user
-   * @param createUserDto - Data Transfer Object for creating a user
-   * @returns UserResponseDto - Registered user details
+   * `POST /auth/register` (auth v2).
+   *
+   * Creates the account unverified, with a generated username, and emails a
+   * 6-digit sign-up code. No session yet — `POST /auth/code/verify` signs in.
+   *
+   * **Same answer for a taken address.** If the email already has an account
+   * (live or soft-deleted), nothing is created and the response is the same
+   * 201 body, after the same minimum time: the password is hashed anyway, the
+   * per-address limits apply the same way, and a code is generated and
+   * discarded. The live owner is emailed "Someone tried to sign up with your
+   * address" — or, if they never confirmed their email, a fresh sign-up code.
+   *
+   * The phone check runs first, for every request, so its explicit 409
+   * (`PHONE_NUMBER_IN_USE`, already exposed before v2) can't be combined with
+   * a known phone to learn whether an email is registered.
    */
-  async registerUser(createUserDto: CreateUserDto): Promise<UserResponseDto> {
+  async registerUser(
+    createUserDto: CreateUserDto & { turnstileToken?: string },
+    ctx?: ClientContext,
+  ): Promise<{ message: string; data: RegisterData }> {
     const email = createUserDto.email;
     if (!email) {
       throw new BadRequestException('Provide user email!');
     }
-    // G5 fix: CreateUserDto.password is now @IsOptional() (to accurately
-    // reflect that AuthService.registerSocialUser()'s social-signup path
-    // never supplies one), but THIS public self-registration path must still
-    // hard-require a real password — it's the only route to creating an
-    // account with no other way to ever sign in (no social provider, no
-    // accountVerified-trust precedent). Enforced explicitly here as
-    // defense-in-depth now that the DTO-level constraint alone no longer
-    // guarantees it. See docs/team/google-oauth-fix/qa-report.md ([MINOR]).
+    // G5: this public path must always carry a real password.
     if (!createUserDto.password) {
       throw new BadRequestException('Provide a password!');
     }
 
-    // S3: public self-registration may only create CUSTOMER or ARTISAN accounts.
-    // ADMIN accounts are seed-only and never travel through this validated,
-    // publicly-reachable path — silently downgrading a disallowed role would
-    // mask the attempt, so we reject it outright instead. `role` omitted
-    // entirely is a distinct, legitimate case — default it to CUSTOMER rather
-    // than rejecting, per S3's acceptance criteria.
-    // SEC-5: a self-registered account never starts with a free-text avatar
-    // URL (RegisterUserDto refuses the field; this covers any other caller).
+    // S3: public self-registration may only create CUSTOMER or ARTISAN
+    // accounts; `role` omitted defaults to CUSTOMER. SEC-5: never a
+    // free-text avatar URL. The Turnstile token was checked by the guard.
     delete createUserDto.profilePicture;
-
+    delete createUserDto.turnstileToken;
     createUserDto.role = createUserDto.role ?? Role.CUSTOMER;
     if (!SELF_REGISTERABLE_ROLES.includes(createUserDto.role)) {
       this.logger.warn(
@@ -122,49 +165,147 @@ export class AuthService {
     this.logger.log(
       `Registering user with email hash ${hashEmailForLog(email)}`,
     );
+    return withMinimumDuration(
+      () => this.registerWithinFloor(createUserDto, ctx),
+      responseFloorMs(),
+    );
+  }
 
-    // C1.6: the check spans soft-deleted rows on purpose. `findUserByEmail`
-    // excludes them, which meant a deleted address never hit this branch and
-    // was instead rejected downstream by the `users.email` unique constraint —
-    // a `409` with a different message and no `meta.error`, so a single
-    // unauthenticated register probe told an attacker whether an address was
-    // live, deleted, or free. Both cases now raise the identical
-    // `UserAlreadyExists`, which is what makes "taken" and "taken by a
-    // *deleted* account" indistinguishable.
-    if (await this.userService.isEmailRegistered(email)) {
-      throw new UserAlreadyExists(
-        ERROR_MESSAGES.USER.EMAIL_ALREADY_EXISTS(email),
+  private async registerWithinFloor(
+    dto: CreateUserDto,
+    ctx?: ClientContext,
+  ): Promise<{ message: string; data: RegisterData }> {
+    const email = normalizeEmail(dto.email);
+    if (
+      dto.phoneNumber &&
+      (await this.userService.isPhoneRegistered(dto.phoneNumber))
+    ) {
+      throw new HttpException(
+        {
+          errorCode: PHONE_NUMBER_IN_USE_ERROR_CODE,
+          message: ERROR_MESSAGES.AUTH.PHONE_NUMBER_IN_USE,
+        },
+        HttpStatus.CONFLICT,
       );
     }
-    const { data: user } = await this.userService.createUser(createUserDto);
+
+    const emailHash = this.authCodes.hashEmail(email);
+    const answer = (resendAvailableAt: Date) => ({
+      message: SUCCESS_MESSAGES.AUTH.REGISTERED_CHECK_EMAIL,
+      data: { email, resendAvailableAt: resendAvailableAt.toISOString() },
+    });
+
+    // C1.6: spans soft-deleted rows, so live, deleted and free are told apart
+    // by nothing in the response.
+    if (await this.userService.isEmailRegistered(email)) {
+      await this.userService.spendPasswordHashCost(dto.password!);
+      const reservation = await this.codeAuth.reserveOrThrow(
+        emailHash,
+        'signup',
+      );
+      await this.notifyExistingOwner(email, emailHash, ctx);
+      return answer(reservation.resendAvailableAt);
+    }
+
+    const reservation = await this.codeAuth.reserveOrThrow(emailHash, 'signup');
+    let user: User;
+    try {
+      user = await this.createWithGeneratedUsername({ ...dto, email });
+    } catch (err) {
+      // Two sign-ups racing for one address: the loser answers like any
+      // other taken address.
+      if (
+        err instanceof UserAlreadyExists ||
+        isUniqueViolationOn(err, 'email')
+      ) {
+        return answer(reservation.resendAvailableAt);
+      }
+      throw err;
+    }
     this.logger.log(`User registered with id: ${user.id}`);
 
-    const verificationToken = await this.userTokenService.createToken(
-      user,
-      Token.EMAIL_VERIFICATION,
-      VARIABLES.EMAIL_VERIFICATION_TOKEN_EXPIRES_IN_MINUTES,
-    );
-
-    this.emmitter.emit(MailEvent.USER_REGISTERED, {
-      email: user.email,
-      firstname: user.firstname,
-      verificationToken: verificationToken.token,
+    await this.accountSecurity.recordBestEffort({
+      userId: user.id,
+      event: 'auth.signup',
+      details: { method: 'password' },
+      ip: ctx?.ip ?? null,
+      userAgent: ctx?.userAgent ?? null,
     });
-    this.logger.log(
-      `Emitted event for sending registration email to user with id: ${user.id}`,
-    );
-
+    await this.codeAuth.deliverCode(emailHash, 'signup', user, 'signup', ctx);
     this.emitIfArtisan(user);
+    return answer(reservation.resendAvailableAt);
+  }
 
-    // L3: `user` is the entity `createUser` just saved, which still carries the
-    // bcrypt hash in memory regardless of the column's `select: false` — so
-    // this response used to hand the caller back their own freshly-computed
-    // hash. `excludeExtraneousValues` keeps the body to the fields
-    // `UserResponseDto` actually declares (the DTO no longer declares
-    // `password` at all); see the DTO's own note for why both halves exist.
-    return plainToInstance(UserResponseDto, user, {
-      excludeExtraneousValues: true,
-    });
+  /**
+   * The taken-address branch of sign-up. A live owner who never confirmed
+   * their email gets a fresh sign-up code (most likely they are the one
+   * signing up again); a confirmed owner is told someone tried. A code is
+   * generated either way so the branch costs the same.
+   */
+  private async notifyExistingOwner(
+    email: string,
+    emailHash: string,
+    ctx?: ClientContext,
+  ): Promise<void> {
+    const owner = await this.userService.findUserByEmail(email);
+    if (owner && !owner.accountVerified && !owner.isBanned) {
+      await this.codeAuth.deliverCode(
+        emailHash,
+        'signup',
+        owner,
+        'signup',
+        ctx,
+      );
+      return;
+    }
+    await this.codeAuth.deliverCode(emailHash, 'signup', null);
+    if (owner && !owner.isBanned) {
+      this.emmitter.emit(MailEvent.AUTH_SIGNUP_ATTEMPT, {
+        email: owner.email,
+        firstname: owner.firstname,
+      } satisfies AuthSignupAttemptPayload);
+    }
+  }
+
+  /**
+   * Creates the account with a username: the one an old client sent, if it
+   * is free, otherwise the first free `first.last`, `first.last2`… The unique
+   * index settles a race between two sign-ups with the same name: the loser
+   * re-reads the taken names and tries the next one.
+   */
+  private async createWithGeneratedUsername(
+    dto: CreateUserDto,
+    options: Omit<CreateUserOptions, 'manager'> = {},
+  ): Promise<User> {
+    let preferred =
+      dto.username && !(await this.userService.isUsernameTaken(dto.username))
+        ? dto.username
+        : undefined;
+    const base = usernameBase(dto.firstname, dto.lastname);
+    for (let attempt = 1; ; attempt++) {
+      const username =
+        preferred ??
+        firstFreeUsername(
+          base,
+          await this.userService.findUsernamesStartingWith(base),
+        );
+      try {
+        const { data } = await this.userService.createUserInTransaction(
+          plainToInstance(CreateUserDto, { ...dto, username }),
+          options,
+        );
+        return data;
+      } catch (err) {
+        if (
+          attempt < USERNAME_RETRIES &&
+          isUniqueViolationOn(err, 'username')
+        ) {
+          preferred = undefined;
+          continue;
+        }
+        throw err;
+      }
+    }
   }
 
   /**
@@ -195,11 +336,50 @@ export class AuthService {
    * @returns `{ result, refreshToken }` — the controller sets `refreshToken` as an
    *   httpOnly cookie and returns only `result` (which never contains the refresh token).
    */
-  async loginUser(loginDto: LoginDto): Promise<AuthTokenResult> {
+  async loginUser(
+    loginDto: LoginDto,
+    ctx?: ClientContext,
+  ): Promise<AuthTokenResult> {
     const { email, password } = loginDto;
     if (!email || !password) {
       throw new BadRequestException('Provide user email and password!');
     }
+
+    // Auth v2: after 3 failures for this email or this IP (any address,
+    // registered or not), a Turnstile token is required before the password is
+    // even looked at, so the challenge itself says nothing about the account.
+    if (
+      this.turnstile.isEnabled() &&
+      this.loginFailures.requiresChallenge(email, ctx?.ip)
+    ) {
+      await this.turnstile.assertPassed(
+        loginDto.turnstileToken,
+        'login',
+        ctx?.ip,
+        {
+          status: HttpStatus.UNAUTHORIZED,
+          errorCode: TURNSTILE_REQUIRED_ERROR_CODE,
+        },
+      );
+    }
+
+    try {
+      const outcome = await this.checkPasswordLogin(email, password, ctx);
+      this.loginFailures.recordSuccess(email);
+      return outcome;
+    } catch (err) {
+      if (err instanceof InvalidCredentialsException) {
+        this.loginFailures.recordFailure(email, ctx?.ip);
+      }
+      throw err;
+    }
+  }
+
+  private async checkPasswordLogin(
+    email: string,
+    password: string,
+    ctx?: ClientContext,
+  ): Promise<AuthTokenResult> {
     // M5: every line this method emits identifies the account by id, never by
     // the submitted address — see `hashEmailForLog` for why this one line is
     // the exception (no id exists until the lookup below returns) and why the
@@ -272,21 +452,11 @@ export class AuthService {
       throw new ForbiddenException(ERROR_MESSAGES.AUTH.EMAIL_NOT_VERIFIED);
     }
 
-    this.logger.log(`Generating tokens for user ${user.id}`);
-    const { access_token, refresh_token, expires_at } =
-      await this.userTokenService.createJWTTokens(user);
-    this.logger.log(`Tokens generated for user ${user.id}`);
-
     this.logger.log(`User ${user.id} logged in`);
-    const result = plainToInstance(LoginResponseDto, {
-      access_token,
-      expires_at,
+    return this.sessions.start(user, 'password', ctx, {
       message: SUCCESS_MESSAGES.AUTH.USER_LOGGED_IN,
-      data: plainToInstance(UserResponseDto, user, {
-        excludeExtraneousValues: true,
-      }),
+      notifyNewSignIn: true,
     });
-    return { result, refreshToken: refresh_token };
   }
 
   /**
@@ -858,6 +1028,7 @@ export class AuthService {
   async handleOAuthCallback(
     provider: string,
     callbackDto: OAuthCallbackDto,
+    ctx?: ClientContext,
   ): Promise<OAuthCallbackOutcome> {
     const { code, state, error, error_description } = callbackDto;
 
@@ -955,23 +1126,11 @@ export class AuthService {
       user = restored;
     }
 
-    this.logger.log(
-      `Generating tokens for social login user with id: ${user.id}`,
-    );
-    const { access_token, refresh_token, expires_at } =
-      await this.userTokenService.createJWTTokens(user);
-
     this.logger.log(`Social login successful for user with id: ${user.id}`);
-
-    const result = plainToInstance(LoginResponseDto, {
-      access_token,
-      expires_at,
+    return this.sessions.start(user, 'google', ctx, {
       message: SUCCESS_MESSAGES.AUTH.USER_LOGGED_IN,
-      data: plainToInstance(UserResponseDto, user, {
-        excludeExtraneousValues: true,
-      }),
+      notifyNewSignIn: true,
     });
-    return { result, refreshToken: refresh_token };
   }
 
   /**
@@ -1120,10 +1279,26 @@ export class AuthService {
   async completeSocialSignup(
     key: string | undefined,
     dto: CompleteSocialSignupDto,
+    ctx?: ClientContext,
   ): Promise<AuthTokenResult> {
+    // Auth v2: the role was chosen before Google (`suggestedRole`), so the
+    // body may leave it out; one of the two must name it.
+    const peeked = this.pendingSocialSignupService.peek(key);
+    if (!peeked) throw this.socialSignupExpired();
+    const role = dto.role ?? peeked.suggestedRole;
+    if (!role) {
+      throw new BadRequestException(
+        ERROR_MESSAGES.AUTH.SOCIAL_SIGNUP_ROLE_REQUIRED,
+      );
+    }
+    dto = { ...dto, role: role as Role.CUSTOMER | Role.ARTISAN };
     const isArtisan = dto.role === Role.ARTISAN;
 
-    if (isArtisan && !(await this.userService.servicesExist(dto.serviceIds!))) {
+    if (
+      isArtisan &&
+      dto.serviceIds?.length &&
+      !(await this.userService.servicesExist(dto.serviceIds))
+    ) {
       throw new BadRequestException('One or more services were not found.');
     }
 
@@ -1151,19 +1326,18 @@ export class AuthService {
       throw err;
     }
 
-    const { access_token, refresh_token, expires_at } =
-      await this.userTokenService.createJWTTokens(user);
     this.logger.log(`Social signup completed for user ${user.id}`);
-
-    const result = plainToInstance(LoginResponseDto, {
-      access_token,
-      expires_at,
-      message: SUCCESS_MESSAGES.AUTH.SOCIAL_SIGNUP_COMPLETED,
-      data: plainToInstance(UserResponseDto, user, {
-        excludeExtraneousValues: true,
-      }),
+    await this.accountSecurity.recordBestEffort({
+      userId: user.id,
+      event: 'auth.signup',
+      details: { method: 'google' },
+      ip: ctx?.ip ?? null,
+      userAgent: ctx?.userAgent ?? null,
     });
-    return { result, refreshToken: refresh_token };
+    return this.sessions.start(user, 'google', ctx, {
+      message: SUCCESS_MESSAGES.AUTH.SOCIAL_SIGNUP_COMPLETED,
+      notifyNewSignIn: false,
+    });
   }
 
   /** `POST /auth/social/cancel`: drops the pending signup, if any. Idempotent. */
@@ -1194,16 +1368,27 @@ export class AuthService {
     pending: PendingSocialSignup,
     dto: CompleteSocialSignupDto,
   ): Promise<User> {
-    if (!SELF_REGISTERABLE_ROLES.includes(dto.role)) {
+    if (!dto.role || !SELF_REGISTERABLE_ROLES.includes(dto.role)) {
       throw new BadRequestException(ERROR_MESSAGES.AUTH.ROLE_NOT_ALLOWED);
     }
     this.logger.log(`Registering new social user from ${pending.provider}`);
 
+    // Auth v2: the names default to what Google supplied.
+    const firstname = (dto.firstname ?? pending.firstname ?? '').trim();
+    const lastname = (dto.lastname ?? pending.lastname ?? '').trim();
+    if (!firstname || !lastname) {
+      throw new BadRequestException(
+        !firstname
+          ? 'firstname should not be empty'
+          : 'lastname should not be empty',
+      );
+    }
+
     const createUserDto = plainToInstance(CreateUserDto, {
       email: pending.email,
-      firstname: dto.firstname.trim(),
+      firstname,
       middlename: dto.middlename ?? null,
-      lastname: dto.lastname.trim(),
+      lastname,
       phoneNumber: dto.phoneNumber,
       gender: dto.gender,
       dateOfBirth: dto.dateOfBirth,
@@ -1217,34 +1402,33 @@ export class AuthService {
       // change-password or the forgot/reset-password flow (G10).
     });
 
-    const { data: user } = await this.userService.createUserInTransaction(
-      createUserDto,
-      {
-        // G10: Google already verifies the address as a condition of returning
-        // it in the OAuth profile, so trust it — consistent with G6. Passed as
-        // an option rather than a `CreateUserDto` field: that DTO is also bound
-        // to the public register endpoint, where an `accountVerified` override
-        // would let a normal signup skip email verification. Without it, a
-        // Google-only account would stay unverified forever (no verification
-        // email is ever sent for one), and the S4 gate would block password
-        // login even after the user set a password via Forgot Password.
-        verifiedAt: new Date(),
-        artisanProfile:
-          dto.role === Role.ARTISAN
-            ? {
-                // B1: optional; blank or absent is stored as null.
-                bio: dto.bio?.trim() || null,
-                hourlyRate: dto.hourlyRate!,
-                location: dto.location!.trim(),
-                serviceIds: dto.serviceIds!,
-                businessName: dto.businessName?.trim() || undefined,
-                // The column only admits positive values; "0 years" is the
-                // same thing as not saying.
-                experienceYears: dto.experienceYears || undefined,
-              }
-            : undefined,
-      },
-    );
+    const user = await this.createWithGeneratedUsername(createUserDto, {
+      // G10: Google already verifies the address as a condition of returning
+      // it in the OAuth profile, so trust it — consistent with G6. Passed as
+      // an option rather than a `CreateUserDto` field: that DTO is also bound
+      // to the public register endpoint, where an `accountVerified` override
+      // would let a normal signup skip email verification. Without it, a
+      // Google-only account would stay unverified forever (no verification
+      // email is ever sent for one), and the S4 gate would block password
+      // login even after the user set a password via Forgot Password.
+      verifiedAt: new Date(),
+      artisanProfile:
+        dto.role === Role.ARTISAN
+          ? {
+              // B1: optional; blank or absent is stored as null. Auth v2:
+              // rate, area and services are optional too — whatever was
+              // sent is stored, the rest comes from the setup checklist.
+              bio: dto.bio?.trim() || null,
+              hourlyRate: dto.hourlyRate,
+              location: dto.location?.trim() || undefined,
+              serviceIds: dto.serviceIds,
+              businessName: dto.businessName?.trim() || undefined,
+              // The column only admits positive values; "0 years" is the
+              // same thing as not saying.
+              experienceYears: dto.experienceYears || undefined,
+            }
+          : undefined,
+    });
 
     this.logger.log(`Social user registered: user ${user.id}`);
 

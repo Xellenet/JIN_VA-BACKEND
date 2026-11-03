@@ -54,19 +54,24 @@ describe('CompleteSocialSignupDto', () => {
     ).toEqual([]);
   });
 
-  it.each([undefined, 'ADMIN', 'customer', 'SUPERUSER'])(
+  it.each(['ADMIN', 'customer', 'SUPERUSER'])(
     'rejects role %p',
     async (role) => {
       expect(await errorsFor({ ...customer, role })).toContain('role');
     },
   );
 
-  it.each(['firstname', 'lastname', 'phoneNumber', 'gender'])(
-    'requires %s',
+  it('auth v2: needs only the phone number (role, names and gender default or come later)', async () => {
+    expect(await errorsFor({ phoneNumber: '024 555 1234' })).toEqual([]);
+    expect(await errorsFor({})).toEqual(['phoneNumber']);
+  });
+
+  it.each(['role', 'firstname', 'lastname', 'gender'])(
+    'auth v2: %s is optional',
     async (field) => {
       const body: Record<string, unknown> = { ...customer };
       delete body[field];
-      expect(await errorsFor(body)).toContain(field);
+      expect(await errorsFor(body)).toEqual([]);
     },
   );
 
@@ -121,12 +126,14 @@ describe('CompleteSocialSignupDto', () => {
     expect(await errorsFor({ ...customer, gender: 'MALE' })).toEqual([]);
   });
 
-  it('requires every searchable-profile field for an ARTISAN, but not a bio (B1)', async () => {
-    const errors = await errorsFor({ ...customer, role: Role.ARTISAN });
-    expect(errors).toEqual(
-      expect.arrayContaining(['serviceIds', 'location', 'hourlyRate']),
-    );
-    expect(errors).not.toContain('bio');
+  it('auth v2: an ARTISAN needs no services, area or rate at sign-up (setup checklist)', async () => {
+    expect(await errorsFor({ ...customer, role: Role.ARTISAN })).toEqual([]);
+  });
+
+  it('auth v2: still validates artisan fields when the role is left to the pending signup', async () => {
+    expect(
+      await errorsFor({ phoneNumber: '024 555 1234', hourlyRate: -1 }),
+    ).toContain('hourlyRate');
   });
 
   it.each([undefined, '', '   '])(

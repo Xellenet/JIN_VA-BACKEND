@@ -31,7 +31,6 @@ import {
 } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
 import { RegisterUserDto } from './dto/register-user.dto';
-import { UserResponseDto } from '@users/dto/user-response.dto';
 import { SUCCESS_MESSAGES } from '@common/constants/success-messages.constants';
 import { ERROR_MESSAGES } from '@common/constants/error-messages.constants';
 import { VARIABLES } from '@common/constants/variables.constants';
@@ -68,6 +67,53 @@ import {
   readPendingSignupCookie,
 } from './utils/pending-signup-cookie.util';
 import { UserAlreadyExists } from '@common/exceptions/user-already-exists.exception';
+import { securityContextFrom } from '../account-security/account-security.service';
+import { CodeAuthService } from './code-auth.service';
+import type { ClientContext } from './auth-session.service';
+import type { AuthTokenResult } from './dto/login-response.dto';
+import {
+  CheckResetCodeDto,
+  ForgotPasswordCodeDto,
+  RequestCodeDto,
+  ResetPasswordWithCodeDto,
+  VerifyCodeDto,
+} from './dto/auth-code.dto';
+import { TurnstileGuard, RequireTurnstile } from './turnstile/turnstile.guard';
+
+/** The caller's IP and user agent, when the handler was reached over HTTP. */
+function contextOf(req: Request | undefined): ClientContext | undefined {
+  return req ? securityContextFrom(req) : undefined;
+}
+
+/**
+ * Sets the refresh, session and session-only cookies exactly as
+ * `POST /auth/login` always has, and returns the body.
+ */
+function applySession(
+  res: Response,
+  { result, refreshToken }: AuthTokenResult,
+  persistent = true,
+): LoginResponseDto {
+  setRefreshTokenCookie(res, refreshToken, persistent);
+  setAuthSessionCookie(
+    res,
+    { sub: result.data.id, role: result.data.role },
+    persistent,
+  );
+  setSessionOnlyMarker(res, !persistent);
+  return result;
+}
+
+/** One description for the auth v2 code errors. */
+const CODE_ERRORS_DESCRIPTION =
+  '`meta.error` is `CODE_INVALID` (wrong, expired, used or never sent — one message: ' +
+  '"That code didn\'t work. Check it or ask for a new one.") or `CODE_ATTEMPTS_EXCEEDED` ' +
+  '(5 wrong tries; ask for a new code). Both appear on the same schedule whether or not the ' +
+  'address has an account.';
+
+const TURNSTILE_DESCRIPTION =
+  'When `TURNSTILE_SECRET_KEY` is set: 400 `TURNSTILE_FAILED` for a missing or rejected ' +
+  '`turnstileToken`, 503 `TURNSTILE_UNAVAILABLE` when Cloudflare cannot be reached (fail-closed).';
 
 /**
  * G4: query-param convention for the redirect back to the frontend after
@@ -127,44 +173,176 @@ const RATE_LIMITED_DESCRIPTION =
 export class AuthController {
   private readonly logger = new Logger(AuthController.name);
 
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly codeAuth: CodeAuthService,
+  ) {}
 
   /**
-   * Registers a new user account and sends a verification email.
-   * A verification email is dispatched asynchronously on success.
-   *
-   * @param createUserDto - Required fields for the new account.
-   * @returns The created user profile (password excluded).
+   * Auth v2: creates the account unverified with a generated username and
+   * emails a 6-digit sign-up code. No session — `POST /auth/code/verify` signs
+   * in. An address that already has an account gets the identical 201.
    */
   @Post('register')
-  // Registration spam: every call that hits a free address dispatches a
-  // verification email and creates a row.
-  @UseGuards(AuthEmailThrottlerGuard)
+  // Registration spam: every call can send mail. Throttled per IP first, then
+  // Turnstile (so a flood never reaches Cloudflare).
+  @UseGuards(AuthEmailThrottlerGuard, TurnstileGuard)
+  @RequireTurnstile('register')
   @ApiOperation({
-    summary: 'Register a new user account',
+    summary: 'Register a new user account (sends a 6-digit code)',
     description:
-      'Creates a new CUSTOMER or ARTISAN account. ' +
-      'A one-time email verification link is sent to the provided address on success. ' +
-      'Passwords must be at least 8 characters and contain an uppercase letter, a digit, and a special character. ' +
-      'Rate-limited per client IP.',
+      'Creates a CUSTOMER or ARTISAN account, unverified, with a generated username ' +
+      '(`first.last`, `first.last2`…), and emails a 6-digit sign-up code (10 minutes, single use). ' +
+      '`username` and `gender` are optional and validated when sent (old clients). ' +
+      'Responds 201 `{ message, data: { email, resendAvailableAt } }` with **no session**. ' +
+      'If the email already has an account the response is identical (same status, body and ' +
+      'minimum time) and the owner is emailed "Someone tried to sign up with your address". ' +
+      'A phone number already in use is still an explicit 409 `PHONE_NUMBER_IN_USE`. ' +
+      'Rate-limited per client IP and per address (60 s cooldown, 5 per hour → 429).',
   })
   @ApiCreatedResponse({
-    description: 'User registered successfully',
-    type: UserResponseDto,
+    description:
+      '`{ message, data: { email, resendAvailableAt } }` — no session yet',
   })
   @ApiBadRequestResponse({
     description:
-      'Validation failed (missing fields — phone number and gender are required — weak password, ' +
-      'invalid email format, a phone number that is not valid for a supported country, or a gender other than MALE/FEMALE)',
+      'Validation failed (phone required and valid, password rule, role CUSTOMER/ARTISAN), or ' +
+      TURNSTILE_DESCRIPTION,
   })
   @ApiConflictResponse({
     description:
-      'An account with this email address already exists, or the phone number is already in use ' +
-      '(`meta.error: PHONE_NUMBER_IN_USE`)',
+      'The phone number is already in use (`meta.error: PHONE_NUMBER_IN_USE`)',
   })
   @ApiTooManyRequestsResponse({ description: RATE_LIMITED_DESCRIPTION })
-  registerUser(@Body() registerUserDto: RegisterUserDto) {
-    return this.authService.registerUser(registerUserDto);
+  registerUser(@Body() registerUserDto: RegisterUserDto, @Req() req?: Request) {
+    return this.authService.registerUser(registerUserDto, contextOf(req));
+  }
+
+  /**
+   * Auth v2: emails a 6-digit code for sign-up (resend) or login.
+   */
+  @Post('code/request')
+  @HttpCode(200)
+  @UseGuards(AuthEmailThrottlerGuard, TurnstileGuard)
+  @RequireTurnstile('code_request')
+  @ApiOperation({
+    summary: 'Email a 6-digit sign-up or login code',
+    description:
+      'Always 200 `{ message, data: { resendAvailableAt } }`, with the same body and minimum ' +
+      'time whether or not the address has an account. A login code for an account that ' +
+      'never confirmed its email is worded as the sign-up code; verifying it confirms the ' +
+      'email and signs in. Issuing a code replaces the previous one for that address and ' +
+      'purpose. 429 when the per-address cooldown (60 s) or hourly cap (5) is hit — same for ' +
+      'every address — or the per-IP limit.',
+  })
+  @ApiOkResponse({ description: '`{ message, data: { resendAvailableAt } }`' })
+  @ApiBadRequestResponse({
+    description: 'Validation failed, or ' + TURNSTILE_DESCRIPTION,
+  })
+  @ApiTooManyRequestsResponse({ description: RATE_LIMITED_DESCRIPTION })
+  requestCode(@Body() dto: RequestCodeDto, @Req() req?: Request) {
+    return this.codeAuth.requestCode(dto.email, dto.purpose, contextOf(req));
+  }
+
+  /**
+   * Auth v2: checks a sign-up or login code and starts a session exactly like
+   * password login.
+   */
+  @Post('code/verify')
+  @HttpCode(200)
+  // Code guessing: per IP here, 5 tries per code in the store.
+  @UseGuards(AuthCredentialsThrottlerGuard)
+  @ApiOperation({
+    summary: 'Verify a 6-digit code and sign in',
+    description:
+      '`purpose: signup` confirms the email; both purposes then sign in with the same body ' +
+      'and httpOnly cookies as `POST /auth/login` (optional `rememberMe`, as there). ' +
+      CODE_ERRORS_DESCRIPTION +
+      ' Rate-limited per client IP.',
+  })
+  @ApiOkResponse({ description: 'Signed in', type: LoginResponseDto })
+  @ApiBadRequestResponse({ description: CODE_ERRORS_DESCRIPTION })
+  @ApiForbiddenResponse({
+    description: 'The account is banned (`ACCOUNT_BANNED`)',
+  })
+  @ApiTooManyRequestsResponse({ description: RATE_LIMITED_DESCRIPTION })
+  async verifyCode(
+    @Body() dto: VerifyCodeDto,
+    @Res({ passthrough: true }) res: Response,
+    @Req() req?: Request,
+  ): Promise<LoginResponseDto> {
+    const session = await this.codeAuth.verifyCode(dto, contextOf(req));
+    return applySession(res, session, dto.rememberMe !== false);
+  }
+
+  /** Auth v2: emails a password-reset code. */
+  @Post('password/forgot')
+  @HttpCode(200)
+  @UseGuards(AuthEmailThrottlerGuard, TurnstileGuard)
+  @RequireTurnstile('forgot')
+  @ApiOperation({
+    summary: 'Email a 6-digit password-reset code',
+    description:
+      'Always 200 `{ message, data: { resendAvailableAt } }`, same body and minimum time ' +
+      'whether or not the address has an account. Links already sent by ' +
+      '`POST /auth/forgot-password` keep working until they expire.',
+  })
+  @ApiOkResponse({ description: '`{ message, data: { resendAvailableAt } }`' })
+  @ApiBadRequestResponse({
+    description: 'Validation failed, or ' + TURNSTILE_DESCRIPTION,
+  })
+  @ApiTooManyRequestsResponse({ description: RATE_LIMITED_DESCRIPTION })
+  forgotPasswordWithCode(
+    @Body() dto: ForgotPasswordCodeDto,
+    @Req() req?: Request,
+  ) {
+    return this.codeAuth.forgotPassword(dto.email, contextOf(req));
+  }
+
+  /** Auth v2: checks a reset code without using it up. */
+  @Post('password/reset/check')
+  @HttpCode(200)
+  @UseGuards(AuthCredentialsThrottlerGuard)
+  @ApiOperation({
+    summary: 'Check a password-reset code without using it',
+    description:
+      '200 `{ message, data: { valid: true } }` when the `password_reset` code is right; the ' +
+      'code stays usable for `POST /auth/password/reset`. A wrong code costs one of its 5 tries. ' +
+      CODE_ERRORS_DESCRIPTION,
+  })
+  @ApiOkResponse({ description: '`{ message, data: { valid: true } }`' })
+  @ApiBadRequestResponse({ description: CODE_ERRORS_DESCRIPTION })
+  @ApiTooManyRequestsResponse({ description: RATE_LIMITED_DESCRIPTION })
+  checkResetCode(@Body() dto: CheckResetCodeDto, @Req() req?: Request) {
+    return this.codeAuth.checkResetCode(dto, contextOf(req));
+  }
+
+  /** Auth v2: sets a new password with a reset code, signs out every other session, signs in. */
+  @Post('password/reset')
+  @HttpCode(200)
+  @UseGuards(AuthCredentialsThrottlerGuard)
+  @ApiOperation({
+    summary: 'Reset the password with a 6-digit code and sign in',
+    description:
+      'Checks the `password_reset` code, sets `newPassword` (same rule as sign-up; no ' +
+      'confirmation field), revokes every refresh token, live code and reset link of the ' +
+      'account, records a security event, emails "Your password was changed", and signs in ' +
+      'like `POST /auth/login`. ' +
+      CODE_ERRORS_DESCRIPTION,
+  })
+  @ApiOkResponse({
+    description: 'Password changed and signed in',
+    type: LoginResponseDto,
+  })
+  @ApiBadRequestResponse({ description: CODE_ERRORS_DESCRIPTION })
+  @ApiTooManyRequestsResponse({ description: RATE_LIMITED_DESCRIPTION })
+  async resetPasswordWithCode(
+    @Body() dto: ResetPasswordWithCodeDto,
+    @Res({ passthrough: true }) res: Response,
+    @Req() req?: Request,
+  ): Promise<LoginResponseDto> {
+    const session = await this.codeAuth.resetPassword(dto, contextOf(req));
+    return applySession(res, session, dto.rememberMe !== false);
   }
 
   /**
@@ -205,7 +383,12 @@ export class AuthController {
     type: LoginResponseDto,
   })
   @ApiBadRequestResponse({ description: 'Email or password field is missing' })
-  @ApiUnauthorizedResponse({ description: 'Invalid email or password' })
+  @ApiUnauthorizedResponse({
+    description:
+      'Invalid email or password. Auth v2: after 3 failed logins for this email or IP ' +
+      '(15 minutes), `meta.error` is `TURNSTILE_REQUIRED` until the request carries a valid ' +
+      '`turnstileToken` (action `login`); only when Turnstile is configured.',
+  })
   @ApiForbiddenResponse({
     description:
       'Email not verified, or the account is soft-deleted but still restorable ' +
@@ -215,19 +398,15 @@ export class AuthController {
   async loginUser(
     @Body() loginDto: LoginDto,
     @Res({ passthrough: true }) res: Response,
+    @Req() req?: Request,
   ): Promise<LoginResponseDto> {
-    const { result, refreshToken } = await this.authService.loginUser(loginDto);
+    const ctx = contextOf(req);
+    const session = ctx
+      ? await this.authService.loginUser(loginDto, ctx)
+      : await this.authService.loginUser(loginDto);
     // QA AUTH-31: "Remember me" unticked keeps the sign-in to this browser
     // session; refreshes keep it that way via the marker cookie.
-    const persistent = loginDto.rememberMe !== false;
-    setRefreshTokenCookie(res, refreshToken, persistent);
-    setAuthSessionCookie(
-      res,
-      { sub: result.data.id, role: result.data.role },
-      persistent,
-    );
-    setSessionOnlyMarker(res, !persistent);
-    return result;
+    return applySession(res, session, loginDto.rememberMe !== false);
   }
 
   /**
@@ -712,6 +891,7 @@ export class AuthController {
   async googleCallback(
     @Query() query: Record<string, string>,
     @Res() res: Response,
+    @Req() req?: Request,
   ): Promise<void> {
     const callbackDto: OAuthCallbackDto = {
       code: query.code,
@@ -721,10 +901,10 @@ export class AuthController {
     };
 
     try {
-      const outcome = await this.authService.handleOAuthCallback(
-        'google',
-        callbackDto,
-      );
+      const ctx = contextOf(req);
+      const outcome = ctx
+        ? await this.authService.handleOAuthCallback('google', callbackDto, ctx)
+        : await this.authService.handleOAuthCallback('google', callbackDto);
       if ('pendingSignupKey' in outcome) {
         // Brand-new user: no account and no session yet — the complete-signup
         // page collects the role and details first.
@@ -833,6 +1013,7 @@ export class AuthController {
         await this.authService.completeSocialSignup(
           readPendingSignupCookie(req),
           dto,
+          contextOf(req),
         );
       clearPendingSignupCookie(res);
       setRefreshTokenCookie(res, refreshToken);

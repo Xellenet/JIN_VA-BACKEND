@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { authV2TestDoubles } from '../testing/auth-v2-test-providers';
 import { AuthService } from '../auth.service';
 import { UsersService } from '@users/users.service';
 import { UserTokenService } from '@users/token.service';
@@ -38,6 +39,10 @@ describe('G10 fix: Google signup -> Forgot Password -> email/password login', ()
   let service: AuthService;
   let pendingStore: PendingSocialSignupService;
   const mockUsersService = {
+    findUsernamesStartingWith: jest.fn().mockResolvedValue([]),
+    isUsernameTaken: jest.fn().mockResolvedValue(false),
+    isPhoneRegistered: jest.fn().mockResolvedValue(false),
+    spendPasswordHashCost: jest.fn().mockResolvedValue(undefined),
     findUserByEmail: jest.fn(),
     createUser: jest.fn(),
     createUserInTransaction: jest.fn(),
@@ -58,6 +63,7 @@ describe('G10 fix: Google signup -> Forgot Password -> email/password login', ()
         { provide: SocialAuthStrategyFactory, useValue: {} },
         { provide: OAuthStateService, useValue: {} },
         PendingSocialSignupService,
+        ...authV2TestDoubles().providers,
       ],
     }).compile();
     service = module.get<AuthService>(AuthService);

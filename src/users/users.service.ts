@@ -47,6 +47,9 @@ import {
 import { randomUUID } from 'node:crypto';
 import { hashEmailForLog } from '@common/utils/log-identifier.util';
 
+/** `meta.error` when `PATCH /users/me` asks for a username someone else has. */
+export const USERNAME_TAKEN_ERROR_CODE = 'USERNAME_TAKEN';
+
 /**
  * A real bcrypt hash, at the application's configured cost factor, of a random
  * value that is never stored anywhere and can therefore never be submitted.
@@ -84,9 +87,10 @@ void getDummyPasswordHash();
 export interface InitialArtisanProfile {
   /** B1: optional at signup; `null` is stored as "no bio yet". */
   bio: string | null;
-  hourlyRate: number;
-  location: string;
-  serviceIds: number[];
+  /** Auth v2: each of these is optional at sign-up (filled in from the setup checklist). */
+  hourlyRate?: number;
+  location?: string;
+  serviceIds?: number[];
   businessName?: string;
   experienceYears?: number;
 }
@@ -208,10 +212,9 @@ export class UsersService {
           location: initialProfile.location,
           businessName: initialProfile.businessName ?? '',
           experienceYears: initialProfile.experienceYears,
-          services: await this.findServicesByIds(
-            initialProfile.serviceIds,
-            manager,
-          ),
+          services: initialProfile.serviceIds?.length
+            ? await this.findServicesByIds(initialProfile.serviceIds, manager)
+            : [],
         });
         // Same single definition of "complete" every other profile write
         // uses, so a fully filled-in signup is searchable immediately.
@@ -355,6 +358,18 @@ export class UsersService {
 
     const { nationalId, ...profile } = updateMeDto;
     const changes: Partial<User> = { ...(profile as Partial<User>) };
+    // Auth v2: usernames are unique, case-insensitively (generated ones and
+    // typed ones alike). Saving your own current username again is fine.
+    if (
+      typeof profile.username === 'string' &&
+      profile.username.toLowerCase() !== (user.username ?? '').toLowerCase() &&
+      (await this.isUsernameTaken(profile.username, userId))
+    ) {
+      throw new ConflictException({
+        errorCode: USERNAME_TAKEN_ERROR_CODE,
+        message: ERROR_MESSAGES.USER.USERNAME_TAKEN,
+      });
+    }
     if (nationalId != null) {
       // QA CUS-07: set once. A typo is corrected by support, not by the user,
       // so an ID can't be swapped after it has been relied on.
@@ -661,6 +676,66 @@ export class UsersService {
       select: ['id'],
     });
     return !!existing;
+  }
+
+  /**
+   * Auth v2: whether the phone number is held by any account, live or
+   * soft-deleted (the `users.phone_number` constraint spans both). Lets
+   * registration give its explicit 409 before deciding anything about the
+   * email, so the answer is the same whether or not the email has an account.
+   */
+  async isPhoneRegistered(phoneNumber: string): Promise<boolean> {
+    if (!phoneNumber) return false;
+    const existing = await this.usersRepository.findOne({
+      where: { phoneNumber },
+      withDeleted: true,
+      select: ['id'],
+    });
+    return !!existing;
+  }
+
+  /**
+   * Auth v2: whether a username is taken by another account, compared
+   * case-insensitively and including soft-deleted accounts (which can still be
+   * restored with their username).
+   */
+  async isUsernameTaken(
+    username: string,
+    exceptUserId?: number,
+  ): Promise<boolean> {
+    const query = this.usersRepository
+      .createQueryBuilder('u')
+      .withDeleted()
+      .where('LOWER(u.username) = LOWER(:username)', { username });
+    if (exceptUserId !== undefined) {
+      query.andWhere('u.id <> :exceptUserId', { exceptUserId });
+    }
+    return query.getExists();
+  }
+
+  /**
+   * Auth v2: the usernames (lower-cased) that start with `base`, for the
+   * sign-up generator to pick the first free `base`, `base2`, `base3`…
+   */
+  async findUsernamesStartingWith(base: string): Promise<string[]> {
+    const rows = await this.usersRepository
+      .createQueryBuilder('u')
+      .withDeleted()
+      .select('LOWER(u.username)', 'username')
+      .where('LOWER(u.username) LIKE :prefix', {
+        prefix: `${base.replace(/[\\%_]/g, '\\$&')}%`,
+      })
+      .getRawMany<{ username: string }>();
+    return rows.map((r) => r.username);
+  }
+
+  /**
+   * Auth v2: one bcrypt hash at the configured cost, result discarded.
+   * Registration spends it when the email already has an account, so that
+   * path costs what creating an account (which hashes the password) costs.
+   */
+  async spendPasswordHashCost(password: string): Promise<void> {
+    await bcrypt.hash(password ?? '', VARIABLES.SALT_OR_ROUNDS);
   }
 
   /**
