@@ -16,6 +16,8 @@ import { CustomerInsightsModule } from '../customer-insights/customer-insights.m
 import { ArtisanInsightsModule } from '../artisan-insights/artisan-insights.module';
 import { ThrottlingModule } from '@common/throttling/throttling.module';
 import { ArtisanInsightsThrottlerGuard } from '@common/throttling/artisan-throttler.guards';
+import { AdminInsightsThrottlerGuard } from '@common/throttling/admin-throttler.guards';
+import { AdminInsightsService } from './admin-insights.service';
 
 /**
  * AN1: PRD §7's `AnalyticsModule` ("artisan stats, admin platform stats"),
@@ -56,6 +58,9 @@ import { ArtisanInsightsThrottlerGuard } from '@common/throttling/artisan-thrott
     ArtisanAnalyticsService,
     PlatformAnalyticsCacheService,
     ArtisanInsightsThrottlerGuard,
+    // Admin platform insights (`GET /admin/analytics/insights`).
+    AdminInsightsService,
+    AdminInsightsThrottlerGuard,
   ],
 })
 export class AnalyticsModule {}

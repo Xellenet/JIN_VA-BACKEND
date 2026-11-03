@@ -80,4 +80,6 @@ export const THROTTLER_NAMES = {
   PAYMENT_CHARGE: 'payment-charge',
   /** `GET /payments/charges/:reference/status` (polled while waiting). */
   PAYMENT_CHARGE_STATUS: 'payment-charge-status',
+  /** `GET /admin/analytics/insights` (admin platform insights). */
+  ADMIN_INSIGHTS: 'admin-insights',
 } as const;

@@ -63,6 +63,11 @@ export const ARTISAN_THROTTLER_DEFAULTS = {
   PAYOUT_ACCOUNT_LOOKUP: { limit: 10, ttl: TEN_MINUTES_MS },
 } as const;
 
+/** Admin platform insights, per authenticated admin and per route. */
+export const ADMIN_THROTTLER_DEFAULTS = {
+  ADMIN_INSIGHTS: { limit: 30, ttl: ONE_MINUTE_MS },
+} as const;
+
 /**
  * Reads a positive-integer limit from configuration, falling back to the
  * compiled-in default for anything unset, non-numeric or <= 0 — a typo'd env
@@ -229,6 +234,15 @@ export function buildThrottlerOptions(config: ConfigService): {
           config,
           'PAYOUT_ACCOUNT_LOOKUP_RATE_LIMIT_PER_10_MINUTES',
           ARTISAN_THROTTLER_DEFAULTS.PAYOUT_ACCOUNT_LOOKUP.limit,
+        ),
+      },
+      {
+        name: THROTTLER_NAMES.ADMIN_INSIGHTS,
+        ttl: ADMIN_THROTTLER_DEFAULTS.ADMIN_INSIGHTS.ttl,
+        limit: readLimit(
+          config,
+          'ADMIN_INSIGHTS_RATE_LIMIT_PER_MINUTE',
+          ADMIN_THROTTLER_DEFAULTS.ADMIN_INSIGHTS.limit,
         ),
       },
     ],

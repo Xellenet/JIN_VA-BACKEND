@@ -5,6 +5,7 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  MaxLength,
   MinLength,
 } from 'class-validator';
 import { VALIDATION_MESSAGES } from '@common/constants/validation-messages.constants';
@@ -34,4 +35,14 @@ export class LoginDto {
   @IsOptional()
   @IsBoolean()
   rememberMe?: boolean;
+
+  /**
+   * Auth v2: required only after repeated failures for this email or IP
+   * (the login then answers 401 `TURNSTILE_REQUIRED`). Action `login`.
+   */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(2048)
+  turnstileToken?: string;
 }

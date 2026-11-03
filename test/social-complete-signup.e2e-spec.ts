@@ -290,13 +290,12 @@ describe('social complete-signup (e2e)', () => {
     const { key } = await googleFlow(e, 'artisan');
 
     const bad: Array<Record<string, unknown>> = [
-      artisanBody({ serviceIds: undefined }),
       // PH4: not a valid number for the country, too short, unsupported country.
       artisanBody({ phoneNumber: '123-456-7890' }),
       artisanBody({ phoneNumber: '024123456' }),
       artisanBody({ phoneNumber: '+44 7911 123456' }),
-      // DI5: gender is required, and OTHER is no longer accepted as input.
-      artisanBody({ gender: undefined }),
+      // Auth v2: gender and the artisan details are optional now, but when
+      // sent they are still validated; OTHER is not accepted as input.
       artisanBody({ gender: 'OTHER' }),
       artisanBody({ hourlyRate: 0 }),
       artisanBody({ serviceIds: [] }),

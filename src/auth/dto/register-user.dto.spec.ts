@@ -34,10 +34,26 @@ describe('RegisterUserDto (PH6, PH7, DI5)', () => {
     expect(dto.phoneNumber).toBe('+233241234567');
   });
 
-  it.each(['phoneNumber', 'gender'])('requires %s', async (field) => {
+  it('requires phoneNumber', async () => {
     const body: Record<string, unknown> = { ...register };
-    delete body[field];
-    expect((await check(RegisterUserDto, body)).errors).toContain(field);
+    delete body.phoneNumber;
+    expect((await check(RegisterUserDto, body)).errors).toContain(
+      'phoneNumber',
+    );
+  });
+
+  it('auth v2: username, gender and turnstileToken are optional', async () => {
+    const { username: _u, gender: _g, ...v2 } = register;
+    expect((await check(RegisterUserDto, v2)).errors).toEqual([]);
+    expect(
+      (await check(RegisterUserDto, { ...v2, turnstileToken: 'tok' })).errors,
+    ).toEqual([]);
+  });
+
+  it('auth v2: a username an old client sends is still checked by the rule', async () => {
+    expect(
+      (await check(RegisterUserDto, { ...register, username: 'a b' })).errors,
+    ).toContain('username');
   });
 
   it.each([

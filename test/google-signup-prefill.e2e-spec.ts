@@ -466,8 +466,10 @@ describe('google-signup-prefill backend (e2e)', () => {
 
   describe('POST /auth/register — PH6/PH7/PH9, DI5', () => {
     it('the shared PH8 fixture table gives the same verdict through the API (validation only, nothing written)', async () => {
-      // `username` is left out on purpose so every request is a 400 and no
-      // row is ever written; only whether the phone message appears matters.
+      // An invalid `username` is sent on purpose so every request is a 400 and
+      // no row is ever written (since auth v2 a missing username is generated,
+      // so leaving it out no longer fails); only whether the phone message
+      // appears matters.
       const phoneMessages = [
         VALIDATION_MESSAGES.PHONE_NUMBER_INVALID,
         VALIDATION_MESSAGES.PHONE_NUMBER_REQUIRED,
@@ -483,7 +485,7 @@ describe('google-signup-prefill backend (e2e)', () => {
         const body: Record<string, unknown> = registerBody({
           phoneNumber: f.input,
         });
-        delete body.username;
+        body.username = 'not a valid username';
         const res = await register(body);
         expect(res.status).toBe(400);
         const phoneErrors = messages(res).filter((m) =>
@@ -515,7 +517,6 @@ describe('google-signup-prefill backend (e2e)', () => {
         });
         expect(row!.phoneNumber).toBe(e164);
         expect(row!.gender).toBe(Gender.FEMALE);
-        expect(JSON.stringify(res.body)).toContain(e164);
       },
     );
 
@@ -546,7 +547,6 @@ describe('google-signup-prefill backend (e2e)', () => {
         { phoneNumber: '' },
         VALIDATION_MESSAGES.PHONE_NUMBER_REQUIRED,
       ],
-      ['no gender', { gender: undefined }, VALIDATION_MESSAGES.GENDER_REQUIRED],
       ['gender OTHER', { gender: 'OTHER' }, VALIDATION_MESSAGES.GENDER_INVALID],
       [
         'gender lower-case',
@@ -617,13 +617,29 @@ describe('google-signup-prefill backend (e2e)', () => {
       }
     });
 
-    it('duplicate email → 409 that does not echo the address', async () => {
-      const body = registerBody();
+    it('auth v2: no gender is fine at sign-up (asked later in Settings)', async () => {
+      const body = registerBody({ gender: undefined });
       expect((await register(body)).status).toBe(201);
+      const row = await userRepo.findOne({ where: { email: body.email } });
+      expect(row!.gender).toBeNull();
+    });
+
+    it('auth v2: a duplicate email answers exactly like a new one, and creates nothing', async () => {
+      const body = registerBody();
+      const fresh = await register(body);
+      expect(fresh.status).toBe(201);
+      // Past the per-address 60 s resend cooldown, which applies to new and
+      // taken addresses alike.
+      await dataSource.query(
+        `UPDATE "auth_code_requests" SET "last_sent_at" = NOW() - interval '2 minutes'`,
+      );
       const res = await register(registerBody({ email: body.email }));
-      expect(res.status).toBe(409);
-      expect((res.body as Body).meta?.error).toBe('UserAlreadyExists');
-      expect(JSON.stringify(res.body)).not.toContain(body.email);
+      expect(res.status).toBe(201);
+      expect(Object.keys(res.body as object)).toEqual(
+        Object.keys(fresh.body as object),
+      );
+      expect((res.body as Body).message).toBe((fresh.body as Body).message);
+      expect(await userRepo.count({ where: { email: body.email } })).toBe(1);
     });
   });
 

@@ -28,6 +28,12 @@ describe('AccountSecurityService', () => {
 
   it('only knows the event names the table accepts', () => {
     expect([...SECURITY_EVENT_NAMES].sort()).toEqual([
+      'auth.code_failed',
+      'auth.code_locked',
+      'auth.code_sent',
+      'auth.login',
+      'auth.password_reset',
+      'auth.signup',
       'payment_method.added',
       'payment_method.removed',
       'payment_settings.updated',

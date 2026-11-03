@@ -373,11 +373,18 @@ describe('auth-residual-findings (backend items 1, 2, 3, 6, 9)', () => {
 
       expect(res.status).toBe(201);
       expect(created?.phoneNumber).toBe(phone(1));
-      // `/auth/*` bypasses the envelope, so the body *is* the user payload.
-      assertNoCredentialMaterial('register', res.body, res.body);
+      // Auth v2: register no longer returns the user at all — only where the
+      // code went — so there is nothing to leak in the body.
+      const whole = JSON.stringify(res.body);
+      expect(whole).not.toContain('$2b$');
+      expect(whole).not.toContain('"password"');
+      expect(Object.keys((res.body as { data: object }).data).sort()).toEqual([
+        'email',
+        'resendAvailableAt',
+      ]);
     });
 
-    it('POST /auth/register: phone and gender are required, OTHER and invalid numbers rejected (PH6, DI5)', async () => {
+    it('POST /auth/register: phone is required (gender optional since auth v2), OTHER and invalid numbers rejected (PH6, DI5)', async () => {
       const base = {
         password: PASSWORD,
         firstname: 'Reg',
@@ -388,7 +395,6 @@ describe('auth-residual-findings (backend items 1, 2, 3, 6, 9)', () => {
       };
       const cases: Array<[string, Record<string, unknown>]> = [
         ['no phone', { phoneNumber: undefined }],
-        ['no gender', { gender: undefined }],
         ['gender OTHER', { gender: 'OTHER' }],
         ['US-style phone', { phoneNumber: '123-456-7890' }],
         ['too-short phone', { phoneNumber: '024123456' }],

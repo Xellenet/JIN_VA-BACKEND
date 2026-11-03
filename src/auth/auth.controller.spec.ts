@@ -14,6 +14,8 @@ import {
   AuthCredentialsThrottlerGuard,
   AuthEmailThrottlerGuard,
 } from './guards/auth-throttler.guard';
+import { CodeAuthService } from './code-auth.service';
+import { TurnstileGuard } from './turnstile/turnstile.guard';
 
 describe('AuthController', () => {
   let controller: AuthController;
@@ -27,6 +29,13 @@ describe('AuthController', () => {
     getPendingSocialSignup: jest.fn(),
     completeSocialSignup: jest.fn(),
     cancelSocialSignup: jest.fn(),
+  };
+  const mockCodeAuth = {
+    requestCode: jest.fn(),
+    checkResetCode: jest.fn(),
+    verifyCode: jest.fn(),
+    forgotPassword: jest.fn(),
+    resetPassword: jest.fn(),
   };
 
   // Minimal stand-in for Express' Response — `cookie()` is exercised by the
@@ -67,11 +76,16 @@ describe('AuthController', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [AuthController],
-      providers: [{ provide: AuthService, useValue: mockAuthService }],
+      providers: [
+        { provide: AuthService, useValue: mockAuthService },
+        { provide: CodeAuthService, useValue: mockCodeAuth },
+      ],
     })
       .overrideGuard(AuthCredentialsThrottlerGuard)
       .useValue(allowAll)
       .overrideGuard(AuthEmailThrottlerGuard)
+      .useValue(allowAll)
+      .overrideGuard(TurnstileGuard)
       .useValue(allowAll)
       .compile();
 
@@ -95,8 +109,103 @@ describe('AuthController', () => {
 
       const result = await controller.registerUser(dto);
 
-      expect(authService.registerUser).toHaveBeenCalledWith(dto);
+      expect(authService.registerUser).toHaveBeenCalledWith(dto, undefined);
       expect(result).toEqual(expected);
+    });
+
+    it('passes the caller IP and user agent through when reached over HTTP', async () => {
+      const dto = { email: 'esi@example.com' } as RegisterUserDto;
+      mockAuthService.registerUser.mockResolvedValueOnce({});
+      const req = {
+        ip: '203.0.113.7',
+        headers: { 'user-agent': 'Fictional/1.0' },
+      } as unknown as import('express').Request;
+
+      await controller.registerUser(dto, req);
+
+      expect(authService.registerUser).toHaveBeenCalledWith(dto, {
+        ip: '203.0.113.7',
+        userAgent: 'Fictional/1.0',
+      });
+    });
+  });
+
+  describe('auth v2 code routes', () => {
+    const session = {
+      result: {
+        access_token: 'token',
+        data: { id: 3, role: Role.CUSTOMER },
+      } as LoginResponseDto,
+      refreshToken: 'refresh-token',
+    };
+    const names = () =>
+      (mockRes.cookie as jest.Mock).mock.calls.map(
+        ([name, , opts]: [string, string, { maxAge?: number }]) =>
+          `${name}:${opts.maxAge === 0 ? 'cleared' : 'set'}`,
+      );
+
+    it('code/request and password/forgot hand back the service body', async () => {
+      const body = { message: 'ok', data: { resendAvailableAt: 'later' } };
+      mockCodeAuth.requestCode.mockResolvedValueOnce(body);
+      mockCodeAuth.forgotPassword.mockResolvedValueOnce(body);
+
+      expect(
+        await controller.requestCode({
+          email: 'esi@example.com',
+          purpose: 'login',
+        }),
+      ).toBe(body);
+      expect(
+        await controller.forgotPasswordWithCode({ email: 'esi@example.com' }),
+      ).toBe(body);
+      expect(mockCodeAuth.requestCode).toHaveBeenCalledWith(
+        'esi@example.com',
+        'login',
+        undefined,
+      );
+    });
+
+    it('code/verify sets the same cookies as login and returns only the body', async () => {
+      mockCodeAuth.verifyCode.mockResolvedValueOnce(session);
+
+      const result = await controller.verifyCode(
+        { email: 'esi@example.com', code: '123456', purpose: 'signup' },
+        mockRes,
+      );
+
+      expect(result).toBe(session.result);
+      expect(names()).toEqual([
+        `${VARIABLES.REFRESH_TOKEN_COOKIE_NAME}:set`,
+        `${VARIABLES.AUTH_SESSION_COOKIE_NAME}:set`,
+        'jinva_session_only:cleared',
+      ]);
+    });
+
+    it('password/reset/check hands back the service body', async () => {
+      const body = { message: 'ok', data: { valid: true } };
+      mockCodeAuth.checkResetCode.mockResolvedValueOnce(body);
+      expect(
+        await controller.checkResetCode({
+          email: 'esi@example.com',
+          code: '123456',
+        }),
+      ).toBe(body);
+    });
+
+    it('password/reset signs in, session-only when rememberMe is false', async () => {
+      mockCodeAuth.resetPassword.mockResolvedValueOnce(session);
+
+      await controller.resetPasswordWithCode(
+        {
+          email: 'esi@example.com',
+          code: '123456',
+          newPassword: 'Fict1onal!',
+          rememberMe: false,
+        },
+        mockRes,
+      );
+
+      expect(names()).toContain('jinva_session_only:set');
     });
   });
 
@@ -335,6 +444,7 @@ describe('AuthController', () => {
       expect(mockAuthService.completeSocialSignup).toHaveBeenCalledWith(
         'pending-key',
         dto,
+        { ip: null, userAgent: null },
       );
       expect(cookieCalls()).toEqual([
         `${VARIABLES.PENDING_SOCIAL_SIGNUP_COOKIE_NAME}:cleared`,

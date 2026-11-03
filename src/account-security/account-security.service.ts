@@ -13,6 +13,14 @@ export const SECURITY_EVENT_NAMES = [
   'profile_photo.removed',
   'payment_method.added',
   'payment_method.removed',
+  // Auth v2 (migration 1783380000000). `details` carries the purpose or the
+  // sign-in method — never a code or a password.
+  'auth.signup',
+  'auth.code_sent',
+  'auth.code_failed',
+  'auth.code_locked',
+  'auth.login',
+  'auth.password_reset',
 ] as const;
 
 export type SecurityEventName = (typeof SECURITY_EVENT_NAMES)[number];

@@ -18,6 +18,15 @@ import {
   AuthCredentialsThrottlerGuard,
   AuthEmailThrottlerGuard,
 } from './guards/auth-throttler.guard';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { AccountSecurityModule } from '../account-security/account-security.module';
+import { AuthCode, AuthCodeRequest } from './codes/auth-code.entity';
+import { AuthCodeService } from './codes/auth-code.service';
+import { CodeAuthService } from './code-auth.service';
+import { AuthSessionService } from './auth-session.service';
+import { TurnstileService } from './turnstile/turnstile.service';
+import { TurnstileGuard } from './turnstile/turnstile.guard';
+import { LoginFailureTracker } from './login-failure-tracker.service';
 
 function loadKey(envVar: string, filePath: string): string {
   if (process.env[envVar]) {
@@ -35,6 +44,10 @@ const publicKey = loadKey('JWT_PUBLIC_KEY', 'keys/public.key');
     UsersModule,
     MailModule,
     PassportModule,
+    // Auth v2: email codes (hashed) and their per-address send counters.
+    TypeOrmModule.forFeature([AuthCode, AuthCodeRequest]),
+    // Auth v2: sign-ups, codes and sign-ins are written to the security log.
+    AccountSecurityModule,
 
     JwtModule.register({
       global: true,
@@ -68,6 +81,13 @@ const publicKey = loadKey('JWT_PUBLIC_KEY', 'keys/public.key');
     // guard to its named throttler.
     AuthCredentialsThrottlerGuard,
     AuthEmailThrottlerGuard,
+    // Auth v2.
+    AuthCodeService,
+    CodeAuthService,
+    AuthSessionService,
+    TurnstileService,
+    TurnstileGuard,
+    LoginFailureTracker,
   ],
   exports: [
     AuthService,

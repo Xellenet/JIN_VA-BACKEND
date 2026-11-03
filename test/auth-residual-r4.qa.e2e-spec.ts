@@ -389,10 +389,12 @@ describe('auth-residual-findings round 4 (QA e2e)', () => {
       expect(whole).not.toContain('$2b$');
       expect(whole).not.toContain('$2a$');
       expect(whole).not.toContain('"password"');
-      // `POST /auth/register` is outside the ResponseInterceptor and returns
-      // the serialised user object as the whole body — there is no `data`
-      // envelope on this one endpoint.
-      assertCleanUserObject('register', res.body);
+      // Auth v2: register returns only `{ message, data: { email,
+      // resendAvailableAt } }` — no user object to leak from.
+      expect(Object.keys((res.body as { data: object }).data).sort()).toEqual([
+        'email',
+        'resendAvailableAt',
+      ]);
     });
 
     it('the call site QA never tested: POST /auth/change-password carries no password key', async () => {
@@ -1190,19 +1192,22 @@ describe('auth-residual-findings round 4 (QA e2e)', () => {
         onLive.status,
         JSON.stringify(onLive.body),
       );
-      // B2 forbids distinguishing *deleted* from *live*; it does not forbid
-      // "taken vs free", which is inherent to registration. So compare the
-      // message with the caller's own address normalised out, plus meta.error.
+      // B2 forbids distinguishing *deleted* from *live*. Since auth v2 a taken
+      // address (live or deleted) answers exactly like a free one: 201 with
+      // `{ message, data: { email, resendAvailableAt } }`. Compare with the
+      // caller's own address and the timestamp normalised out.
       const template = (b: Body, addr: string) =>
-        (b.message as string).split(addr).join('<EMAIL>');
+        JSON.stringify({
+          ...b,
+          data: { ...(b.data as object), resendAvailableAt: 'T' },
+        })
+          .split(addr)
+          .join('<EMAIL>');
+      expect(onDeleted.status).toBe(201);
       expect(onDeleted.status).toBe(onLive.status);
       expect(template(onDeleted.body as Body, del.email)).toBe(
         template(onLive.body as Body, live.email),
       );
-      expect((onDeleted.body as Body).meta?.error).toBe(
-        (onLive.body as Body).meta?.error,
-      );
-      expect((onDeleted.body as Body).meta?.error).toBeTruthy();
       expect(JSON.stringify(onDeleted.body)).not.toMatch(/delet/i);
     });
 

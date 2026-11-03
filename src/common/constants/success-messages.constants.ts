@@ -133,5 +133,12 @@ export const SUCCESS_MESSAGES = {
     SOCIAL_SIGNUP_PENDING: 'Pending sign-up retrieved',
     SOCIAL_SIGNUP_COMPLETED: 'Account created successfully',
     SOCIAL_SIGNUP_CANCELLED: 'Sign-up cancelled',
+    /** Auth v2: identical for a new address and one that already has an account. */
+    REGISTERED_CHECK_EMAIL: 'Check your email for a 6-digit code.',
+    /** Auth v2: identical whether or not the address has an account. */
+    CODE_REQUESTED: 'If an account uses this email, a code is on its way.',
+    CODE_VERIFIED: 'Signed in',
+    RESET_CODE_VALID: 'Code accepted. Choose a new password.',
+    PASSWORD_RESET_BY_CODE: 'Your password was changed and you are signed in.',
   },
 };

@@ -206,7 +206,7 @@ export class JobsService {
 
   /**
    * Updates an existing job's content fields.
-   * Only the owner may edit, and only while the job is OPEN or PENDING.
+   * Only the owner may edit, and only while the job is OPEN (no artisan accepted yet).
    * Service category and status cannot be changed here.
    *
    * @param id            - The job ID.

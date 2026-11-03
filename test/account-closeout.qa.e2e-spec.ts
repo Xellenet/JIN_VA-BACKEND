@@ -1008,7 +1008,7 @@ describe('auth-settings-closeout C1/C2 (QA e2e)', () => {
       expect(pub.status).toBe(404);
     });
 
-    it('the email cannot be re-registered, and the error does not say "deleted"', async () => {
+    it('the email cannot be re-registered, and the answer does not say "deleted"', async () => {
       const u = await makeUser('reg', Role.CUSTOMER);
       await deleteMe(u.token).expect(200);
       const res = await request(server())
@@ -1029,11 +1029,13 @@ describe('auth-settings-closeout C1/C2 (QA e2e)', () => {
         res.status,
         JSON.stringify(res.body),
       );
-      expect(res.status).toBeGreaterThanOrEqual(400);
-      expect(res.status).toBeLessThan(500);
-      expect(String((res.body as Body).message).toLowerCase()).not.toContain(
-        'delet',
-      );
+      // Auth v2: a taken address answers exactly like a new one (201), but
+      // no second account is created and nothing says "deleted".
+      expect(res.status).toBe(201);
+      expect(
+        await userRepo.count({ where: { email: u.email }, withDeleted: true }),
+      ).toBe(1);
+      expect(JSON.stringify(res.body).toLowerCase()).not.toContain('delet');
     });
   });
 
