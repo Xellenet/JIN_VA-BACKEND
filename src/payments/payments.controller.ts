@@ -323,6 +323,32 @@ export class PaymentsController {
     return this.paymentsService.verifyPayment(req.user.id, reference);
   }
 
+  /**
+   * Safety net for checkouts started while PAYSTACK_CALLBACK_URL pointed here.
+   * Paystack sends the browser to `/payments/callback?trxref=…&reference=…`;
+   * this forwards it to the job's pay page on the frontend, which confirms
+   * the payment for the signed-in owner. New checkouts go straight there
+   * (`PaymentsService.paymentCallbackUrl`). Public by necessity (it is a
+   * browser redirect from Paystack) and changes nothing: the money state only
+   * moves on the signed webhook or an owner's verify call.
+   */
+  @Get('callback')
+  @ApiOperation({
+    summary:
+      'Paystack return URL safety net: redirects the browser to the job pay page',
+  })
+  async callback(
+    @Query('reference') reference: string | undefined,
+    @Query('trxref') trxref: string | undefined,
+    @Res() res: Response,
+  ): Promise<void> {
+    const url = await this.paymentsService.callbackRedirectUrl(
+      reference ?? trxref,
+    );
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.redirect(302, url);
+  }
+
   // ─── Artisan routes ───────────────────────────────────────────────────────────
 
   /**

@@ -6,6 +6,7 @@ import {
   IsOptional,
   IsString,
   MaxLength,
+  ValidateIf,
 } from 'class-validator';
 import { DocumentType } from '@common/types/enums';
 import { IsAttachmentUrl } from '@common/validators/is-attachment-url.decorator';
@@ -53,12 +54,20 @@ export class SubmitVerificationDto {
   @ApiPropertyOptional({
     example: '/uploads/documents/9f1c2b8e-2222-4000-8000-bbbbbbbbbbbb.jpg',
     description:
-      'Back of the identity document, when the document type has one. Same ' +
-      'upload endpoint and same accepted shape as `documentFrontUrl`.',
+      'Back of the identity document. Required for every document type that ' +
+      'has a back (Ghana Card, voter’s ID, driver’s licence, other national ID); ' +
+      'optional only for a passport. Same upload endpoint and accepted shape ' +
+      'as `documentFrontUrl`.',
   })
-  @IsOptional()
-  @IsString()
-  @IsNotEmpty()
+  // Required unless the document is a passport (a passport has no back).
+  // A passport that still sends one has it validated like any other.
+  @ValidateIf(
+    (o: SubmitVerificationDto) =>
+      o.documentType !== DocumentType.PASSPORT ||
+      o.documentBackUrl !== undefined,
+  )
+  @IsString({ message: 'Add the back of your document too.' })
+  @IsNotEmpty({ message: 'Add the back of your document too.' })
   @MaxLength(500)
   @IsAttachmentUrl('documents')
   documentBackUrl?: string;
