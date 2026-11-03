@@ -945,7 +945,7 @@ export class PaymentsService {
         email: customer.email,
         amountGhs: payment.amount,
         reference: charge.reference,
-        callbackUrl: this.config.get('PAYSTACK_CALLBACK_URL'),
+        callbackUrl: this.paymentCallbackUrl(payment.jobId),
         metadata: {
           jobId: payment.jobId,
           customerId,
@@ -1064,6 +1064,55 @@ export class PaymentsService {
    * never arrive). Ownership-checked: a customer can only verify their own
    * payment's reference.
    */
+  /**
+   * Where Paystack sends the customer after the hosted checkout: the job's own
+   * pay page on the frontend, which reads `?reference=` and confirms the
+   * payment. Built per job, because that page's path carries the job id; a
+   * single fixed PAYSTACK_CALLBACK_URL can't. PAYSTACK_CALLBACK_URL is only
+   * the fallback when FRONTEND_URL isn't set.
+   */
+  paymentCallbackUrl(jobId: number): string | undefined {
+    const frontend = (this.config.get<string>('FRONTEND_URL') ?? '')
+      .trim()
+      .replace(/\/+$/, '');
+    if (frontend) return `${frontend}/dashboard/user/jobs/${jobId}/pay`;
+    return this.config.get<string>('PAYSTACK_CALLBACK_URL') || undefined;
+  }
+
+  /**
+   * Safety net for checkouts started while PAYSTACK_CALLBACK_URL pointed at
+   * the backend (`/payments/callback`): where to send that browser. The job's
+   * pay page when the reference is ours, otherwise the client's jobs list.
+   * Reveals nothing about the payment beyond the job id the reference was
+   * issued for; the pay page itself checks the signed-in owner.
+   */
+  async callbackRedirectUrl(reference: string | undefined): Promise<string> {
+    const frontend = (this.config.get<string>('FRONTEND_URL') ?? '')
+      .trim()
+      .replace(/\/+$/, '');
+    const fallback = `${frontend}/dashboard/user/jobs`;
+    const ref = (reference ?? '').trim();
+    if (!/^[A-Za-z0-9_-]{6,100}$/.test(ref)) return fallback;
+
+    const payment =
+      (await this.repo.findOne({ where: { reference: ref } })) ??
+      (await this.repo.findOne({ where: { paidReference: ref } }));
+    let jobId = payment?.jobId;
+    if (!jobId) {
+      const charge = await this.chargeRepo.findOne({
+        where: { reference: ref },
+      });
+      if (charge?.paymentId) {
+        const viaCharge = await this.repo.findOne({
+          where: { id: charge.paymentId },
+        });
+        jobId = viaCharge?.jobId;
+      }
+    }
+    if (!jobId) return fallback;
+    return `${frontend}/dashboard/user/jobs/${jobId}/pay?reference=${encodeURIComponent(ref)}`;
+  }
+
   async verifyPayment(customerId: number, reference: string) {
     // Any attempt's reference (hosted or saved), or the payment's own.
     let charge = await this.chargeRepo.findOne({ where: { reference } });
