@@ -86,6 +86,20 @@ export class Message {
   @Column({ name: 'booking_id', nullable: true })
   bookingId!: number | null;
 
+  /**
+   * The message this one replies to, in the same conversation. FK with
+   * ON DELETE SET NULL (migration AddMessageReplyTo1783420000000), so it reads
+   * null once the original is gone — {@link isReply} is what still says this
+   * was a reply. Kept as a plain column: the quoted original is batch-loaded
+   * by `MessagesService.loadReplyTargets`, never joined per row.
+   */
+  @Column({ name: 'reply_to_message_id', type: 'integer', nullable: true })
+  replyToMessageId!: number | null;
+
+  /** True when sent as a reply, even after the original has been deleted. */
+  @Column({ name: 'is_reply', type: 'boolean', default: false })
+  isReply!: boolean;
+
   @Index()
   @Column({ name: 'is_read', type: 'boolean', default: false })
   isRead!: boolean;

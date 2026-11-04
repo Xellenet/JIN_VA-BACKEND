@@ -8,12 +8,15 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { plainToInstance } from 'class-transformer';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { Message } from './entities/message.entity';
 import { Conversation } from './entities/conversation.entity';
 import { SendMessageDto } from './dto/send-message.dto';
 import { GetMessagesQueryDto } from './dto/get-messages-query.dto';
-import { MessageResponseDto } from './dto/message-response.dto';
+import {
+  MessageReplyToDto,
+  MessageResponseDto,
+} from './dto/message-response.dto';
 import { ConversationResponseDto } from './dto/conversation-response.dto';
 import { DisputeConversationResponseDto } from './dto/dispute-conversation-response.dto';
 import { User } from '@users/entities/user.entity';
@@ -62,6 +65,20 @@ const ATTACHMENT_MIME_BY_EXT: Record<string, string> = {
  */
 const DISPUTE_CONVERSATION_MESSAGE_CAP = 200;
 
+/** How much of the original a reply's quote carries. */
+const REPLY_PREVIEW_LENGTH = 120;
+
+/** One error for every unusable reply target, so it never says which exist. */
+const REPLY_TARGET_INVALID =
+  'You can only reply to a message in this conversation.';
+
+/** The fields `resolveReplyTo` needs from a message or a raw message row. */
+type ReplySource = {
+  conversationId: number;
+  replyToMessageId: number | null;
+  isReply: boolean;
+};
+
 /** Raw shape of the per-conversation last-message lookup. */
 type LastMessageRow = {
   conversationId: number;
@@ -71,6 +88,8 @@ type LastMessageRow = {
   senderId: number;
   createdAt: Date;
   isRead: boolean;
+  replyToMessageId: number | null;
+  isReply: boolean;
 };
 
 /**
@@ -174,6 +193,22 @@ export class MessagesService {
       where: { participantA: { id: aId }, participantB: { id: bId } },
     });
 
+    // Reply: the original must be in this very conversation. A brand-new
+    // conversation has nothing to reply to. Checked before the conversation
+    // is created so a rejected send leaves nothing behind.
+    if (dto.replyToMessageId !== undefined) {
+      const original = conversation
+        ? await this.messagesRepository.findOne({
+            where: {
+              id: dto.replyToMessageId,
+              conversationId: conversation.id,
+            },
+            select: ['id'],
+          })
+        : null;
+      if (!original) throw new BadRequestException(REPLY_TARGET_INVALID);
+    }
+
     if (!conversation) {
       conversation = await this.conversationsRepository.save(
         this.conversationsRepository.create({
@@ -199,6 +234,8 @@ export class MessagesService {
           : null,
         jobId: dto.jobId ?? null,
         bookingId: dto.bookingId ?? null,
+        replyToMessageId: dto.replyToMessageId ?? null,
+        isReply: dto.replyToMessageId !== undefined,
       }),
     );
 
@@ -217,12 +254,11 @@ export class MessagesService {
       where: { id: saved.id },
       relations: ['sender'],
     });
+    const [data] = await this.toMessageDtos(populated ? [populated] : []);
 
     return {
       message: SUCCESS_MESSAGES.MESSAGE.SENT,
-      data: plainToInstance(MessageResponseDto, populated, {
-        excludeExtraneousValues: true,
-      }),
+      data,
     };
   }
 
@@ -249,6 +285,11 @@ export class MessagesService {
       .createQueryBuilder('conv')
       .leftJoinAndSelect('conv.participantA', 'pA')
       .leftJoinAndSelect('conv.participantB', 'pB')
+      // The contact's artisan profile id, for the "view profile" link.
+      .leftJoin('pA.artisanProfile', 'pAProfile')
+      .addSelect('pAProfile.id')
+      .leftJoin('pB.artisanProfile', 'pBProfile')
+      .addSelect('pBProfile.id')
       .where('pA.id = :userId OR pB.id = :userId', { userId })
       .orderBy('conv.lastMessageAt', 'DESC', 'NULLS LAST')
       .skip((page - 1) * limit)
@@ -260,6 +301,8 @@ export class MessagesService {
       this.loadUnreadCounts(ids, userId),
       this.loadLastMessages(ids),
     ]);
+    const lastRows = [...lastByConversation.values()];
+    const replyTargets = await this.loadReplyTargets(lastRows);
 
     const data = conversations.map((conv) => {
       const contact =
@@ -279,6 +322,7 @@ export class MessagesService {
               senderId: last.senderId,
               createdAt: last.createdAt,
               isRead: last.isRead,
+              replyTo: this.resolveReplyTo(last, replyTargets),
             }
           : null,
         unreadCount: unreadByConversation.get(conv.id) ?? 0,
@@ -325,9 +369,7 @@ export class MessagesService {
 
     return {
       message: SUCCESS_MESSAGES.MESSAGE.THREAD_RETRIEVED,
-      data: plainToInstance(MessageResponseDto, messages, {
-        excludeExtraneousValues: true,
-      }),
+      data: await this.toMessageDtos(messages),
       pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
   }
@@ -451,15 +493,101 @@ export class MessagesService {
         customer: this.toLabelledParticipant(customer, Role.CUSTOMER),
         artisan: this.toLabelledParticipant(artisan, Role.ARTISAN),
         totalMessages: total,
-        messages: plainToInstance(MessageResponseDto, messages, {
-          excludeExtraneousValues: true,
-        }),
+        messages: await this.toMessageDtos(messages),
         readOnly: true,
       },
     };
   }
 
   // ─── Private helpers ────────────────────────────────────────────────────────
+
+  /**
+   * Serialises a page of messages with each reply's quote attached. One
+   * extra query for the whole page, however many replies it holds.
+   */
+  private async toMessageDtos(
+    messages: Message[],
+  ): Promise<MessageResponseDto[]> {
+    const targets = await this.loadReplyTargets(messages);
+    const dtos = plainToInstance(MessageResponseDto, messages, {
+      excludeExtraneousValues: true,
+    });
+    dtos.forEach((dto, i) => {
+      dto.replyTo = this.resolveReplyTo(messages[i], targets);
+    });
+    return dtos;
+  }
+
+  /** The originals the given replies quote, in a single query. */
+  private async loadReplyTargets(
+    sources: ReplySource[],
+  ): Promise<Map<number, Message>> {
+    const ids = [
+      ...new Set(
+        sources
+          .map((m) => m.replyToMessageId)
+          .filter((id): id is number => id !== null && id !== undefined),
+      ),
+    ];
+    if (ids.length === 0) return new Map();
+
+    const originals = await this.messagesRepository.find({
+      where: { id: In(ids) },
+      relations: ['sender'],
+    });
+    return new Map(originals.map((m) => [m.id, m]));
+  }
+
+  /**
+   * The quote for one message: null when it is not a reply, `deleted` when the
+   * original is gone. An original from another conversation (which `send`
+   * never stores) is reported as deleted rather than shown, so a quote can
+   * never carry text from a thread the reader is not part of.
+   */
+  private resolveReplyTo(
+    message: ReplySource,
+    targets: Map<number, Message>,
+  ): MessageReplyToDto | null {
+    const id = message.replyToMessageId ?? null;
+    if (!message.isReply && id === null) return null;
+
+    const original = id === null ? undefined : targets.get(Number(id));
+    if (
+      !original ||
+      Number(original.conversationId) !== Number(message.conversationId)
+    ) {
+      return {
+        id: null,
+        senderId: null,
+        senderName: null,
+        preview: null,
+        deleted: true,
+      };
+    }
+
+    const who = this.toDisplayIdentity(original.sender);
+    return {
+      id: original.id,
+      senderId: original.senderId,
+      senderName: `${who.firstname} ${who.lastname}`.trim(),
+      preview: this.buildReplyPreview(original),
+      deleted: false,
+    };
+  }
+
+  /** First 120 characters of the original, or what it carried instead. */
+  private buildReplyPreview(original: Message): string {
+    const text = original.content?.trim();
+    if (text) {
+      return text.length > REPLY_PREVIEW_LENGTH
+        ? `${text.slice(0, REPLY_PREVIEW_LENGTH).trimEnd()}…`
+        : text;
+    }
+    const isImage =
+      original.attachmentType?.startsWith('image/') ??
+      Boolean(original.attachmentUrl);
+    return isImage ? 'Photo' : 'Attachment';
+  }
 
   /** MC4: preview text for the notification/push body of an image-only message. */
   private buildPreview(text: string | null, attachmentUrl?: string): string {
@@ -580,7 +708,9 @@ export class MessagesService {
               m.attachment_url  AS "attachmentUrl",
               m.sender_id       AS "senderId",
               m.created_at      AS "createdAt",
-              m.is_read         AS "isRead"
+              m.is_read         AS "isRead",
+              m.reply_to_message_id AS "replyToMessageId",
+              m.is_reply        AS "isReply"
          FROM messages m
         WHERE m.conversation_id = ANY($1)
         ORDER BY m.conversation_id, m.created_at DESC, m.id DESC`,
@@ -629,6 +759,8 @@ export class MessagesService {
     return {
       ...this.toDisplayIdentity(user),
       role: user?.role,
+      artisanProfileId:
+        user?.role === Role.ARTISAN ? (user.artisanProfile?.id ?? null) : null,
     } as ConversationResponseDto['contact'];
   }
 

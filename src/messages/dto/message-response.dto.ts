@@ -8,6 +8,47 @@ export class MessageSenderDto {
   @Expose() @ApiProperty({ nullable: true }) profilePicture?: string;
 }
 
+/**
+ * The message a reply quotes. Built by `MessagesService` from one batched
+ * lookup per page, never from the original's full body.
+ *
+ * When the original has been deleted, `deleted` is true and every other field
+ * is null: the reply survives (the FK is ON DELETE SET NULL) but there is
+ * nothing left to quote.
+ */
+export class MessageReplyToDto {
+  @Expose()
+  @ApiProperty({ nullable: true, example: 5120 })
+  id!: number | null;
+
+  @Expose()
+  @ApiProperty({ nullable: true, example: 26 })
+  senderId!: number | null;
+
+  @Expose()
+  @ApiProperty({
+    nullable: true,
+    example: 'Yaw Osei',
+    description:
+      '"Deleted User" when the original sender has deleted their account.',
+  })
+  senderName!: string | null;
+
+  @Expose()
+  @ApiProperty({
+    nullable: true,
+    example: 'Can you come on Thursday morning?',
+    description:
+      'First 120 characters of the original text (with an ellipsis when cut), ' +
+      'or "Photo"/"Attachment" when the original has no text.',
+  })
+  preview!: string | null;
+
+  @Expose()
+  @ApiProperty({ description: 'True when the original has been deleted.' })
+  deleted!: boolean;
+}
+
 export class MessageResponseDto {
   @Expose() @ApiProperty() id!: number;
 
@@ -80,6 +121,12 @@ export class MessageResponseDto {
       "the caller's own messages.",
   })
   sender!: MessageSenderDto | null;
+
+  /** The message this one replies to, or null when it is not a reply. */
+  @Expose()
+  @Type(() => MessageReplyToDto)
+  @ApiProperty({ type: MessageReplyToDto, nullable: true })
+  replyTo!: MessageReplyToDto | null;
 }
 
 /**
@@ -116,6 +163,9 @@ export class ConversationLastMessageDto {
       'Whether this message has been read. Only meaningful for messages the caller did not send.',
   })
   isRead!: boolean;
+
+  @ApiProperty({ type: MessageReplyToDto, nullable: true })
+  replyTo!: MessageReplyToDto | null;
 }
 
 /**
@@ -155,4 +205,14 @@ export class ConversationContactDto {
       'absent when the contact has deleted their account.',
   })
   role?: string;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    example: 14,
+    description:
+      "The contact's artisan profile id, for linking to " +
+      '/dashboard/user/artisan/<id>. Null for a customer (customers have no ' +
+      'public profile) and for a departed contact.',
+  })
+  artisanProfileId?: number | null;
 }
