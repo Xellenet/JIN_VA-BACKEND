@@ -24,6 +24,14 @@ export const REDACTED_LOG_KEYS: readonly string[] = Object.freeze([
   'access_code',
   'card',
   'nationalId',
+  // Exact location (Act 843): a pin is usually someone's home.
+  'latitude',
+  'longitude',
+  'lat',
+  'lon',
+  'lng',
+  'landmark',
+  'locationAccuracyM',
 ]);
 
 /** What a redacted value is replaced with. */

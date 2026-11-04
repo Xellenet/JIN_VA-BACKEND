@@ -35,6 +35,10 @@ import {
 } from '@common/types/enums';
 import { VARIABLES } from '@common/constants/variables.constants';
 import { APP_EVENTS } from '@common/events/app.events';
+import {
+  exactLocationColumns,
+  redactExactLocation,
+} from '@common/location/exact-location';
 import type {
   BookingCancelledPayload,
   BookingCompletedPayload,
@@ -58,6 +62,13 @@ const OCCUPYING_BOOKING_STATUSES = [
   BookingStatus.PENDING,
   BookingStatus.CONFIRMED,
 ];
+
+/** Booking statuses in which the artisan is hired and may see the exact pin. */
+const BOOKING_LOCATION_SHARED_STATUSES: ReadonlySet<string> = new Set([
+  BookingStatus.CONFIRMED,
+  BookingStatus.COMPLETED,
+  BookingStatus.NO_SHOW,
+]);
 
 const MIME_BY_EXT: Record<string, string> = {
   '.jpg': 'image/jpeg',
@@ -311,6 +322,8 @@ export class BookingsService {
         agreedPrice: dto.agreedPrice,
         currency: dto.currency ?? 'GHS',
         attachmentUrls: dto.attachmentUrls,
+        location: dto.location?.trim() || null,
+        ...exactLocationColumns(dto),
       });
 
       const saved = await bookingRepo.save(booking);
@@ -328,12 +341,12 @@ export class BookingsService {
 
     return {
       message: 'Booking request sent. Awaiting artisan confirmation.',
-      data: await this.toResponseDto(loaded),
+      data: await this.toResponseDto(loaded, customerId),
     };
   }
 
   async getMyBookings(customerId: number, query: GetBookingsQueryDto) {
-    return this.list({ customerId }, query);
+    return this.list({ customerId }, query, customerId);
   }
 
   async getArtisanBookings(artisanUserId: number, query: GetBookingsQueryDto) {
@@ -341,7 +354,7 @@ export class BookingsService {
       where: { user: { id: artisanUserId } },
     });
     if (!profile) throw new NotFoundException('Artisan profile not found.');
-    return this.list({ artisanProfileId: profile.id }, query);
+    return this.list({ artisanProfileId: profile.id }, query, artisanUserId);
   }
 
   async findOne(bookingId: number, requestUserId: number) {
@@ -352,7 +365,7 @@ export class BookingsService {
       throw new ForbiddenException('Access denied.');
     return {
       message: 'Booking retrieved.',
-      data: await this.toResponseDto(booking),
+      data: await this.toResponseDto(booking, requestUserId),
     };
   }
 
@@ -446,7 +459,10 @@ export class BookingsService {
               'This booking has no associated service and cannot be confirmed into a job.',
             );
           }
+          // The customer's own place when they gave one, else (older
+          // bookings, work at the workshop) the artisan's.
           const location =
+            bookingRow.location?.trim() ||
             bookingRow.artisanProfile.location?.trim() ||
             bookingRow.artisanProfile.businessName?.trim() ||
             'Not specified';
@@ -465,6 +481,10 @@ export class BookingsService {
             status: Status.PENDING,
             acceptedArtisan: bookingRow.artisanProfile.user,
             booking: bookingRow,
+            latitude: bookingRow.latitude ?? null,
+            longitude: bookingRow.longitude ?? null,
+            locationAccuracyM: bookingRow.locationAccuracyM ?? null,
+            landmark: bookingRow.landmark ?? null,
           } as Partial<Job>);
           jobRow = await jobRepo.save(jobRow);
 
@@ -894,6 +914,7 @@ export class BookingsService {
   private async list(
     filter: { customerId?: number; artisanProfileId?: number },
     query: GetBookingsQueryDto,
+    viewerUserId: number,
   ) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
@@ -925,7 +946,9 @@ export class BookingsService {
       .take(limit)
       .getManyAndCount();
 
-    const data = await Promise.all(records.map((r) => this.toResponseDto(r)));
+    const data = await Promise.all(
+      records.map((r) => this.toResponseDto(r, viewerUserId)),
+    );
 
     return {
       message: 'Bookings retrieved.',
@@ -939,7 +962,26 @@ export class BookingsService {
     };
   }
 
-  private async toResponseDto(booking: Booking): Promise<BookingResponseDto> {
+  /**
+   * Privacy (Act 843): the exact pin and landmark of a booking go to its
+   * customer, and to its artisan only once they are hired, i.e. the booking
+   * is CONFIRMED (or has gone on to COMPLETED / NO_SHOW). A request the
+   * artisan has not accepted, or one that was declined, cancelled or expired,
+   * shows the area label only.
+   */
+  static canSeeExactLocation(booking: Booking, viewerUserId: number): boolean {
+    if (Number(booking.customerId ?? booking.customer?.id) === viewerUserId)
+      return true;
+    const isArtisan =
+      booking.artisanProfile?.user?.id != null &&
+      Number(booking.artisanProfile.user.id) === viewerUserId;
+    return isArtisan && BOOKING_LOCATION_SHARED_STATUSES.has(booking.status);
+  }
+
+  private async toResponseDto(
+    booking: Booking,
+    viewerUserId: number,
+  ): Promise<BookingResponseDto> {
     const job = await this.jobRepo.findOne({
       // Job.bookingId is a @RelationId (virtual, not a real column) —
       // filter via the relation object instead.
@@ -950,7 +992,9 @@ export class BookingsService {
       excludeExtraneousValues: true,
     });
     dto.jobId = job?.id;
-    return dto;
+    return BookingsService.canSeeExactLocation(booking, viewerUserId)
+      ? dto
+      : redactExactLocation(dto);
   }
 
   private async loadOrFail(

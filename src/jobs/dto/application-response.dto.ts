@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Expose, Type } from 'class-transformer';
+import { Expose, Transform, Type } from 'class-transformer';
 import { UserResponseDto } from '@users/dto/user-response.dto';
 import { ApplicationStatus } from '@common/types/enums';
 
@@ -26,6 +26,24 @@ export class ApplicationResponseDto {
   @Expose()
   @Type(() => UserResponseDto)
   artisan!: UserResponseDto;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    example: 14,
+    description:
+      "The applicant's artisan profile id, for linking to their public " +
+      'profile. Null when the profile could not be resolved.',
+  })
+  @Expose()
+  @Transform(
+    ({
+      obj,
+    }: {
+      obj: { artisan?: { artisanProfile?: { id?: number } | null } | null };
+    }) => obj.artisan?.artisanProfile?.id ?? null,
+    { toClassOnly: true },
+  )
+  artisanProfileId?: number | null;
 
   @ApiPropertyOptional({
     example: 250,
