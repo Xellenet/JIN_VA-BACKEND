@@ -52,11 +52,13 @@ describe('AuthCodeService', () => {
     await migration.up(runner);
     // Idempotent: a second run changes nothing and does not fail.
     await migration.up(runner);
-  });
+    // PGlite boots a whole Postgres in-process: under coverage that can take
+    // longer than Jest's default 5 s hook limit.
+  }, 60000);
 
   afterAll(async () => {
     await db.close();
-  });
+  }, 60000);
 
   beforeEach(async () => {
     await db.exec(
