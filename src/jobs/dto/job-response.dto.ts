@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Expose, Type } from 'class-transformer';
+import { Expose, Transform, Type } from 'class-transformer';
 import { Status } from '@common/types/enums';
 
 export class JobCustomerDto {
@@ -42,6 +42,23 @@ export class JobAcceptedArtisanDto {
   @ApiProperty({ example: 'Osei' })
   @Expose()
   lastname!: string;
+
+  @ApiPropertyOptional({ nullable: true })
+  @Expose()
+  profilePicture?: string | null;
+
+  /**
+   * The artisan's profile id, for the customer's "view profile" link
+   * (/dashboard/user/artisan/<id>). Null when the relation was not loaded.
+   */
+  @ApiPropertyOptional({ nullable: true, example: 14 })
+  @Expose()
+  @Transform(
+    ({ obj }: { obj: { artisanProfile?: { id?: number } | null } }) =>
+      obj.artisanProfile?.id ?? null,
+    { toClassOnly: true },
+  )
+  artisanProfileId?: number | null;
 }
 
 /** J4: a single photo attached to the job. */
@@ -156,13 +173,41 @@ export class JobResponseDto {
   @Expose()
   currency!: string;
 
-  @ApiPropertyOptional({ example: 5.6037 })
+  @ApiPropertyOptional({
+    example: 6.6885,
+    nullable: true,
+    description:
+      "Exact location (the customer's pin). Only sent to the job's customer, " +
+      'its hired artisan and admins; everyone else gets the `location` area ' +
+      'label only, and this field is absent.',
+  })
   @Expose()
-  latitude?: number;
+  latitude?: number | null;
 
-  @ApiPropertyOptional({ example: -0.187 })
+  @ApiPropertyOptional({
+    example: -1.6244,
+    nullable: true,
+    description: 'See `latitude`: same visibility.',
+  })
   @Expose()
-  longitude?: number;
+  longitude?: number | null;
+
+  @ApiPropertyOptional({
+    example: 8,
+    nullable: true,
+    description:
+      'GPS accuracy of the pin in metres. Same visibility as `latitude`.',
+  })
+  @Expose()
+  locationAccuracyM?: number | null;
+
+  @ApiPropertyOptional({
+    example: 'Opposite Adum Post Office, blue gate',
+    nullable: true,
+    description: 'Landmark to find the place. Same visibility as `latitude`.',
+  })
+  @Expose()
+  landmark?: string | null;
 
   @ApiProperty({ enum: Status, example: Status.OPEN })
   @Expose()

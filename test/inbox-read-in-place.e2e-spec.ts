@@ -144,28 +144,59 @@ describe('Inbox read in place (E-6.x, B8, M1)', () => {
     expect(convo!.unreadCount).toBeGreaterThanOrEqual(1);
   });
 
-  it('E-6.2 / E-6.3: the notification feed carries body, payload and createdAt, with the message preview cut to 100', async () => {
-    let items: Array<Record<string, unknown>> = [];
-    for (let i = 0; i < 20 && items.length === 0; i++) {
-      const res = await request(server())
-        .get('/api/v1/notifications?page=1&limit=5')
-        .set(as('a'));
-      expect(res.status).toBe(200);
-      items = body(res).data as unknown as Array<Record<string, unknown>>;
-      if (!items.length) await new Promise((r) => setTimeout(r, 50));
-    }
+  it('E-6.2 / E-6.3: the notification feed carries body, payload and createdAt, and chat messages stay in Messages', async () => {
+    // A new message no longer creates a notification row (it lives in
+    // Messages, with its own unread badge). Give the feed a real item to
+    // carry, plus a MESSAGE_RECEIVED row as an older build would have left.
+    await notifications.save([
+      notifications.create({
+        user: { id: ids.a } as User,
+        type: NotificationType.BOOKING_CONFIRMED,
+        title: 'Booking confirmed',
+        body: 'Your booking for Tuesday morning is confirmed.',
+        isRead: false,
+        payload: { bookingId: 4101 },
+      }),
+      notifications.create({
+        user: { id: ids.a } as User,
+        type: NotificationType.MESSAGE_RECEIVED,
+        title: 'New message from Yaw Darko',
+        body: '"The tiles arrive on Tuesday morning."',
+        isRead: false,
+        payload: { conversationId: 1 },
+      }),
+    ]);
+    // Give any (now absent) async listener time to have written a row.
+    await new Promise((r) => setTimeout(r, 300));
+    const rows = await notifications.find({
+      where: { user: { id: ids.a }, type: NotificationType.MESSAGE_RECEIVED },
+    });
+    // Only the legacy row inserted above: the message sent in E-6.1 made none.
+    expect(rows).toHaveLength(1);
+
+    const res = await request(server())
+      .get('/api/v1/notifications?page=1&limit=5')
+      .set(as('a'));
+    expect(res.status).toBe(200);
+    const items = body(res).data as unknown as Array<Record<string, unknown>>;
     expect(items.length).toBeGreaterThan(0);
-    const message = items.find(
-      (n) => n.type === NotificationType.MESSAGE_RECEIVED,
-    );
-    expect(message).toBeDefined();
-    // Unchanged contract: the first 100 characters, quoted, with an ellipsis.
-    expect(message!.body).toBe(`"${long.slice(0, 100)}…"`);
+    expect(
+      items.find((n) => n.type === NotificationType.MESSAGE_RECEIVED),
+    ).toBeUndefined();
+    expect(
+      items.find((n) => n.type === NotificationType.BOOKING_CONFIRMED),
+    ).toBeDefined();
     for (const item of items) {
       expect(item).toHaveProperty('body');
       expect(item).toHaveProperty('payload');
       expect(typeof item.createdAt).toBe('string');
     }
+
+    // The bell counts the booking, not the message.
+    const count = await request(server())
+      .get('/api/v1/notifications/unread-count')
+      .set(as('a'));
+    expect(body(count).data).toEqual({ count: 1 });
   });
 
   describe('B8 GET /notifications/:id (E-6.6)', () => {

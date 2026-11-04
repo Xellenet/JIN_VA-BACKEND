@@ -195,4 +195,80 @@ describe('JobsService', () => {
       expect(res.data.hasApplied).toBe(true);
     });
   });
+
+  describe('exact location privacy (Act 843)', () => {
+    // Fictional pin: Adum, Kumasi.
+    const pinned = {
+      id: 1,
+      status: Status.OPEN,
+      location: 'Adum, Kumasi',
+      latitude: 6.6885,
+      longitude: -1.6244,
+      locationAccuracyM: 8,
+      landmark: 'Opposite Adum Post Office, blue gate',
+      customer: { id: 3, firstname: 'Ama', lastname: 'Mensah' },
+    };
+    const hired = {
+      ...pinned,
+      id: 2,
+      status: Status.PENDING,
+      acceptedArtisan: { id: 9, firstname: 'Yaw', lastname: 'Osei' },
+    };
+    const PRIVATE = ['latitude', 'longitude', 'locationAccuracyM', 'landmark'];
+
+    it.each([
+      ['the owner', { id: 3, role: Role.CUSTOMER }, pinned, true],
+      ['an admin', { id: 1, role: Role.ADMIN }, pinned, true],
+      ['the hired artisan', { id: 9, role: Role.ARTISAN }, hired, true],
+      ['another artisan', { id: 10, role: Role.ARTISAN }, pinned, false],
+      [
+        'another artisan on a hired job',
+        { id: 10, role: Role.ARTISAN },
+        hired,
+        false,
+      ],
+      ['another customer', { id: 4, role: Role.CUSTOMER }, pinned, false],
+    ])('canSeeExactLocation: %s -> %s', (_label, viewer, job, expected) => {
+      expect(JobsService.canSeeExactLocation(job, viewer)).toBe(expected);
+    });
+
+    it('strips the pin from the job board for artisans, keeping the area', async () => {
+      jobsRepo.createQueryBuilder.mockReturnValue(
+        qbMock({ getCount: 1, getMany: [pinned] }),
+      );
+      appsRepo.createQueryBuilder.mockReturnValue(qbMock({ getRawMany: [] }));
+      const res = await service.findAll({}, { id: 10, role: Role.ARTISAN });
+      expect(res.data[0].location).toBe('Adum, Kumasi');
+      for (const key of PRIVATE) expect(res.data[0]).not.toHaveProperty(key);
+    });
+
+    it('keeps the pin on the detail for the hired artisan only', async () => {
+      jobsRepo.findOne.mockResolvedValue(hired);
+      const svc = service as unknown as {
+        historyRepository: { find: jest.Mock };
+        attachmentsRepository: { find: jest.Mock };
+        applicationsRepository: { exists: jest.Mock };
+      };
+      svc.historyRepository.find.mockResolvedValue([]);
+      svc.attachmentsRepository.find.mockResolvedValue([]);
+      svc.applicationsRepository.exists = jest.fn().mockResolvedValue(true);
+      appsRepo.createQueryBuilder.mockReturnValue(qbMock({ getRawMany: [] }));
+
+      const mine = await service.findOne(2, { id: 9, role: Role.ARTISAN });
+      expect(mine.data).toMatchObject({
+        latitude: 6.6885,
+        longitude: -1.6244,
+        locationAccuracyM: 8,
+        landmark: 'Opposite Adum Post Office, blue gate',
+      });
+
+      // A rejected applicant can still open the job, but not the pin.
+      const applicant = await service.findOne(2, {
+        id: 11,
+        role: Role.ARTISAN,
+      });
+      expect(applicant.data.location).toBe('Adum, Kumasi');
+      for (const key of PRIVATE) expect(applicant.data).not.toHaveProperty(key);
+    });
+  });
 });

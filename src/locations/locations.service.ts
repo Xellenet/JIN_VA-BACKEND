@@ -204,7 +204,7 @@ export class LocationsService {
    */
   async reverse(lat: number, lon: number): Promise<ReverseLocationResponseDto> {
     if (Date.now() < this.upstreamUnavailableUntil) {
-      return { label: null, available: false };
+      return { label: null, area: null, available: false };
     }
     const params = new URLSearchParams({
       lat: lat.toFixed(3),
@@ -230,25 +230,19 @@ export class LocationsService {
       );
       return {
         label: LocationsService.reverseLabel(response.data),
+        area: LocationsService.reverseArea(response.data),
         available: true,
       };
     } catch (error: unknown) {
       this.recordFailure(error);
-      return { label: null, available: false };
+      return { label: null, area: null, available: false };
     }
   }
 
   /** "Street, Area, Town, Region" from Photon's first feature, without repeats. */
   static reverseLabel(body: unknown): string | null {
-    const features = (body as { features?: unknown } | null)?.features;
-    if (!Array.isArray(features) || features.length === 0) return null;
-    const p =
-      (features[0] as { properties?: Record<string, unknown> }).properties ??
-      {};
-    const text = (k: string) => {
-      const value = p[k];
-      return typeof value === 'string' ? value.trim() : '';
-    };
+    const text = LocationsService.firstFeatureText(body);
+    if (!text) return null;
     const parts = [
       text('street') || text('name'),
       text('district') || text('locality'),
@@ -257,6 +251,37 @@ export class LocationsService {
     ].filter(Boolean);
     const unique = parts.filter((v, i) => parts.indexOf(v) === i);
     return unique.length ? unique.join(', ') : null;
+  }
+
+  /**
+   * "Area, Town" (no street or building) from Photon's first feature: the
+   * part of an address that may be shown publicly, e.g. on the job board,
+   * while the exact pin stays private. Falls back to the region.
+   */
+  static reverseArea(body: unknown): string | null {
+    const text = LocationsService.firstFeatureText(body);
+    if (!text) return null;
+    const parts = [text('district') || text('locality'), text('city')].filter(
+      Boolean,
+    );
+    const unique = parts.filter((v, i) => parts.indexOf(v) === i);
+    if (!unique.length && text('state')) unique.push(text('state'));
+    return unique.length ? unique.join(', ') : null;
+  }
+
+  /** A reader for the string properties of the first feature, or null. */
+  private static firstFeatureText(
+    body: unknown,
+  ): ((key: string) => string) | null {
+    const features = (body as { features?: unknown } | null)?.features;
+    if (!Array.isArray(features) || features.length === 0) return null;
+    const p =
+      (features[0] as { properties?: Record<string, unknown> }).properties ??
+      {};
+    return (k: string) => {
+      const value = p[k];
+      return typeof value === 'string' ? value.trim() : '';
+    };
   }
 
   /** Resolves to `null` on any upstream failure; never rejects. */

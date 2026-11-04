@@ -14,6 +14,7 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 import { Booking } from '../../bookings/entities/booking.entity';
+import { decimalToNumber } from '@common/location/exact-location';
 
 @Entity('jobs')
 export class Job {
@@ -65,11 +66,35 @@ export class Job {
   @Column({ name: 'currency', type: 'varchar', length: 3, default: 'GHS' })
   currency!: string;
 
-  @Column({ type: 'decimal', precision: 10, scale: 2, nullable: true })
-  latitude?: number;
+  /**
+   * The customer's map pin (WGS84). Private: only the owner, the hired artisan
+   * and admins read it (see JobsService.canSeeExactLocation).
+   */
+  @Column({
+    type: 'decimal',
+    precision: 9,
+    scale: 6,
+    nullable: true,
+    transformer: decimalToNumber,
+  })
+  latitude?: number | null;
 
-  @Column({ type: 'decimal', precision: 10, scale: 2, nullable: true })
-  longitude?: number;
+  @Column({
+    type: 'decimal',
+    precision: 9,
+    scale: 6,
+    nullable: true,
+    transformer: decimalToNumber,
+  })
+  longitude?: number | null;
+
+  /** GPS accuracy (metres) of the pin, when it came from GPS. */
+  @Column({ name: 'location_accuracy_m', type: 'integer', nullable: true })
+  locationAccuracyM?: number | null;
+
+  /** "Opposite Adum Post Office, blue gate". Same visibility as the pin. */
+  @Column({ type: 'varchar', length: 140, nullable: true })
+  landmark?: string | null;
 
   @Column({ type: 'enum', enum: Status, default: Status.OPEN })
   status!: Status;

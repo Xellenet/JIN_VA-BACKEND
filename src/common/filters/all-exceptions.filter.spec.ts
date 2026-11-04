@@ -308,6 +308,15 @@ describe('redactQuerySecrets (QA RES-11)', () => {
     );
   });
 
+  it('removes coordinates from a logged URL', () => {
+    expect(
+      redactQuerySecrets('/api/v1/locations/reverse?lat=6.6885&lon=-1.6244'),
+    ).toBe('/api/v1/locations/reverse?lat=[redacted]&lon=[redacted]');
+    expect(redactQuerySecrets('/x?latitude=6.7&longitude=-1.6&lng=1')).toBe(
+      '/x?latitude=[redacted]&longitude=[redacted]&lng=[redacted]',
+    );
+  });
+
   it('leaves URLs without secrets unchanged', () => {
     expect(redactQuerySecrets('/api/v1/artisans?page=2')).toBe(
       '/api/v1/artisans?page=2',

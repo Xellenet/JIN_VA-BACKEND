@@ -72,6 +72,40 @@ export class BookingResponseDto {
   @Expose() @ApiProperty() currency!: string;
 
   @Expose()
+  @ApiPropertyOptional({
+    nullable: true,
+    example: 'Adum, Kumasi',
+    description: 'Where the service happens (town or area).',
+  })
+  location?: string | null;
+
+  @Expose()
+  @ApiPropertyOptional({
+    nullable: true,
+    example: 6.6885,
+    description:
+      "The customer's exact pin. Sent to the customer always, and to the " +
+      'artisan only once the booking is CONFIRMED (or later: COMPLETED, ' +
+      'NO_SHOW). Absent otherwise.',
+  })
+  latitude?: number | null;
+
+  @Expose()
+  @ApiPropertyOptional({ nullable: true, example: -1.6244 })
+  longitude?: number | null;
+
+  @Expose()
+  @ApiPropertyOptional({ nullable: true, example: 8 })
+  locationAccuracyM?: number | null;
+
+  @Expose()
+  @ApiPropertyOptional({
+    nullable: true,
+    example: 'Opposite Adum Post Office, blue gate',
+  })
+  landmark?: string | null;
+
+  @Expose()
   @ApiPropertyOptional({ type: [String] })
   attachmentUrls?: string[];
 
