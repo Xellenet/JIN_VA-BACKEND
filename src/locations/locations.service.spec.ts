@@ -86,7 +86,11 @@ describe('LocationsService', () => {
 
     const result = await service.reverse(5.603716, -0.186964);
 
-    expect(result).toEqual({ label: 'Accra', available: true });
+    expect(result).toEqual({
+      label: 'Accra',
+      area: 'Accra',
+      available: true,
+    });
     const [[url]] = get.mock.calls as [[string]];
     expect(url).toContain('/reverse?');
     expect(url).toContain('lat=5.604');
@@ -467,5 +471,42 @@ describe('LocationsService.reverseLabel (QA JOB-04)', () => {
   it('returns null when there is nothing to show', () => {
     expect(LocationsService.reverseLabel({ features: [] })).toBeNull();
     expect(LocationsService.reverseLabel(null)).toBeNull();
+  });
+});
+
+describe('LocationsService.reverseArea (exact location)', () => {
+  it('keeps the area and town, never the street or building', () => {
+    expect(
+      LocationsService.reverseArea({
+        features: [
+          {
+            properties: {
+              name: 'Adum Post Office',
+              street: 'Prempeh II Street',
+              district: 'Adum',
+              city: 'Kumasi',
+              state: 'Ashanti',
+            },
+          },
+        ],
+      }),
+    ).toBe('Adum, Kumasi');
+    expect(
+      LocationsService.reverseArea({
+        features: [{ properties: { locality: 'Kumasi', city: 'Kumasi' } }],
+      }),
+    ).toBe('Kumasi');
+  });
+
+  it('falls back to the region, then null', () => {
+    expect(
+      LocationsService.reverseArea({
+        features: [{ properties: { street: 'A road', state: 'Ashanti' } }],
+      }),
+    ).toBe('Ashanti');
+    expect(LocationsService.reverseArea({ features: [] })).toBeNull();
+    expect(
+      LocationsService.reverseArea({ features: [{ properties: {} }] }),
+    ).toBeNull();
   });
 });

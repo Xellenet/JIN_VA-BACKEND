@@ -3,7 +3,7 @@ import { formatBookingDate } from '@common/utils/booking-date.util';
 import { InjectRepository } from '@nestjs/typeorm';
 import { OnEvent } from '@nestjs/event-emitter';
 import { plainToInstance } from 'class-transformer';
-import { Repository } from 'typeorm';
+import { In, Not, Repository } from 'typeorm';
 import { Notification } from './entities/notification.entity';
 import { NotificationPreferences } from './entities/notification-preferences.entity';
 import { GetNotificationsQueryDto } from './dto/get-notifications-query.dto';
@@ -31,7 +31,6 @@ import type {
   JobCompletionRequestedPayload,
   JobExpiredPayload,
   JobStartedPayload,
-  MessageReceivedPayload,
   ReviewReceivedPayload,
   ArtisanProfileVerifiedPayload,
   ArtisanVerificationRejectedPayload,
@@ -77,6 +76,19 @@ type PrefsData =
   | ArtisanNotificationPreferencesResponseDto
   | AdminNotificationPreferencesResponseDto;
 type PrefsResponse = { message: string; data: PrefsData };
+
+/**
+ * Types kept out of the in-app feed and the bell's unread count.
+ *
+ * Chat messages live in Messages, which has its own unread badge (the
+ * conversation `unreadCount`); listing them here as well doubled every
+ * message. New messages no longer create a row at all (the push and the
+ * email listeners still fire on MESSAGE_RECEIVED); this filter hides the
+ * rows created before that change, which are left in place.
+ */
+export const HIDDEN_FROM_FEED: NotificationType[] = [
+  NotificationType.MESSAGE_RECEIVED,
+];
 
 // ─── Role-aware preference key maps ──────────────────────────────────────────
 // Maps each NotificationType to the flag that gates it for that role.
@@ -314,17 +326,6 @@ export class NotificationsService {
       'Job Cancelled',
       `The job "${payload.jobTitle}" has been cancelled by the customer.`,
       { jobId: payload.jobId },
-    );
-  }
-
-  @OnEvent(APP_EVENTS.MESSAGE_RECEIVED)
-  async handleMessageReceived(payload: MessageReceivedPayload) {
-    await this.persist(
-      payload.recipientId,
-      NotificationType.MESSAGE_RECEIVED,
-      `New message from ${payload.senderName}`,
-      `"${payload.preview}"`,
-      { conversationId: payload.conversationId },
     );
   }
 
@@ -820,6 +821,9 @@ export class NotificationsService {
     const qb = this.notificationsRepository
       .createQueryBuilder('notif')
       .where('notif.user = :userId', { userId })
+      .andWhere('notif.type NOT IN (:...hidden)', {
+        hidden: HIDDEN_FROM_FEED,
+      })
       .orderBy('notif.createdAt', 'DESC');
 
     if (query.isRead !== undefined) {
@@ -842,7 +846,11 @@ export class NotificationsService {
 
   async getUnreadCount(userId: number): Promise<{ count: number }> {
     const count = await this.notificationsRepository.count({
-      where: { user: { id: userId }, isRead: false },
+      where: {
+        user: { id: userId },
+        isRead: false,
+        type: Not(In(HIDDEN_FROM_FEED)),
+      },
     });
     return { count };
   }

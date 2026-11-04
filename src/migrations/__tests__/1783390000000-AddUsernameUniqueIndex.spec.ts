@@ -33,10 +33,12 @@ describe('username unique index migration', () => {
         (NULL, NULL),           -- 8 purged, ignored
         ('esi', NULL);          -- 9 keeps
     `);
-  });
+    // PGlite boots a whole Postgres in-process: under coverage that can take
+    // longer than Jest's default 5 s hook limit.
+  }, 60000);
   afterEach(async () => {
     await db.close();
-  });
+  }, 60000);
 
   it('renames later duplicates deterministically, then builds the case-insensitive index', async () => {
     await new AddUsernameUniqueIndex1783390000000().up(runner);

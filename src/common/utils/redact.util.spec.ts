@@ -29,6 +29,13 @@ describe('redactSensitive (SEC-31)', () => {
         'access_code',
         'card',
         'nationalId',
+        'latitude',
+        'longitude',
+        'lat',
+        'lon',
+        'lng',
+        'landmark',
+        'locationAccuracyM',
       ].sort(),
     );
   });

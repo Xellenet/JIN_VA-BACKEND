@@ -73,4 +73,16 @@ export class SendMessageDto {
   @IsInt()
   @IsPositive()
   bookingId?: number;
+
+  @ApiPropertyOptional({
+    example: 5120,
+    description:
+      'The message this one replies to. Must be a message in the same ' +
+      'conversation as this send (the sender and recipientId); anything else ' +
+      'is a 400 that does not say whether the id exists.',
+  })
+  @IsOptional()
+  @IsInt()
+  @IsPositive()
+  replyToMessageId?: number;
 }

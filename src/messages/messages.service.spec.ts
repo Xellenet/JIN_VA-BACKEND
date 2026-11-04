@@ -213,6 +213,316 @@ describe('MessagesService', () => {
     });
   });
 
+  describe('replies', () => {
+    const original = {
+      id: 40,
+      conversationId: 7,
+      senderId: artisan.id,
+      sender: artisan,
+      content: 'I can come on Thursday at nine.',
+      attachmentUrl: null,
+      attachmentType: null,
+      replyToMessageId: null,
+      isReply: false,
+    };
+
+    it('stores the reply when the original is in the same conversation', async () => {
+      mockUsers(customer, artisan);
+      conversationsRepo.findOne.mockResolvedValueOnce({ id: 7 });
+      messagesRepo.findOne
+        .mockResolvedValueOnce({ id: 40 })
+        .mockResolvedValueOnce({
+          id: 99,
+          conversationId: 7,
+          content: 'Thursday works.',
+          sender: customer,
+          replyToMessageId: 40,
+          isReply: true,
+        });
+      messagesRepo.find.mockResolvedValueOnce([original]);
+
+      const result = await service.send(customer.id, {
+        recipientId: artisan.id,
+        content: 'Thursday works.',
+        replyToMessageId: 40,
+      });
+
+      expect(messagesRepo.findOne).toHaveBeenNthCalledWith(1, {
+        where: { id: 40, conversationId: 7 },
+        select: ['id'],
+      });
+      expect(messagesRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({ replyToMessageId: 40, isReply: true }),
+      );
+      expect(result.data.replyTo).toEqual({
+        id: 40,
+        senderId: artisan.id,
+        senderName: 'Yaw Boateng',
+        preview: 'I can come on Thursday at nine.',
+        deleted: false,
+      });
+    });
+
+    it('rejects an original from another conversation with a 400 that does not reveal it', async () => {
+      mockUsers(customer, artisan);
+      conversationsRepo.findOne.mockResolvedValueOnce({ id: 7 });
+      // Scoped by conversation in the query, so another thread's message is
+      // simply not found.
+      messagesRepo.findOne.mockResolvedValueOnce(null);
+
+      await expect(
+        service.send(customer.id, {
+          recipientId: artisan.id,
+          content: 'Hi',
+          replyToMessageId: 555,
+        }),
+      ).rejects.toThrow(
+        new BadRequestException(
+          'You can only reply to a message in this conversation.',
+        ),
+      );
+      expect(messagesRepo.save).not.toHaveBeenCalled();
+      expect(emitter.emit).not.toHaveBeenCalled();
+    });
+
+    it('rejects a reply in a conversation that does not exist yet, and creates nothing', async () => {
+      mockUsers(customer, artisan);
+      conversationsRepo.findOne.mockResolvedValueOnce(null);
+
+      await expect(
+        service.send(customer.id, {
+          recipientId: artisan.id,
+          content: 'Hi',
+          replyToMessageId: 40,
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(conversationsRepo.save).not.toHaveBeenCalled();
+      expect(messagesRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('leaves replyTo null and isReply false on an ordinary message', async () => {
+      mockUsers(customer, artisan);
+      conversationsRepo.findOne.mockResolvedValueOnce({ id: 7 });
+      messagesRepo.findOne.mockResolvedValueOnce({
+        id: 99,
+        conversationId: 7,
+        content: 'Hello',
+        sender: customer,
+        replyToMessageId: null,
+        isReply: false,
+      });
+
+      const result = await service.send(customer.id, {
+        recipientId: artisan.id,
+        content: 'Hello',
+      });
+
+      expect(messagesRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({ replyToMessageId: null, isReply: false }),
+      );
+      expect(result.data.replyTo).toBeNull();
+      expect(messagesRepo.find).not.toHaveBeenCalled();
+    });
+
+    it('loads every quoted original of a thread in one query and marks a deleted one', async () => {
+      conversationsRepo.findOne.mockResolvedValueOnce({
+        id: 7,
+        participantA: customer,
+        participantB: artisan,
+      });
+      const long = 'a'.repeat(130);
+      messagesRepo.findAndCount.mockResolvedValueOnce([
+        [
+          { ...original },
+          {
+            id: 41,
+            conversationId: 7,
+            sender: customer,
+            content: 'Yes',
+            replyToMessageId: 40,
+            isReply: true,
+          },
+          {
+            id: 42,
+            conversationId: 7,
+            sender: customer,
+            content: 'And this?',
+            replyToMessageId: 43,
+            isReply: true,
+          },
+          {
+            id: 44,
+            conversationId: 7,
+            sender: artisan,
+            content: 'Gone',
+            replyToMessageId: null,
+            isReply: true,
+          },
+        ],
+        4,
+      ]);
+      messagesRepo.find.mockResolvedValueOnce([
+        original,
+        {
+          id: 43,
+          conversationId: 7,
+          senderId: artisan.id,
+          sender: null,
+          content: long,
+          attachmentUrl: null,
+          attachmentType: null,
+        },
+      ]);
+
+      const result = await service.getMessages(customer.id, 7, {});
+
+      expect(messagesRepo.find).toHaveBeenCalledTimes(1);
+      const replies = result.data.map((m) => m.replyTo);
+      expect(replies[0]).toBeNull();
+      expect(replies[1]).toMatchObject({ id: 40, deleted: false });
+      expect(replies[2]).toMatchObject({
+        id: 43,
+        senderName: 'Deleted User',
+        preview: `${'a'.repeat(120)}…`,
+        deleted: false,
+      });
+      expect(replies[3]).toEqual({
+        id: null,
+        senderId: null,
+        senderName: null,
+        preview: null,
+        deleted: true,
+      });
+    });
+
+    it('never quotes an original from another conversation, even if one were stored', async () => {
+      conversationsRepo.findOne.mockResolvedValueOnce({
+        id: 7,
+        participantA: customer,
+        participantB: artisan,
+      });
+      messagesRepo.findAndCount.mockResolvedValueOnce([
+        [
+          {
+            id: 41,
+            conversationId: 7,
+            sender: customer,
+            content: 'Hi',
+            replyToMessageId: 90,
+            isReply: true,
+          },
+        ],
+        1,
+      ]);
+      messagesRepo.find.mockResolvedValueOnce([
+        { ...original, id: 90, conversationId: 8, content: 'Private' },
+      ]);
+
+      const result = await service.getMessages(customer.id, 7, {});
+
+      expect(result.data[0].replyTo).toMatchObject({
+        deleted: true,
+        preview: null,
+      });
+      expect(JSON.stringify(result.data)).not.toContain('Private');
+    });
+
+    it('previews a photo-only original as "Photo" and anything else as "Attachment"', async () => {
+      conversationsRepo.findOne.mockResolvedValueOnce({
+        id: 7,
+        participantA: customer,
+        participantB: artisan,
+      });
+      messagesRepo.findAndCount.mockResolvedValueOnce([
+        [
+          { id: 50, conversationId: 7, replyToMessageId: 45, isReply: true },
+          { id: 51, conversationId: 7, replyToMessageId: 46, isReply: true },
+        ],
+        2,
+      ]);
+      messagesRepo.find.mockResolvedValueOnce([
+        {
+          ...original,
+          id: 45,
+          content: null,
+          attachmentUrl: `/uploads/messages/${UUID}.png`,
+          attachmentType: 'image/png',
+        },
+        {
+          ...original,
+          id: 46,
+          content: '   ',
+          attachmentUrl: `/uploads/messages/${UUID}.pdf`,
+          attachmentType: 'application/pdf',
+        },
+      ]);
+
+      const result = await service.getMessages(customer.id, 7, {});
+
+      expect(result.data.map((m) => m.replyTo?.preview)).toEqual([
+        'Photo',
+        'Attachment',
+      ]);
+    });
+
+    it("carries the last message's quote and the artisan contact's profile id on the conversation list", async () => {
+      const qb: Record<string, unknown> = {
+        getManyAndCount: () =>
+          Promise.resolve([
+            [
+              {
+                id: 7,
+                participantA: customer,
+                participantB: { ...artisan, artisanProfile: { id: 14 } },
+                createdAt: new Date('2026-09-01T00:00:00.000Z'),
+              },
+            ],
+            1,
+          ]),
+      };
+      for (const m of [
+        'leftJoinAndSelect',
+        'leftJoin',
+        'addSelect',
+        'where',
+        'orderBy',
+        'skip',
+        'take',
+      ]) {
+        qb[m] = () => qb;
+      }
+      conversationsRepo.createQueryBuilder.mockReturnValue(qb);
+      messagesRepo.query
+        .mockResolvedValueOnce([]) // unread counts
+        .mockResolvedValueOnce([
+          {
+            conversationId: 7,
+            id: 41,
+            content: 'Yes',
+            attachmentUrl: null,
+            senderId: customer.id,
+            createdAt: new Date(),
+            isRead: false,
+            replyToMessageId: 40,
+            isReply: true,
+          },
+        ]);
+      messagesRepo.find.mockResolvedValueOnce([original]);
+
+      const asCustomer = await service.getConversations(customer.id, {});
+      expect(asCustomer.data[0].contact.artisanProfileId).toBe(14);
+      expect(asCustomer.data[0].lastMessage?.replyTo).toMatchObject({
+        id: 40,
+        preview: 'I can come on Thursday at nine.',
+      });
+
+      messagesRepo.query.mockResolvedValue([]);
+      const asArtisan = await service.getConversations(artisan.id, {});
+      // Customers have no public profile to link to.
+      expect(asArtisan.data[0].contact.artisanProfileId).toBeNull();
+    });
+  });
+
   describe('send — MC4 attachments', () => {
     it('accepts an image with no text and derives the MIME type from the URL', async () => {
       mockUsers(customer, artisan);
@@ -471,6 +781,8 @@ describe('MessagesService', () => {
       };
       for (const method of [
         'leftJoinAndSelect',
+        'leftJoin',
+        'addSelect',
         'where',
         'orderBy',
         'skip',

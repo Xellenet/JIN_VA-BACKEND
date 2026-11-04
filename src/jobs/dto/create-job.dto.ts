@@ -17,6 +17,12 @@ import {
 } from 'class-validator';
 import { IsAttachmentUrl } from '@common/validators/is-attachment-url.decorator';
 import { TrimText } from '@common/validators/trim-text.decorator';
+import {
+  IsLandmark,
+  IsPinAccuracy,
+  IsPinLatitude,
+  IsPinLongitude,
+} from '@common/validators/exact-location.decorator';
 
 export class CreateJobDto {
   @ApiProperty({
@@ -95,23 +101,17 @@ export class CreateJobDto {
   })
   currency!: string;
 
-  @ApiPropertyOptional({
-    example: 5.6037,
-    description: 'Latitude of the job site',
-  })
-  @IsOptional()
-  @IsNumber()
-  @Type(() => Number)
-  latitude?: number;
+  @IsPinLatitude()
+  latitude?: number | null;
 
-  @ApiPropertyOptional({
-    example: -0.187,
-    description: 'Longitude of the job site',
-  })
-  @IsOptional()
-  @IsNumber()
-  @Type(() => Number)
-  longitude?: number;
+  @IsPinLongitude()
+  longitude?: number | null;
+
+  @IsPinAccuracy()
+  locationAccuracyM?: number | null;
+
+  @IsLandmark()
+  landmark?: string | null;
 
   @ApiPropertyOptional({
     example: '2026-07-01T00:00:00.000Z',

@@ -174,8 +174,12 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
 /**
  * One-time tokens travel in some query strings (e.g. `/auth/reset-password?token=`);
- * a failed request must not copy them into the server log.
+ * a failed request must not copy them into the server log. Nor may a point
+ * (`/locations/reverse?lat=&lon=`): coordinates are never logged (Act 843).
  */
 export function redactQuerySecrets(url: string): string {
-  return url.replace(/([?&](?:token|code|state)=)[^&#]*/gi, '$1[redacted]');
+  return url.replace(
+    /([?&](?:token|code|state|lat|lon|lng|latitude|longitude)=)[^&#]*/gi,
+    '$1[redacted]',
+  );
 }

@@ -26,6 +26,16 @@ export class ReverseLocationResponseDto {
 
   @ApiProperty({
     description:
+      'Just the area and town (no street), for the public part of an address. ' +
+      'Null when none is known.',
+    example: 'Osu, Accra',
+    nullable: true,
+    type: String,
+  })
+  area: string | null;
+
+  @ApiProperty({
+    description:
       'False when the geocoder was unreachable; the label is then null.',
   })
   available: boolean;

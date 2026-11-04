@@ -11,6 +11,12 @@ import {
   Min,
 } from 'class-validator';
 import { TrimText } from '@common/validators/trim-text.decorator';
+import {
+  IsLandmark,
+  IsPinAccuracy,
+  IsPinLatitude,
+  IsPinLongitude,
+} from '@common/validators/exact-location.decorator';
 
 /**
  * Fields a job owner may update on an existing OPEN job.
@@ -70,23 +76,17 @@ export class UpdateJobDto {
   @Type(() => Number)
   budgetMax?: number;
 
-  @ApiPropertyOptional({
-    example: 5.6037,
-    description: 'Revised latitude of the job site',
-  })
-  @IsOptional()
-  @IsNumber()
-  @Type(() => Number)
-  latitude?: number;
+  @IsPinLatitude()
+  latitude?: number | null;
 
-  @ApiPropertyOptional({
-    example: -0.187,
-    description: 'Revised longitude of the job site',
-  })
-  @IsOptional()
-  @IsNumber()
-  @Type(() => Number)
-  longitude?: number;
+  @IsPinLongitude()
+  longitude?: number | null;
+
+  @IsPinAccuracy()
+  locationAccuracyM?: number | null;
+
+  @IsLandmark()
+  landmark?: string | null;
 
   @ApiPropertyOptional({
     example: 'GHS',

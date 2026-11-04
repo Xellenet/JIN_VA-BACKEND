@@ -13,6 +13,7 @@ import { User } from '@users/entities/user.entity';
 import { ArtisanProfile } from '@users/entities/artisan-profile.entity';
 import { ServiceEntity } from '@services/entities/service.entity';
 import { ArtisanAvailability } from '../../availability/entities/artisan-availability.entity';
+import { decimalToNumber } from '@common/location/exact-location';
 
 @Entity('bookings')
 export class Booking {
@@ -91,6 +92,41 @@ export class Booking {
   /** ISO 4217 currency code for agreedPrice */
   @Column({ name: 'currency', type: 'varchar', length: 3, default: 'GHS' })
   currency!: string;
+
+  /**
+   * Where the service happens: the area label (town / area, editable). Null
+   * on bookings made before this existed, or at the artisan's own place.
+   */
+  @Column({ type: 'varchar', length: 200, nullable: true })
+  location?: string | null;
+
+  /**
+   * The customer's map pin (WGS84). Private: the customer, admins, and the
+   * artisan once the booking is confirmed (see BookingsService).
+   */
+  @Column({
+    type: 'decimal',
+    precision: 9,
+    scale: 6,
+    nullable: true,
+    transformer: decimalToNumber,
+  })
+  latitude?: number | null;
+
+  @Column({
+    type: 'decimal',
+    precision: 9,
+    scale: 6,
+    nullable: true,
+    transformer: decimalToNumber,
+  })
+  longitude?: number | null;
+
+  @Column({ name: 'location_accuracy_m', type: 'integer', nullable: true })
+  locationAccuracyM?: number | null;
+
+  @Column({ type: 'varchar', length: 140, nullable: true })
+  landmark?: string | null;
 
   /**
    * J4: photo URLs collected at booking-request time (via the storage

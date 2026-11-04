@@ -21,6 +21,10 @@ import { JobApplication } from './entities/job-application.entity';
 import { JobStatusHistory } from './entities/job-status-history.entity';
 import { JobAttachment } from './entities/job-attachment.entity';
 import { CreateJobDto } from './dto/create-job.dto';
+import {
+  exactLocationColumns,
+  redactExactLocation,
+} from '@common/location/exact-location';
 import { UpdateJobDto } from './dto/update-job.dto';
 import { GetJobsQueryDto } from './dto/get-jobs-query.dto';
 import { GetMyJobsQueryDto } from './dto/get-my-jobs-query.dto';
@@ -167,13 +171,29 @@ export class JobsService {
         'That service type is no longer offered. Choose another one.',
       );
 
-    const { serviceId: _serviceId, attachmentUrls, ...payload } = createJobDto;
+    const {
+      serviceId: _serviceId,
+      attachmentUrls,
+      latitude,
+      longitude,
+      locationAccuracyM,
+      landmark,
+      ...payload
+    } = createJobDto;
+    const exact = exactLocationColumns({
+      latitude,
+      longitude,
+      locationAccuracyM,
+      landmark,
+    });
 
     const saved = await this.dataSource.transaction(async (manager) => {
       const jobRow = await manager
         .getRepository(Job)
         .save(
-          manager.getRepository(Job).create({ ...payload, customer, service }),
+          manager
+            .getRepository(Job)
+            .create({ ...payload, ...exact, customer, service }),
         );
 
       await this.recordHistory(
@@ -200,7 +220,7 @@ export class JobsService {
     this.logger.log(`Job ${saved.id} created by customer ${customer.id}`);
     return {
       message: SUCCESS_MESSAGES.JOB.CREATED,
-      data: await this.loadJobDto(saved.id, true),
+      data: await this.loadJobDto(saved.id, requestUser, true),
     };
   }
 
@@ -230,13 +250,27 @@ export class JobsService {
     const nextMax = updateJobDto.budgetMax ?? job.budgetMax;
     this.assertBudget(nextMin, nextMax);
 
-    Object.assign(job, updateJobDto);
+    const { latitude, longitude, locationAccuracyM, landmark, ...fields } =
+      updateJobDto;
+    Object.assign(
+      job,
+      fields,
+      exactLocationColumns({
+        latitude,
+        longitude,
+        locationAccuracyM,
+        landmark,
+      }),
+    );
     await this.jobsRepository.save(job);
 
     this.logger.log(`Job ${id} updated by customer ${requestUserId}`);
     return {
       message: SUCCESS_MESSAGES.JOB.UPDATED,
-      data: await this.loadJobDto(id),
+      data: await this.loadJobDto(id, {
+        id: requestUserId,
+        role: Role.CUSTOMER,
+      }),
     };
   }
 
@@ -293,7 +327,7 @@ export class JobsService {
 
     const data = plainToInstance(JobResponseDto, jobs, {
       excludeExtraneousValues: true,
-    });
+    }).map((dto) => this.withLocationPrivacy(dto, viewer));
     await this.attachHasApplied(data, viewer);
     return {
       message: SUCCESS_MESSAGES.JOB.ALL_RETRIEVED,
@@ -359,7 +393,9 @@ export class JobsService {
       message: SUCCESS_MESSAGES.JOB.ALL_RETRIEVED,
       data: plainToInstance(JobResponseDto, jobs, {
         excludeExtraneousValues: true,
-      }),
+      }).map((dto) =>
+        this.withLocationPrivacy(dto, { id: customerId, role: Role.CUSTOMER }),
+      ),
       pagination: this.paginate(total, page, limit),
     };
   }
@@ -422,7 +458,7 @@ export class JobsService {
     if (!(await this.canViewJob(job, viewer))) {
       throw new NotFoundException(`Job with id ${id} not found.`);
     }
-    const data = await this.loadJobDto(id, true);
+    const data = await this.loadJobDto(id, viewer, true);
     await this.attachHasApplied([data], viewer);
     return {
       message: SUCCESS_MESSAGES.JOB.RETRIEVED,
@@ -445,6 +481,39 @@ export class JobsService {
     return this.applicationsRepository.exists({
       where: { job: { id: job.id }, artisan: { id: viewer.id } },
     });
+  }
+
+  /**
+   * Privacy (Act 843): the exact pin and landmark are for the people who
+   * must get there: admins, the job's customer and its hired (accepted)
+   * artisan. A booking-made job sets `acceptedArtisan` when the booking is
+   * confirmed, so its artisan is covered too. Everyone else, including other
+   * artisans browsing open jobs and applicants not (yet) hired, sees only the
+   * `location` area label.
+   */
+  static canSeeExactLocation(
+    job: {
+      customer?: { id?: number | string } | null;
+      acceptedArtisan?: { id?: number | string } | null;
+    },
+    viewer: JobViewer,
+  ): boolean {
+    if (viewer.role === Role.ADMIN) return true;
+    const me = Number(viewer.id);
+    if (job.customer?.id != null && Number(job.customer.id) === me) return true;
+    return (
+      job.acceptedArtisan?.id != null && Number(job.acceptedArtisan.id) === me
+    );
+  }
+
+  /** Strips the exact location unless {@link canSeeExactLocation}. */
+  private withLocationPrivacy(
+    dto: JobResponseDto,
+    viewer: JobViewer,
+  ): JobResponseDto {
+    return JobsService.canSeeExactLocation(dto, viewer)
+      ? dto
+      : redactExactLocation(dto);
   }
 
   /** The list-endpoint form of {@link canViewJob}. */
@@ -551,7 +620,7 @@ export class JobsService {
 
     const applications = await this.applicationsRepository.find({
       where: { job: { id: jobId } },
-      relations: ['artisan'],
+      relations: ['artisan', 'artisan.artisanProfile'],
       order: { createdAt: 'ASC' },
     });
 
@@ -675,7 +744,10 @@ export class JobsService {
 
     return {
       message: SUCCESS_MESSAGES.JOB.APPLICATION_ACCEPTED,
-      data: await this.loadJobDto(jobId),
+      data: await this.loadJobDto(jobId, {
+        id: customerId,
+        role: Role.CUSTOMER,
+      }),
     };
   }
 
@@ -727,7 +799,7 @@ export class JobsService {
 
     return {
       message: SUCCESS_MESSAGES.JOB.STARTED,
-      data: await this.loadJobDto(jobId),
+      data: await this.loadJobDto(jobId, { id: artisanId, role: Role.ARTISAN }),
     };
   }
 
@@ -775,7 +847,7 @@ export class JobsService {
 
     return {
       message: SUCCESS_MESSAGES.JOB.COMPLETION_REQUESTED,
-      data: await this.loadJobDto(jobId),
+      data: await this.loadJobDto(jobId, { id: artisanId, role: Role.ARTISAN }),
     };
   }
 
@@ -881,7 +953,10 @@ export class JobsService {
 
     return {
       message,
-      data: await this.loadJobDto(jobId),
+      data: await this.loadJobDto(jobId, {
+        id: customerId,
+        role: Role.CUSTOMER,
+      }),
     };
   }
 
@@ -1207,7 +1282,13 @@ export class JobsService {
     // "Assigned Artisan" card always reading empty on completed/paid jobs.
     const job = await this.jobsRepository.findOne({
       where: { id },
-      relations: ['customer', 'service', 'acceptedArtisan'],
+      relations: [
+        'customer',
+        'service',
+        'acceptedArtisan',
+        // For the customer's "view profile" link on the assigned artisan.
+        'acceptedArtisan.artisanProfile',
+      ],
     });
     if (!job) throw new NotFoundException(`Job with id ${id} not found.`);
     return job;
@@ -1221,12 +1302,14 @@ export class JobsService {
    */
   private async loadJobDto(
     id: number,
+    viewer: JobViewer,
     withDetail = false,
   ): Promise<JobResponseDto> {
     const job = await this.loadJobOrFail(id);
-    const dto = plainToInstance(JobResponseDto, job, {
-      excludeExtraneousValues: true,
-    });
+    const dto = this.withLocationPrivacy(
+      plainToInstance(JobResponseDto, job, { excludeExtraneousValues: true }),
+      viewer,
+    );
     if (withDetail) {
       const [history, attachments] = await Promise.all([
         this.historyRepository.find({
