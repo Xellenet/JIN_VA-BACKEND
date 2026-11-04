@@ -98,6 +98,48 @@ describe('NotificationsService', () => {
     service = module.get<NotificationsService>(NotificationsService);
   });
 
+  /** Chat messages stay in Messages: no row, not listed, not counted. */
+  describe('chat messages are kept out of the notifications feed', () => {
+    it('has no MESSAGE_RECEIVED listener that creates a notification row', () => {
+      expect(
+        (service as unknown as Record<string, unknown>).handleMessageReceived,
+      ).toBeUndefined();
+    });
+
+    it('the unread count excludes MESSAGE_RECEIVED rows', async () => {
+      notificationsRepo.count.mockResolvedValueOnce(2);
+
+      await expect(service.getUnreadCount(5)).resolves.toEqual({ count: 2 });
+
+      const [{ where }] = notificationsRepo.count.mock.calls[0] as [
+        { where: { type: { _type: string; _value: { _value: string[] } } } },
+      ];
+      expect(where.type._type).toBe('not');
+      expect(where.type._value._value).toEqual([
+        NotificationType.MESSAGE_RECEIVED,
+      ]);
+    });
+
+    it('the feed query excludes MESSAGE_RECEIVED rows', async () => {
+      const qb = {
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        skip: jest.fn().mockReturnThis(),
+        take: jest.fn().mockReturnThis(),
+        getManyAndCount: jest.fn().mockResolvedValue([[], 0]),
+      };
+      notificationsRepo.createQueryBuilder.mockReturnValueOnce(qb);
+
+      await service.findAll(5, {});
+
+      expect(qb.andWhere).toHaveBeenCalledWith(
+        'notif.type NOT IN (:...hidden)',
+        { hidden: [NotificationType.MESSAGE_RECEIVED] },
+      );
+    });
+  });
+
   /** B8: `GET /notifications/:id`. */
   describe('findOne', () => {
     it("returns the caller's notification, scoped by owner in the query, without marking it read", async () => {

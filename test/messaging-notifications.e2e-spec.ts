@@ -19,6 +19,8 @@ import { Conversation } from '@messages/entities/conversation.entity';
 import { Notification } from '../src/notifications/entities/notification.entity';
 import { UserTokenService } from '@users/token.service';
 import { MailService } from '../src/mail/mail.service';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { APP_EVENTS } from '@common/events/app.events';
 import {
   Role,
   Status,
@@ -34,8 +36,9 @@ import {
  *
  * Covers the backend half of the acceptance criteria this feature's Definition
  * of Done names:
- *   MB1  canonical /messages send emits MESSAGE_RECEIVED -> the recipient gets
- *        a real in-app notification row without ever opening Messages
+ *   MB1  canonical /messages send emits MESSAGE_RECEIVED (push and email
+ *        listen to it) but creates no in-app notification row: messages
+ *        live in Messages, which has its own unread badge
  *   MB1  /direct-messages/* is really gone (404, not merely unused)
  *   MB2  same-role messaging (customer<->customer, artisan<->artisan) rejected
  *   MB3  conversation list is server-paginated with meta.pagination
@@ -367,9 +370,11 @@ describe('Messaging & Notifications — full lifecycle (e2e)', () => {
     }
   });
 
-  // ── MB1 headline: send -> recipient gets a real in-app notification ───────
+  // ── MB1 headline: send -> event for push/email, no notification row ─────
 
-  it('MB1 (HEADLINE): a customer sending to an artisan creates a MESSAGE_RECEIVED notification row for the artisan without the artisan ever calling Messages', async () => {
+  it('MB1 (HEADLINE): a send emits MESSAGE_RECEIVED for push and email, and creates no notification row (messages stay in Messages)', async () => {
+    const emitter = app.get(EventEmitter2);
+    const emit = jest.spyOn(emitter, 'emit');
     const before = await notificationsFor(artisanUser.id, 'MESSAGE_RECEIVED');
 
     const res = await send(customer1Token, {
@@ -382,19 +387,19 @@ describe('Messaging & Notifications — full lifecycle (e2e)', () => {
     expect(msg.content).toBe('QA headline check: are you free on Thursday?');
     expect(msg.isRead).toBe(false);
 
-    // The event listener is async — poll briefly rather than assume timing.
-    let after = before;
-    for (let i = 0; i < 20 && after.length === before.length; i++) {
-      await new Promise((r) => setTimeout(r, 250));
-      after = await notificationsFor(artisanUser.id, 'MESSAGE_RECEIVED');
-    }
-    expect(after.length).toBe(before.length + 1);
-    expect(after[0].title).toContain('QaMsg');
-    expect(after[0].body).toContain('Thursday');
-    expect(after[0].isRead).toBe(false);
-    expect(
-      (after[0].payload as { conversationId?: number } | null)?.conversationId,
-    ).toBeGreaterThan(0);
+    expect(emit).toHaveBeenCalledWith(
+      APP_EVENTS.MESSAGE_RECEIVED,
+      expect.objectContaining({
+        recipientId: artisanUser.id,
+        preview: 'QA headline check: are you free on Thursday?',
+      }),
+    );
+    emit.mockRestore();
+
+    // The listeners are async — give them time to (not) write a row.
+    await new Promise((r) => setTimeout(r, 750));
+    const after = await notificationsFor(artisanUser.id, 'MESSAGE_RECEIVED');
+    expect(after.length).toBe(before.length);
 
     // Same in the other direction (artisan -> customer).
     const beforeCust = await notificationsFor(customer1.id, 'MESSAGE_RECEIVED');
@@ -403,18 +408,20 @@ describe('Messaging & Notifications — full lifecycle (e2e)', () => {
       content: 'Yes, Thursday works.',
     });
     expect(reply.status).toBe(201);
-    let afterCust = beforeCust;
-    for (let i = 0; i < 20 && afterCust.length === beforeCust.length; i++) {
-      await new Promise((r) => setTimeout(r, 250));
-      afterCust = await notificationsFor(customer1.id, 'MESSAGE_RECEIVED');
-    }
-    expect(afterCust.length).toBe(beforeCust.length + 1);
+    await new Promise((r) => setTimeout(r, 750));
+    expect(
+      (await notificationsFor(customer1.id, 'MESSAGE_RECEIVED')).length,
+    ).toBe(beforeCust.length);
 
-    // Record the conversation for cleanup.
+    // The Messages badge still counts it.
     const list = await request(server())
       .get('/api/v1/messages?page=1&limit=50')
       .set('Authorization', `Bearer ${customer1Token}`);
-    for (const c of envelope<MiniConversation[]>(list)) {
+    const conversations = envelope<MiniConversation[]>(list);
+    expect(
+      conversations.find((c) => c.contact.id === artisanUser.id)?.unreadCount,
+    ).toBeGreaterThan(0);
+    for (const c of conversations) {
       if (!createdConversationIds.includes(c.id)) {
         createdConversationIds.push(c.id);
       }
