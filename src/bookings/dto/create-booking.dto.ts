@@ -16,6 +16,13 @@ import {
 } from 'class-validator';
 import { HH_MM_PATTERN } from '@common/constants/time.constants';
 import { IsAttachmentUrl } from '@common/validators/is-attachment-url.decorator';
+import { TrimText } from '@common/validators/trim-text.decorator';
+import {
+  IsLandmark,
+  IsPinAccuracy,
+  IsPinLatitude,
+  IsPinLongitude,
+} from '@common/validators/exact-location.decorator';
 
 export class CreateBookingDto {
   @ApiProperty({ example: 1, description: 'Artisan profile ID to book' })
@@ -98,6 +105,31 @@ export class CreateBookingDto {
   @IsOptional()
   @IsISO4217CurrencyCode()
   currency?: string;
+
+  @ApiPropertyOptional({
+    example: 'Adum, Kumasi',
+    description:
+      'Where the service happens: the town or area (max 200 chars). Optional, ' +
+      "for older clients and for work at the artisan's own place. Visible to " +
+      'the artisan from the request on; the exact pin below is not.',
+  })
+  @IsOptional()
+  @TrimText()
+  @IsString()
+  @MaxLength(200)
+  location?: string;
+
+  @IsPinLatitude()
+  latitude?: number | null;
+
+  @IsPinLongitude()
+  longitude?: number | null;
+
+  @IsPinAccuracy()
+  locationAccuracyM?: number | null;
+
+  @IsLandmark()
+  landmark?: string | null;
 
   @ApiPropertyOptional({
     type: [String],
